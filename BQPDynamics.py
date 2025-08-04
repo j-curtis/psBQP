@@ -24,16 +24,28 @@ class BQPDynamics:
 		self.grid_size = np.prod(self.grid_shape)
 		
 		self.nks_shape = (2,*self.grid_shape)
+		
+		self.gap_function = np.ones_like(self.theta_grid) ### default is s-wave gap, can be set internally for d-wave 
 
 	def _generate_momentum_grid(self):
 		xis = np.linspace(-self.cutoff, self.cutoff, self.nxi)
 		thetas = np.linspace(0., 2. * np.pi, self.ntheta, endpoint=False)
 		xi_grid, theta_grid = np.meshgrid(xis, thetas, indexing='ij')
 		return xi_grid, theta_grid
+	
+	def set_d_wave(self):
+		### We change from s-wave to d-wave gap function 
+		self.gap_function = np.sqrt(2.)*np.cos(2.*self.theta_grid) ### The factor of sqrt(2) is normalization 
+		
+	def set_s_wave(self):
+		### We change from s-wave to d-wave gap function 
+		self.gap_function = np.ones_like(self.theta_grid) ### Trivial isotropic gap
 
 	def BQP_energy(self, gap):
 		"""Compute Bogoliubov quasiparticle energy (no Doppler shift)"""
-		return np.sqrt(self.xi_grid**2 + gap**2)
+		### Default is s-wave gap, can be set to d-wave by setting the internal flag 
+		return np.sqrt(self.xi_grid**2+ (gap*self.gap_function)**2 ) 
+		
 
 	def BQP_doppler(self,gap,Q):
 		"""Compute Bogoliubov quasiparticle energy including the Doppler shift"""
@@ -48,7 +60,7 @@ class BQPDynamics:
 		"""Returns the function we should find the root of in order to solve the gap equation"""
 		E = self.BQP_energy(gap)
 		
-		integrand = 0.5*(np.ones_like(E) - np.sum(nks,axis=0) )/E - 0.5*np.tanh(self.xi_grid/2.)/self.xi_grid
+		integrand = 0.5*self.gap_function**2*(np.ones_like(E) - np.sum(nks,axis=0) )/E - 0.5*np.tanh(self.xi_grid/2.)/self.xi_grid ### Added the possibiltiy of a non-trivial pairing channel 
 		
 		return np.sum(integrand)*self.dxi/self.ntheta 
 		

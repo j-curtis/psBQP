@@ -1,4 +1,3 @@
-### Synthesized by ChatGPT based on a jupyter notebook which it then cleaned up and compactified
 ### Jonathan Curtis 
 ### 07/31/2025
 
@@ -8,7 +7,10 @@ from scipy import optimize as opt
 
 ### All energies are in units of Tc 
 ### All velocities are in units of vF 
-### Current is in units of zero-temperature superfluid density 
+### Current is in units of zero-temperature superfluid density (I think?) 
+
+
+BCS_ratio = 1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
 
 class BQPDynamics:
 	def __init__(self, nxi, ntheta, cutoff):
@@ -72,7 +74,7 @@ class BQPDynamics:
 		f = lambda x: self.gap_eqn_rhs(x,self.eq_nks(x,Q,T))
 		
 		lpoint = 0.
-		rpoint = self.cutoff
+		rpoint = 3.*BCS_ratio#self.cutoff ### we should search over a smaller interval of the gap, which is unlikely to be larger than the T = 0 value anyways 
 		
 		if f(lpoint)*f(rpoint) >0.:
 			return 0. 

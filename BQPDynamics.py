@@ -34,7 +34,30 @@ class BQPDynamics:
 		thetas = np.linspace(0., 2. * np.pi, self.ntheta, endpoint=False)
 		xi_grid, theta_grid = np.meshgrid(xis, thetas, indexing='ij')
 		return xi_grid, theta_grid
-	
+		
+	@classmethod
+	def _root_finder(cls,f):
+		### Wrapper for method we will use to find roots for gap equation. Would ideally use brentq but sometimes multiple solutions appear and this is not compatible with the brentq method naively
+		
+		lpoint = 0.
+		rpoint = 3.*BCS_ratio
+		
+		gap = 0.
+		
+		if f(lpoint)*f(rpoint) >0:
+			### In this case the brentq method won't work and we must try something more complicated 
+			x0 = 0.5*BCS_ratio ### initial guess for gap is of order the zero temperature solution
+			#sol = opt.root_scalar(f,x0=x0)
+		
+			#gap = sol.root
+			gap = 0.
+		
+		else:
+			gap = opt.brentq(f,lpoint,rpoint) ### brentq is a numerical method which finds the root of a function provided it changes sign on the interval lpoint, rpoint. Here we expect that either the gap is zero or it has a sign change -- this should be verified out of equilibrium to be true as well. 
+			
+		return gap
+			
+		
 	def set_d_wave(self):
 		### We change from s-wave to d-wave gap function 
 		self.gap_function = np.sqrt(2.)*np.cos(2.*self.theta_grid) ### The factor of sqrt(2) is normalization 
@@ -69,29 +92,17 @@ class BQPDynamics:
 	def eq_nks(self,gap,Q,T):
 		### Equilibrium occupation functions for given gap, doppler shift, and temperature 
 		return 1./(np.exp(self.BQP_doppler(gap,Q)/T) + 1. )
-		
+	
 	def solve_gap_eq(self,Q,T):
 		f = lambda x: self.gap_eqn_rhs(x,self.eq_nks(x,Q,T))
 		
-		lpoint = 0.
-		rpoint = 3.*BCS_ratio#self.cutoff ### we should search over a smaller interval of the gap, which is unlikely to be larger than the T = 0 value anyways 
-		
-		if f(lpoint)*f(rpoint) >0.:
-			return 0. 
-		else:
-			return opt.brentq(f,lpoint,rpoint) ### brentq is a numerical method which finds the root of a function provided it changes sign on the interval lpoint, rpoint. Here we expect that either the gap is zero or it has a sign change -- this should be verified out of equilibrium to be true as well. 
-			
+		return self._root_finder(f)
+					
 	def solve_gap_nks(self,nks):
 		"""This solves the gap equation using a generic quasiparticle distribution function which may be out of equilibrium"""
 		f = lambda x : self.gap_eqn_rhs(x,nks)
 		
-		lpoint = 0.
-		rpoint = self.cutoff
-		
-		if f(lpoint)*f(rpoint) >0.:
-			return 0. 
-		else:
-			return opt.brentq(f,lpoint,rpoint) ### brentq is a numerical method which finds the root of a function provided it changes sign on the interval lpoint, rpoint. Here we expect that either the gap is zero or it has a sign change -- this should be verified out of equilibrium to be true as well. 
+		return self._root_finder(f)
 
 		
 	### METHODS FOR EQUATIONS OF MOTION 

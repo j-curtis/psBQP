@@ -6,10 +6,6 @@ import numpy as np
 from scipy import integrate as intg
 from scipy import optimize as opt
 
-### All energies are in units of Tc 
-### All velocities are in units of vF 
-### Current is in units of zero-temperature superfluid density (I think?) 
-
 
 BCS_ratio = 1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
 
@@ -17,8 +13,62 @@ BCS_ratio = 1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit
 Pauli = [ np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j,-1.j],[1.j,0.j]]), np.array([[1.0,0.j],[0.j,-1.]]) ]
 Paulmin = 0.5*(Pauli[1] -1.j*Pauli[2] )
 
+
+### Class for handling and manipulating Nambu space matrices as tensors on frequency and angular space 
+### Optionally we can also append the correct Pauli matrix when constructing the tensor 
+class NambuTensor:
+	def __init__(self, data,Pauli_channel=None):
+		data = np.asarray(data)
+		if len(data.shape) == 2: 
+			### We are constructing from a tensor which is a scalar function over the w,theta and we want to promote this to a Nambu tensor 
+			if Pauli_channel is None:
+				data = np.tensordot(np.ones((2,2),dtype=complex),data,axes=0) 
+			else:
+				data = np.tensordot(Pauli_channel,data,axes=0) 
+        	
+		assert data.shape[:2] == (2,2), "First two dims must be 2x2"
+        
+		self.data = data
+		self.shape = self.data.shape
+
+	### Overload @ matrix multiplication operator 
+	def __matmul__(self, other):
+		"""Custom @ operator."""
+		if isinstance(other, NambuTensor):
+			result = np.einsum('ijnm,jknm->iknm', self.data, other.data)
+			return NambuTensor(result)
+		else:
+			return NotImplemented
+			
+	### Overload * to give usual pointwise multiplication 
+	def __mul__(self,other):
+		"""Custom * operator."""
+		if isinstance(other,NambuTensor):
+			result = self.data * other.data 
+			return NambuTensor(result)
+		else:
+			return NotImplemented
+			
+	def _binary_ewise(self, other, op):
+		if isinstance(other, NambuTensor):
+			return NambuTensor(op(self.data, other.data))
+		else:
+    			return NambuTensor(op(self.data, other))
+
+	def __add__(self, other): return self._binary_ewise(other, np.add)
+	def __radd__(self, other): return self._binary_ewise(other, np.add)
+	def __sub__(self, other): return self._binary_ewise(other, np.subtract)
+	def __truediv__(self, other): return self._binary_ewise(other, np.true_divide)
+	def __rtruediv__(self, other): return self._binary_ewise(other, lambda a,b: np.true_divide(b,a))
+	def __neg__(self): return NambuTensor(np.negative(self.data))
+	def conj(self): return NambuTensor(np.conjugate(self.data))
+	def trans(self): return NambuTensor(np.transpose(self.data,axes=(1,0,2,3))) ### Transposes the matrix indices 
+		
+
 class Eilenberger:
 	def __init__(self, nw, ntheta, cutoff):
+		self.Verbose = False ### If this is true we will have more information and feedback given during calculations
+	
 		self.nw = nw if nw % 2 == 0 else nw + 1  # Ensure even number
 		self.ntheta = ntheta
 		self.cutoff = cutoff
@@ -38,50 +88,63 @@ class Eilenberger:
 		self.scba_err = 1.e-3 ### total error for SCBA convergence 
 		self.scba_max_step = 1000 ### Total number of iterations before we throw an error 
 	
-		### We now set up the shapes for the degrees of freedom
-		self.Nambu_shape = (2,2,*self.grid_shape)  ### Nambu matrices (i.e. retarded and Keldysh propagators have this shape 
+		### Generate the necessary Nambu-shaped tensors 
+		### Nambu tensor class is not yet working 
+		self.Nambu_matrices = [ np.tensordot(sigma, np.ones_like(self.w_grid),axes=0 ) for sigma in Pauli ] ### These are now Pauli matrices and identity function on the momenta/frequency 
+		self.Nambu_shape = self.Nambu_matrices[0].shape ### Should be (2,2,nw,ntheta) 
+		
+		self.w = self._scalar2Nambu(self.w_grid)
+		self.theta = self._scalar2Nambu(self.theta_grid) 
+		
+		self.gap_function = np.ones_like(self.theta) 
+	
+		### We now set up the shapes for the Keldysh degrees of freedom
 		self.Keldysh_shape = (2,*self.Nambu_shape) ### We now double for the Keldysh dof (we store only [R,K] )
-		
-		### Now we promote all grids and matrices to the correct Nambu shape 
-		self.Nambu_matrices = [ np.tensordot( sigma ,np.ones_like(self.w_grid) ,axes=0) for sigma in Pauli ] ### These are now Pauli matrices with the correct tensor shape for Nambu Greens functions 
-		self.Nambu_w_grid = np.tensordot(np.ones((2,2),dtype=complex),self.w_grid ,axes = 0) ### This is the tensor grid of w values with the correct shape for Nambu GF 
-		self.Nambu_theta_grid = np.tensordot(np.ones((2,2),dtype=complex),self.theta_grid,axes=0)  ### This is the tensor grid of theta values with the correct shape for Nambu GF 
-		
-		### Gap functions 
-		self.gap_function = np.ones_like(self.theta_grid) ### default is s-wave gap, can be set internally for d-wave 
-		self.Nambu_gap_function = np.ones_like(self.Nambu_matrices[0])
 		
 		### Default function call for supercurrent will just return zero 
 		self.Q_t = lambda x: np.array([0.,0.]) 
-
+		self.Q0 = np.array([0.,0.]) ### A static background which is set to zero by default 
 	
 	########################
 	### INTERNAL METHODS ### 
 	########################
-	@classmethod
-	def _Nambu_mult(cls,x,y):
-		### Matrix multiplies two tensors according to their Nambu indices and tensor multiplies the rest 
-		z = np.tensordot( x,y,axes=[[1],[0]] ) 
-		return z 
 	
+	### For the time being we will use a homebuilt overload for matrix multiplication for Nambu tensors until the tensor class can be tested more 
+	def _NambuMul(self,x,y):
+		return np.einsum('ijnm,jknm->iknm', x,y)
+		
+	### Promotes a scalar tensor function to a Nambu compatible tensor 
+	def _scalar2Nambu(self,x):
+		return np.tensordot(np.ones((2,2),dtype=complex),x,axes=0) 
+	
+	### Promotes a pair (gr,f) to a single Keldysh object
+	def _rf2g(self,gr,f):
+		g = np.zeros(self.Keldysh_shape,dtype=complex)
+		g[0,...] = gr
+		g[1,...] = f 
+		
+		return g 
+	
+	### This method conjugates a retarded object to get an advanced one 
 	def _r2a(self,gr):
 		### In the quasiclassical formalism a retarded object can be made advanced by conjugating 
 		ga = np.transpose(np.conjugate(gr),axes=(1,0,2,3))
 		
-		ga = np.tensordot(self.Nambu_matrices[3],ga,axes=[[1],[0]])
-		ga = np.tensordot(ga,self.Nambu_matrices[3],axes=[[1],[0]])
+		ga = self._NambuMul(self.Nambu_matrices[3],ga)
+		ga = self._NambuMul(ga,self.Nambu_matrices[3])
 		
 		return ga 
 		
-	def _f2gk(self,dof):
-		### This method will convert the dof = [gr,f] tensor in to a Keldysh correlation function 
-		gr = dof[0,...]
-		f = dof[1,...]
+	### This method takes a gf = [gr, f] object and computes the proper Keldysh correlation funciton
+	def _f2gk(self,g):
+		### This method will convert the g = [gr,f] tensor in to a Keldysh correlation function 
+		gr = g[0,...]
+		f = g[1,...]
 		
-		gk = np.tensordot
+		gk = self._NambuMul(gr,f) - self._NambuMul(f,self._r2a(gr)) 
 		
+		return gk 
 		
-
 	def _sigma_r(self,gr): 
 		### This method computes the retarded self energy from gr   
 		sigma = np.zeros_like(gr) 
@@ -89,74 +152,98 @@ class Eilenberger:
 		### Impurity scattering contributions 
 		impurity_scattering_tensor = 0.5/self.tau_imp*np.ones((self.ntheta,self.ntheta),dtype=complex)/self.ntheta 
 		
-		sigma = np.tensordot(gr,impurity_scattering_tensor,axes=[[3],[0]]) ### This integrates over the angle and replaces it by a constant 
+		sigma += np.tensordot(gr,impurity_scattering_tensor,axes=[[3],[0]]) ### This integrates over the angle and replaces it by a constant 
 		
 		return sigma 
 		
 	def _Doppler_w_r(self,Q):
 		### returns the Doppler shifted frequencies with retarded causality 
-		return self.Nambu_w_grid - Q[0]*np.cos(self.Nambu_theta_grid) - Q[1]*np.sin(self.Nambu_theta_grid) + 1.j*np.ones_like(self.Nambu_w_grid)
+		return self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*np.ones_like(self.w)
 			
 	def _Delta_p(self,gap):
-		### Returns the momentum resolved gap given gap amplitude 
-		return gap*self.Nambu_gap_function 
+		### Returns the momentum resolved gap given gap Nambu tensor  
+		### Allows for a complex gap 
+		1.j*np.real(gap) * self.Nambu_matrices[2] + 1.j*np.imag(gap)*self.Nambu_matrices[1]
+		return gap*self.gap_function 
 			
 	def _Nambu_det(self,a):
 		### Computes the determinant of a Nambu matrix as a tensor over the grid of frequency and angle 
 		det = a[0,0,...] * a[1,1,...] - a[0,1,...]*a[1,0,...] ### Has shape of the frequency and mesh grid
-		out = np.tensordot(np.ones((2,2),dtype=complex),det,axes=0) 
+		out = self._scalar2Nambu(det)
 
 		return out 
 		
 	def _hr2gr(self,hr):
 		### Inverts and normalizes a retarded effective Hamiltonian
 		return - hr/np.sqrt(-self._Nambu_det(hr)) 
+		
+	def _calc_gr(self,f):
+		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f
+		
+		### Bare inverse Green's function
+		### Not a guess but is the static part of gr0 inverse 
+		hr0 = self._Doppler_w_r(self.Q0)*self.Nambu_matrices[3] ### For now we just use the equilibrium current 
+		
+		### Initial guess for inverse Green's function
+		hr = hr0  = self._Delta_p(BCS_ratio) - self._sigma_r(self._hr2gr(hr0)) 
+		gr = self._hr2gr(hr) 
+		
+		### Update function 
+		def _update_func(hr):
+			gr = self._hr2gr(hr)
+			sigma = self._sigma_r(gr) 
 			
-	def _calc_gr(self,gap,Q):
-
-		### This method solves the Dyson equation for the retarded Green's function given the gap and vector potential Q 
-		### We iterate self-consistently 
+			gap = self._calc_gap(self._rf2g(gr,f))
+			
+			### Now we update the inverse Green's function 
+			return hr0 - self._Delta_p(gap) - sigma 
 		
-		w_Q = self._Doppler_w_r(Q)  
-		delta_p = self._Delta_p(gap) 
-		
-		### Bare inverse Greens function 
-		hr0 = self.Nambu_matrices[3]*w_Q - 1.j*delta_p*self.Nambu_matrices[2]
-
-		### Initial Greens function 
-		hr = hr0.copy()
-		gr = self._hr2gr(hr)
-		
-		### New Greens functions
-		hr_new = hr +self.scba_step*( hr0 - self._sigma_r(gr)  - hr)
-		gr_new = self._hr2gr(hr_new)  
-		
-		err = np.sum( np.abs(hr_new - hr) )
 		count = 0 
-		print("Starting error: "+str(err)) 
-	
+		hr_new = hr + self.scba_step*( _update_func(hr) - hr ) 
+		gr_new = self._hr2gr(hr_new) 
 		
+		err = np.sum(np.abs( gr_new - gr )) 
+		
+		if self.Verbose: print("Starting error: "+str(err)) 
+	
 		while err > self.scba_err: 
 			if count > self.scba_max_step:
-				print("Max step count {m} exceeded.".format(m=self.scba_max_step))
+				if self.Verbose: print("Max step count {m} exceeded.".format(m=self.scba_max_step))
 				return None 
 	
+
+			hr_new = hr + self.scba_step*( _update_func(hr) - hr )  ### Increment the inverse GF  
+			gr_new = self._hr2gr(hr_new) ### Compute new Green's function 
+
+			err = np.sum( np.abs(gr_new - gr) )
+			print("Loop {c}: Error {e:0.4f}".format(c=count, e = err ))
+			
+			count += 1 
+			
 			### Update the new functions to the old ones 		
 			hr = hr_new 
 			gr = gr_new
 			
-			hr_new = hr + self.scba_step*(hr0 - self._sigma_r(gr) - hr )  ### Increment the inverse GF  
-			gr_new = self._hr2gr(hr_new) ### Compute new Green's function 
-
-			err = np.sum( np.abs(hr_new - hr) )
-			print("Loop {c}: Error {e:0.4f}".format(c=count, e = err ))
 			
-			count += 1 
+		### Now we return the greens function and the gap
+		gap = self._calc_gap(self._rf2g(gr,f)) 
 		
-		return gr 
+		return gr, gap
 		
+	### This method computes the gap self consistently given the Greens function degree of freedom
+	def _calc_gap(self,g):
+		### First we compute the propert Keldysh Green's function 
+		gk = self._f2gk(g)
+		
+		### Now we compute the relevant Nambu trace 
+		### This will also reduce the tensor shape so we include inside this the gap function which is a tensor with the same shape as the Nambu tensors 
+		tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
 	
+		### Now we integrate over energy and frequency 
+		rhs = 0.25j*np.sum(tr)*self.dw/self.ntheta
 	
+		### We now multiply by the BCS constant which has been preset 
+		return self.BCS_coupling*rhs 
 	
 	#################################
 	### SET SIMULATION PARAMETERS ### 
@@ -169,6 +256,9 @@ class Eilenberger:
 	def set_s_wave(self):
 		### We change from d-wave to s-wave gap function 
 		self.gap_function = np.ones_like(self.theta_grid) ### Trivial isotropic gap
+	
+	def set_BCS_coupling(self,BCS_coupling):
+		self.BCS_coupling = BCS_coupling
 
 	def set_impurity_scattering(self,tau_imp):
 		### Set the elastic scattering rate in units of Tc 
@@ -177,10 +267,9 @@ class Eilenberger:
 	def set_temperature(self,T):
 		### Set the base temperature in units of Tc 
 		self.T = T 
+		
 		### We also form the appropriate occupation function tensor 
-		self.fd_tensor = np.zeros(self.Nambu_shape,dtype=complex)
-		self.fd_tensor[0,0,...] = np.tanh(0.5*self.w_grid/self.T)
-		self.fd_tensor[1,1,...] = np.tanh(0.5*self.w_grid/self.T)
+		self.fd_tensor = np.tanh(0.5*self.w/self.T)
 	
 	def set_times(self,times):
 		### Simulation times passed as an array
@@ -189,12 +278,31 @@ class Eilenberger:
 		self.t0 = times[0]
 		self.tf = times[-1] 
 		
+	def set_Q0(self,Q0):
+		### Sets a state equilibrium value of Q 
+		self.Q0 = Q0
+		
 	def set_Q_function(self,Q_t):
 		### Because we often deal with time dependent vector potential here we pass a call to the function which will return the instanenous value of Q(t) as a vector 
 		self.Q_t = Q_t 
 		
 		### We also generate an array of the values for each simulation time
-		self.Q_vs_t = self.Q_t(self.times)
+		self.Q_vs_t = self.Q_t(self.times) + self.Q0
 	
+	####################################
+	### RUN EQUILIBRIUM CALCULATIONS ###
+	#################################### 
+	
+	### This computes the equilibrium gap given the supercurrent 
+	def calc_eq_gap(self):
+		gr, gap = self._calc_gr(self.fd_tensor) 
+		
+		return gap 
+		
+
+
+
+
+
 
 		

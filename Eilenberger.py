@@ -7,8 +7,8 @@ from scipy import integrate as intg
 from scipy import optimize as opt
 
 
-BCS_ratio = 1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
 BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
+BCS_ratio = 1./(0.5*BCS_gap_constant) #1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
 
 ### Scope for defining and handling units more easily 
 
@@ -26,6 +26,8 @@ class Eilenberger:
 		self.nw = nw if nw % 2 == 0 else nw + 1  # Ensure even number
 		self.ntheta = ntheta
 		self.cutoff = cutoff
+		
+		self.Tc = 1. ### By default we use units where Tc is one 
 		
 		self.w_grid, self.theta_grid = np.meshgrid( np.linspace(-self.cutoff,self.cutoff,self.nw), np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False),indexing = 'ij') 
 		
@@ -137,7 +139,7 @@ class Eilenberger:
 		
 		### Initial guess for gap
 		if gap0 is None:
-			gap0 = BCS_ratio
+			gap0 = BCS_ratio*self.Tc
 		
 		### Initial guess for gr0
 		if gr0 is None: 
@@ -227,6 +229,10 @@ class Eilenberger:
 	def set_BCS_coupling(self,BCS_coupling):
 		### Sets the BCS coupling, often paired with an estimate based on clean s-wave theory
 		self.BCS_coupling = BCS_coupling
+		
+	def set_Tc(self,Tc):
+		### Allows to set the nominal Tc scale from default of one 
+		self.Tc = Tc 
 
 	def set_tau_imp(self,tau_imp):
 		### Set the elastic scattering rate
@@ -261,9 +267,9 @@ class Eilenberger:
 	### RUN EQUILIBRIUM CALCULATIONS ###
 	#################################### 
 	
-	def BCS_coupling(self,Tc):
+	def BCS_coupling(self):
 		### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
-		return 1./np.log(BCS_gap_constant*self.cutoff/Tc) 
+		return 1./np.log(BCS_gap_constant*self.cutoff/self.Tc) 
 	
 	def calc_eq(self,gr0=None,gap0=None):
 		### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 

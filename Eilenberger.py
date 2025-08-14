@@ -8,7 +8,12 @@ from scipy import optimize as opt
 
 
 BCS_ratio = 1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
-BCS_gap_constant = 1.1338659 ### 2e^gamma/pi constant often appearing in BCS integrals 
+BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
+
+### Scope for defining and handling units more easily 
+
+	
+	
 
 ### Various Pauli matrices 
 Pauli = [ np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j,-1.j],[1.j,0.j]]), np.array([[1.0,0.j],[0.j,-1.]]) ]
@@ -33,7 +38,7 @@ class Eilenberger:
 		self.zero = 0.1*self.dw ### Should be small but precise value should not matter 
 		
 		### Internal default parameters for SCBA solver 
-		self.scba_step = 0.25 ### Update gradient step 
+		self.scba_step = 0.05 ### Update gradient step 
 		self.scba_err = 1.e-3 ### total error for SCBA convergence 
 		self.scba_max_step = 1000 ### Total number of iterations before we throw an error 
 	
@@ -58,25 +63,24 @@ class Eilenberger:
 	### INTERNAL METHODS ### 
 	########################
 
-	### For the time being we will use a homebuilt overload for matrix multiplication for Nambu tensors until the tensor class can be tested more 
 	def _NambuMul(self,x,y):
+		### For the time being we will use a homebuilt overload for matrix multiplication for Nambu tensors until the tensor class can be tested more 
 		return np.einsum('ijnm,jknm->iknm', x,y)
 		
-	### Promotes a scalar tensor function to a Nambu compatible tensor 
 	def _scalar2Nambu(self,x):
+		### Promotes a scalar tensor function to a Nambu compatible tensor 
 		return np.tensordot(np.ones((2,2),dtype=complex),x,axes=0) 
 	
-	### Promotes a pair (gr,f) to a single Keldysh object
 	def _rf2g(self,gr,f):
+		### Promotes a pair (gr,f) to a single Keldysh object
 		g = np.zeros(self.Keldysh_shape,dtype=complex)
 		g[0,...] = gr
 		g[1,...] = f 
 		
 		return g 
 	
-	### This method conjugates a retarded object to get an advanced one 
 	def _r2a(self,gr):
-		### In the quasiclassical formalism a retarded object can be made advanced by conjugating 
+		### This method conjugates a retarded object to get an advanced one 
 		ga = np.transpose(np.conjugate(gr),axes=(1,0,2,3))
 		
 		ga = self._NambuMul(self.Nambu_matrices[3],ga)
@@ -84,16 +88,15 @@ class Eilenberger:
 		
 		return ga 
 		
-	### This method takes a gf = [gr, f] object and computes the proper Keldysh correlation funciton
 	def _f2gk(self,g):
-		### This method will convert the g = [gr,f] tensor in to a Keldysh correlation function 
+		### This method takes a gf = [gr, f] object and computes the proper Keldysh correlation funciton
 		gr = g[0,...]
 		f = g[1,...]
 		
 		gk = self._NambuMul(gr,f) - self._NambuMul(f,self._r2a(gr)) 
 		
 		return gk 
-		
+				
 	def _sigma_r(self,gr): 
 		### This method computes the retarded self energy from gr   
 		sigma = np.zeros_like(gr) 
@@ -106,34 +109,41 @@ class Eilenberger:
 		return sigma 
 		
 	def _Doppler_w_r(self,Q):
-		### returns the Doppler shifted frequencies with retarded causality 
-		return self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*self.zero*np.ones_like(self.w)
+		### returns the Doppler shifted frequency Nambu tensor with retarded causality 		
+		return (self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*self.zero*np.ones_like(self.w) )*self.Nambu_matrices[3] 
 			
 	def _Delta_p(self,gap):
-		### Returns the momentum resolved gap given gap Nambu tensor  
+		### Returns the momentum resolved Nambu tensor gap  		
 		### Allows for a complex gap 
 		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function -1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
-			
+		
 	def _Nambu_det(self,a):
-		### Computes the determinant of a Nambu matrix as a tensor over the grid of frequency and angle 
+		### Computes the determinant of a Nambu matrix as a tensor over the grid of frequency and angle 			
 		det = a[0,0,...] * a[1,1,...] - a[0,1,...]*a[1,0,...] ### Has shape of the frequency and mesh grid
 		out = self._scalar2Nambu(det)
 
 		return out 
-		
+				
 	def _hr2gr(self,hr):
 		### Inverts and normalizes a retarded effective Hamiltonian
 		return - hr/np.sqrt(self._Nambu_det(hr)) 
-		
-	def _calc_gr(self,f):
-		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f
+	
+	def _calc_gr(self,f,gr0 = None,gap0 = None):
+		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f and (optionally) an initial guess for gr0 and gap0
 		
 		### Bare inverse Green's function
 		### Not a guess but is the static part of gr0 inverse 
-		hr0 = self._Doppler_w_r(self.Q0)*self.Nambu_matrices[3] ### For now we just use the equilibrium current 
+		hr0 = self._Doppler_w_r(self.Q0) ### For now we just use the equilibrium current 
 		
-		### Initial guess for inverse Green's function
-		hr = hr0  - self._Delta_p(BCS_ratio) - self._sigma_r(self._hr2gr(hr0)) 
+		### Initial guess for gap
+		if gap0 is None:
+			gap0 = BCS_ratio
+		
+		### Initial guess for gr0
+		if gr0 is None: 
+			gr0 = self._hr2gr(hr0)
+		
+		hr = hr0  - self._Delta_p(gap0) - self._sigma_r(gr0) 
 		gr = self._hr2gr(hr) 
 		
 		### Update function 
@@ -153,11 +163,12 @@ class Eilenberger:
 		err = np.sum(np.abs( gr_new - gr )) 
 		
 		if self.verbose: print("Starting error: "+str(err)) 
-	
+		count_exceeded = False
 		while err > self.scba_err: 
 			if count > self.scba_max_step:
 				if self.verbose: print("Max step count {m} exceeded.".format(m=self.scba_max_step))
-				return None 
+				count_exceeded = True
+				break
 	
 
 			hr_new = hr + self.scba_step*( _update_func(hr) - hr )  ### Increment the inverse GF  
@@ -172,14 +183,22 @@ class Eilenberger:
 			hr = hr_new 
 			gr = gr_new
 			
+		### We must decide what to return if the result doesn't converge
+		### For now we will return the gap = 0 and the greens function will be returned as None 
+		if count_exceeded:
+			gap = 0.
+			gr = None 
 			
+		else:
+			gap = self._calc_gap(self._rf2g(gr,f)) 
+				
 		### Now we return the greens function and the gap
-		gap = self._calc_gap(self._rf2g(gr,f)) 
-		
+
 		return gr, gap
 		
-	### This method computes the gap self consistently given the Greens function degree of freedom
 	def _calc_gap(self,g):
+		### This method computes the gap self consistently given the Greens function degree of freedom
+		
 		### First we compute the propert Keldysh Green's function 
 		gk = self._f2gk(g)
 		
@@ -206,14 +225,15 @@ class Eilenberger:
 		self.gap_function = np.ones_like(self.theta_grid) ### Trivial isotropic gap
 	
 	def set_BCS_coupling(self,BCS_coupling):
+		### Sets the BCS coupling, often paired with an estimate based on clean s-wave theory
 		self.BCS_coupling = BCS_coupling
 
-	def set_impurity_scattering(self,tau_imp):
-		### Set the elastic scattering rate in units of Tc 
+	def set_tau_imp(self,tau_imp):
+		### Set the elastic scattering rate
 		self.tau_imp = tau_imp 
 		
 	def set_temperature(self,T):
-		### Set the base temperature in units of Tc 
+		### Set the base temperature 
 		self.T = T 
 		
 		### We also form the appropriate occupation function tensor 
@@ -241,13 +261,13 @@ class Eilenberger:
 	### RUN EQUILIBRIUM CALCULATIONS ###
 	#################################### 
 	
-	### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
-	def BCS_lambda(self,Tc):
+	def BCS_coupling(self,Tc):
+		### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
 		return 1./np.log(BCS_gap_constant*self.cutoff/Tc) 
 	
-	### This computes the equilibrium gap and Green's function given the supercurrent 
-	def calc_eq(self):
-		gr, gap = self._calc_gr(self.fd_tensor) 
+	def calc_eq(self,gr0=None,gap0=None):
+		### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 
+		gr, gap = self._calc_gr(self.fd_tensor,gr0,gap0) 
 		
 		return gr, gap 
 		

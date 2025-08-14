@@ -8,66 +8,15 @@ from scipy import optimize as opt
 
 
 BCS_ratio = 1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
+BCS_gap_constant = 1.1338659 ### 2e^gamma/pi constant often appearing in BCS integrals 
 
 ### Various Pauli matrices 
 Pauli = [ np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j,-1.j],[1.j,0.j]]), np.array([[1.0,0.j],[0.j,-1.]]) ]
-Paulmin = 0.5*(Pauli[1] -1.j*Pauli[2] )
-
-
-### Class for handling and manipulating Nambu space matrices as tensors on frequency and angular space 
-### Optionally we can also append the correct Pauli matrix when constructing the tensor 
-class NambuTensor:
-	def __init__(self, data,Pauli_channel=None):
-		data = np.asarray(data)
-		if len(data.shape) == 2: 
-			### We are constructing from a tensor which is a scalar function over the w,theta and we want to promote this to a Nambu tensor 
-			if Pauli_channel is None:
-				data = np.tensordot(np.ones((2,2),dtype=complex),data,axes=0) 
-			else:
-				data = np.tensordot(Pauli_channel,data,axes=0) 
-        	
-		assert data.shape[:2] == (2,2), "First two dims must be 2x2"
-        
-		self.data = data
-		self.shape = self.data.shape
-
-	### Overload @ matrix multiplication operator 
-	def __matmul__(self, other):
-		"""Custom @ operator."""
-		if isinstance(other, NambuTensor):
-			result = np.einsum('ijnm,jknm->iknm', self.data, other.data)
-			return NambuTensor(result)
-		else:
-			return NotImplemented
-			
-	### Overload * to give usual pointwise multiplication 
-	def __mul__(self,other):
-		"""Custom * operator."""
-		if isinstance(other,NambuTensor):
-			result = self.data * other.data 
-			return NambuTensor(result)
-		else:
-			return NotImplemented
-			
-	def _binary_ewise(self, other, op):
-		if isinstance(other, NambuTensor):
-			return NambuTensor(op(self.data, other.data))
-		else:
-    			return NambuTensor(op(self.data, other))
-
-	def __add__(self, other): return self._binary_ewise(other, np.add)
-	def __radd__(self, other): return self._binary_ewise(other, np.add)
-	def __sub__(self, other): return self._binary_ewise(other, np.subtract)
-	def __truediv__(self, other): return self._binary_ewise(other, np.true_divide)
-	def __rtruediv__(self, other): return self._binary_ewise(other, lambda a,b: np.true_divide(b,a))
-	def __neg__(self): return NambuTensor(np.negative(self.data))
-	def conj(self): return NambuTensor(np.conjugate(self.data))
-	def trans(self): return NambuTensor(np.transpose(self.data,axes=(1,0,2,3))) ### Transposes the matrix indices 
-		
+Paulimin = 0.5*(Pauli[1] -1.j*Pauli[2] )
 
 class Eilenberger:
 	def __init__(self, nw, ntheta, cutoff):
-		self.Verbose = False ### If this is true we will have more information and feedback given during calculations
+		self.verbose = False ### If this is true we will have more information and feedback given during calculations
 	
 		self.nw = nw if nw % 2 == 0 else nw + 1  # Ensure even number
 		self.ntheta = ntheta
@@ -81,7 +30,7 @@ class Eilenberger:
 		self.dw = self.w_grid[1,0] - self.w_grid[0,0]
 		
 		### Internal eta for broadening of spectral functions 
-		self.zero = 1.5*self.dw ### Should be small but precise value should not matter 
+		self.zero = 0.1*self.dw ### Should be small but precise value should not matter 
 		
 		### Internal default parameters for SCBA solver 
 		self.scba_step = 0.25 ### Update gradient step 
@@ -108,7 +57,7 @@ class Eilenberger:
 	########################
 	### INTERNAL METHODS ### 
 	########################
-	
+
 	### For the time being we will use a homebuilt overload for matrix multiplication for Nambu tensors until the tensor class can be tested more 
 	def _NambuMul(self,x,y):
 		return np.einsum('ijnm,jknm->iknm', x,y)
@@ -158,13 +107,12 @@ class Eilenberger:
 		
 	def _Doppler_w_r(self,Q):
 		### returns the Doppler shifted frequencies with retarded causality 
-		return self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*np.ones_like(self.w)
+		return self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*self.zero*np.ones_like(self.w)
 			
 	def _Delta_p(self,gap):
 		### Returns the momentum resolved gap given gap Nambu tensor  
 		### Allows for a complex gap 
-		1.j*np.real(gap) * self.Nambu_matrices[2] + 1.j*np.imag(gap)*self.Nambu_matrices[1]
-		return gap*self.gap_function 
+		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function -1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
 			
 	def _Nambu_det(self,a):
 		### Computes the determinant of a Nambu matrix as a tensor over the grid of frequency and angle 
@@ -175,7 +123,7 @@ class Eilenberger:
 		
 	def _hr2gr(self,hr):
 		### Inverts and normalizes a retarded effective Hamiltonian
-		return - hr/np.sqrt(-self._Nambu_det(hr)) 
+		return - hr/np.sqrt(self._Nambu_det(hr)) 
 		
 	def _calc_gr(self,f):
 		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f
@@ -185,7 +133,7 @@ class Eilenberger:
 		hr0 = self._Doppler_w_r(self.Q0)*self.Nambu_matrices[3] ### For now we just use the equilibrium current 
 		
 		### Initial guess for inverse Green's function
-		hr = hr0  = self._Delta_p(BCS_ratio) - self._sigma_r(self._hr2gr(hr0)) 
+		hr = hr0  - self._Delta_p(BCS_ratio) - self._sigma_r(self._hr2gr(hr0)) 
 		gr = self._hr2gr(hr) 
 		
 		### Update function 
@@ -204,19 +152,19 @@ class Eilenberger:
 		
 		err = np.sum(np.abs( gr_new - gr )) 
 		
-		if self.Verbose: print("Starting error: "+str(err)) 
+		if self.verbose: print("Starting error: "+str(err)) 
 	
 		while err > self.scba_err: 
 			if count > self.scba_max_step:
-				if self.Verbose: print("Max step count {m} exceeded.".format(m=self.scba_max_step))
+				if self.verbose: print("Max step count {m} exceeded.".format(m=self.scba_max_step))
 				return None 
 	
 
 			hr_new = hr + self.scba_step*( _update_func(hr) - hr )  ### Increment the inverse GF  
 			gr_new = self._hr2gr(hr_new) ### Compute new Green's function 
 
-			err = np.sum( np.abs(gr_new - gr) )
-			print("Loop {c}: Error {e:0.4f}".format(c=count, e = err ))
+			err = np.sum( np.abs(hr_new - hr) )
+			if self.verbose: print("Loop {c}: Error {e:0.4f}".format(c=count, e = err ))
 			
 			count += 1 
 			
@@ -240,7 +188,7 @@ class Eilenberger:
 		tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
 	
 		### Now we integrate over energy and frequency 
-		rhs = 0.25j*np.sum(tr)*self.dw/self.ntheta
+		rhs = -0.25j*np.sum(tr)*self.dw/self.ntheta
 	
 		### We now multiply by the BCS constant which has been preset 
 		return self.BCS_coupling*rhs 
@@ -293,11 +241,15 @@ class Eilenberger:
 	### RUN EQUILIBRIUM CALCULATIONS ###
 	#################################### 
 	
-	### This computes the equilibrium gap given the supercurrent 
-	def calc_eq_gap(self):
+	### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
+	def BCS_lambda(self,Tc):
+		return 1./np.log(BCS_gap_constant*self.cutoff/Tc) 
+	
+	### This computes the equilibrium gap and Green's function given the supercurrent 
+	def calc_eq(self):
 		gr, gap = self._calc_gr(self.fd_tensor) 
 		
-		return gap 
+		return gr, gap 
 		
 
 

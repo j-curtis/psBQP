@@ -16,17 +16,34 @@ Pauli = [ np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j
 Paulimin = 0.5*(Pauli[1] -1.j*Pauli[2] )
 
 class Eilenberger:
-	def __init__(self, nw, ntheta, cutoff):
+	def __init__(self, nw, ntheta, cutoff,fine_grid=(None,None)):
 		self.verbose = False ### If this is true we will have more information and feedback given during calculations
 	
 		self.nw = nw if nw % 2 == 0 else nw + 1  # Ensure even number
 		self.ntheta = ntheta
 		self.cutoff = cutoff
 		
+		### We allow for an optional specification of an additional finer grid region
+		### This is done by passing a tuple fine_grid = (fine_nw, fine_cutoff) 
+		### We then generate a finer grid of fine_nw points up to fine_cutoff before switching to a coarser grid
+		self.fine_nw, self.fine_cutoff = fine_grid
+		  
+		if self.fine_nw is None:
+			self.fine_grid = None 
+	
+		else:
+			if self.fine_nw %2 == 0: self.fine_nw += 1
+			self.fine_grid = np.linspace(-self.fine_cutoff,self.fine_cutoff,self.fine_nw)
+	
+		
 		self.Tc = 1. ### By default we use units where Tc is one 
 		
 		### Frequency and angular grids -- we will later implement adaptively sampled frequency grid to reduce need for number of points to get good resolution 
 		self.w_arr = np.linspace(-self.cutoff,self.cutoff,self.nw)
+		if self.fine_grid is not None:
+			w_arr = np.concatenate([ self.w_arr,self.fine_grid ]) ### this joins the two arrays 
+			self.w_arr = np.unique(w_arr) ### sorts and removes duplicates 
+		
 		self.theta_arr = np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False)
 		
 		self.w_grid, self.theta_grid = np.meshgrid( self.w_arr , self.theta_arr ,indexing = 'ij') 
@@ -34,13 +51,11 @@ class Eilenberger:
 		self.grid_shape = self.w_grid.shape  # (Nw, Ntheta)
 		self.grid_size = np.prod(self.grid_shape)
 		
-		self.dw = self.w_grid[1,0] - self.w_grid[0,0]
-		
 		### Internal eta for broadening of spectral functions 
-		self.zero = 0.05*self.dw ### Should be small but precise value should not matter 
+		self.zero = 0.05*np.min(np.diff(self.w_arr)) ### Should be small but precise value should not matter 
 		
 		### Internal default parameters for SCBA solver 
-		self.scba_step = 0.1 ### Update gradient step 
+		self.scba_step = 0.05 ### Update gradient step 
 		self.scba_err = 1.e-3 ### total error for SCBA convergence 
 		self.scba_max_step = 1000 ### Total number of iterations before we throw an error 
 	
@@ -70,8 +85,7 @@ class Eilenberger:
 		### For the moment we assume that f is a scalar and therefore already has had the Nambu indices traced out 
 		
 		### We will simply sum this over all indices to return a single number 
-		#return np.sum(f)*self.dw/self.ntheta 
-		return np.trapz(np.trapz(f,self.w_arr,axis=0), self.theta_arr)/(2.*np.pi) 
+		return np.trapz(np.trapz(f,self.w_arr,axis=0), self.theta_arr,axis=0)/(2.*np.pi) 
 
 	def _NambuMul(self,x,y):
 		### For the time being we will use a homebuilt overload for matrix multiplication for Nambu tensors until the tensor class can be tested more 
@@ -83,12 +97,7 @@ class Eilenberger:
 	
 	def _rf2g(self,gr,f):
 		### Promotes a pair (gr,f) to a single Keldysh object
-		g = np.stack([gr,f]) 
-		#g = np.zeros(self.Keldysh_shape,dtype=complex)
-		#g[0,...] = gr
-		#g[1,...] = f 
-		
-		return g 
+		return np.stack([gr,f]) 
 	
 	def _r2a(self,gr):
 		### This method conjugates a retarded object to get an advanced one 
@@ -174,6 +183,11 @@ class Eilenberger:
 		
 		err = np.sum(np.abs( gr_new - gr )) 
 		
+		### This is a quick fix for an issue which can arise if the self-energy is zero and an initial ansatz with gr = (hr0)^-1 is passed, as happens when no guess is given
+		### In this case gr_new = gr as both are inverses of the same gap function and the result is the loop never executes as the error is numerically zero 
+		if err < 1.e-10:
+			err = 1. 
+		
 		if self.verbose: print("Starting error: "+str(err)) 
 		count_exceeded = False
 		while err > self.scba_err: 
@@ -187,7 +201,7 @@ class Eilenberger:
 			gr_new = self._hr2gr(hr_new) ### Compute new Green's function 
 
 			err = np.sum( np.abs(hr_new - hr) )
-			if self.verbose: print("Loop {c}: Error {e:0.4f}".format(c=count, e = err ))
+			if self.verbose: print("Loop {c}: Error {e:0.4f}, gap {g:0.2f}".format(c=count, e = err, g = np.abs(self._calc_gap(self._rf2g(gr,f)) ) ))
 			
 			count += 1 
 			
@@ -218,13 +232,9 @@ class Eilenberger:
 		### This will also reduce the tensor shape so we include inside this the gap function which is a tensor with the same shape as the Nambu tensors 
 		tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
 	
-		### Now we integrate over energy and frequency 
-		rhs = -0.25j*self._integrate(tr) ### Call custom built integrator which is designed to handle adaptive grids 
-		#rhs = -0.25j*np.sum(tr)*self.dw/self.ntheta
-	
-		### We now multiply by the BCS constant which has been preset 
-		return self.BCS_coupling*rhs 
-	
+		### Now we integrate over energy and frequency and multiply by BCS constant (factor of 0.25 i is by definition of Keldysh part)
+		return -0.25j*self.BCS_coupling*self._integrate(tr) ### Call custom built integrator which is designed to handle adaptive grids 
+
 	#################################
 	### SET SIMULATION PARAMETERS ### 
 	#################################

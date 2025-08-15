@@ -8,12 +8,8 @@ from scipy import optimize as opt
 
 
 BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
-BCS_ratio = 1./(0.5*BCS_gap_constant) #1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
+BCS_ratio = 2./BCS_gap_constant #1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
 
-### Scope for defining and handling units more easily 
-
-	
-	
 
 ### Various Pauli matrices 
 Pauli = [ np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j,-1.j],[1.j,0.j]]), np.array([[1.0,0.j],[0.j,-1.]]) ]
@@ -29,7 +25,11 @@ class Eilenberger:
 		
 		self.Tc = 1. ### By default we use units where Tc is one 
 		
-		self.w_grid, self.theta_grid = np.meshgrid( np.linspace(-self.cutoff,self.cutoff,self.nw), np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False),indexing = 'ij') 
+		### Frequency and angular grids -- we will later implement adaptively sampled frequency grid to reduce need for number of points to get good resolution 
+		self.w_arr = np.linspace(-self.cutoff,self.cutoff,self.nw)
+		self.theta_arr = np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False)
+		
+		self.w_grid, self.theta_grid = np.meshgrid( self.w_arr , self.theta_arr ,indexing = 'ij') 
 		
 		self.grid_shape = self.w_grid.shape  # (Nw, Ntheta)
 		self.grid_size = np.prod(self.grid_shape)
@@ -37,10 +37,10 @@ class Eilenberger:
 		self.dw = self.w_grid[1,0] - self.w_grid[0,0]
 		
 		### Internal eta for broadening of spectral functions 
-		self.zero = 0.1*self.dw ### Should be small but precise value should not matter 
+		self.zero = 0.05*self.dw ### Should be small but precise value should not matter 
 		
 		### Internal default parameters for SCBA solver 
-		self.scba_step = 0.05 ### Update gradient step 
+		self.scba_step = 0.1 ### Update gradient step 
 		self.scba_err = 1.e-3 ### total error for SCBA convergence 
 		self.scba_max_step = 1000 ### Total number of iterations before we throw an error 
 	
@@ -64,6 +64,14 @@ class Eilenberger:
 	########################
 	### INTERNAL METHODS ### 
 	########################
+	
+	def _integrate(self,f):
+		### This method will integrate scalar function f over the frequency and angle grids (normalized by 2pi) assuming a possibly adaptive grid 
+		### For the moment we assume that f is a scalar and therefore already has had the Nambu indices traced out 
+		
+		### We will simply sum this over all indices to return a single number 
+		#return np.sum(f)*self.dw/self.ntheta 
+		return np.trapz(np.trapz(f,self.w_arr,axis=0), self.theta_arr)/(2.*np.pi) 
 
 	def _NambuMul(self,x,y):
 		### For the time being we will use a homebuilt overload for matrix multiplication for Nambu tensors until the tensor class can be tested more 
@@ -75,9 +83,10 @@ class Eilenberger:
 	
 	def _rf2g(self,gr,f):
 		### Promotes a pair (gr,f) to a single Keldysh object
-		g = np.zeros(self.Keldysh_shape,dtype=complex)
-		g[0,...] = gr
-		g[1,...] = f 
+		g = np.stack([gr,f]) 
+		#g = np.zeros(self.Keldysh_shape,dtype=complex)
+		#g[0,...] = gr
+		#g[1,...] = f 
 		
 		return g 
 	
@@ -104,7 +113,7 @@ class Eilenberger:
 		sigma = np.zeros_like(gr) 
 		
 		### Impurity scattering contributions 
-		impurity_scattering_tensor = 0.5/self.tau_imp*np.ones((self.ntheta,self.ntheta),dtype=complex)/self.ntheta 
+		impurity_scattering_tensor = 0.5*self.gamma_imp*np.ones((self.ntheta,self.ntheta),dtype=complex)/self.ntheta 
 		
 		sigma += np.tensordot(gr,impurity_scattering_tensor,axes=[[3],[0]]) ### This integrates over the angle and replaces it by a constant 
 		
@@ -122,7 +131,8 @@ class Eilenberger:
 	def _Nambu_det(self,a):
 		### Computes the determinant of a Nambu matrix as a tensor over the grid of frequency and angle 			
 		det = a[0,0,...] * a[1,1,...] - a[0,1,...]*a[1,0,...] ### Has shape of the frequency and mesh grid
-		out = self._scalar2Nambu(det)
+
+		out = det[None,None,...]
 
 		return out 
 				
@@ -209,7 +219,8 @@ class Eilenberger:
 		tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
 	
 		### Now we integrate over energy and frequency 
-		rhs = -0.25j*np.sum(tr)*self.dw/self.ntheta
+		rhs = -0.25j*self._integrate(tr) ### Call custom built integrator which is designed to handle adaptive grids 
+		#rhs = -0.25j*np.sum(tr)*self.dw/self.ntheta
 	
 		### We now multiply by the BCS constant which has been preset 
 		return self.BCS_coupling*rhs 
@@ -234,9 +245,9 @@ class Eilenberger:
 		### Allows to set the nominal Tc scale from default of one 
 		self.Tc = Tc 
 
-	def set_tau_imp(self,tau_imp):
+	def set_gamma_imp(self,gamma_imp):
 		### Set the elastic scattering rate
-		self.tau_imp = tau_imp 
+		self.gamma_imp = gamma_imp
 		
 	def set_temperature(self,T):
 		### Set the base temperature 

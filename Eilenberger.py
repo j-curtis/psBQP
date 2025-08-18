@@ -67,9 +67,9 @@ class Eilenberger:
 		
 		### Internal default parameters for SCBA solver 
 		### Taken from ChatGPT implementation of Anderson accelerated solver 
-		self.scba_hist = 8 ### For Anderson root finding algorithm this is the history of number of previous guesses we use 
-		self.scba_step = 0.075 ### Update gradient step 
-		self.scba_err = 1.e-3 ### relative error threshold for SCBA convergence 
+		self.scba_hist = 5 ### For Anderson root finding algorithm this is the history of number of previous guesses we use 
+		self.scba_step = 0.1 ### Update gradient step 
+		self.scba_err = 1.e-2 ### relative error threshold for SCBA convergence 
 		self.scba_max_steps = 4000 ### Total number of iterations before we throw an error 
 	
 		### Generate the necessary Nambu-shaped tensors 
@@ -98,7 +98,7 @@ class Eilenberger:
 		### For the moment we assume that f is a scalar and therefore already has had the Nambu indices traced out 
 		
 		### We will simply sum this over all indices to return a single number 
-		return np.trapz(np.trapz(f,self.w_arr,axis=0), self.theta_arr,axis=0)/(2.*np.pi) 
+		return np.mean(np.trapz(f,self.w_arr,axis=0),axis=0)
 
 	def _NambuMul(self,x,y):
 		### For the time being we will use a homebuilt overload for matrix multiplication for Nambu tensors until the tensor class can be tested more 
@@ -157,9 +157,7 @@ class Eilenberger:
 		sigma = np.zeros_like(gr) 
 		
 		### Impurity scattering contributions 
-		impurity_scattering_tensor = 0.5*self.gamma_imp*np.ones((self.ntheta,self.ntheta),dtype=complex)/self.ntheta 
-		
-		sigma += np.tensordot(gr,impurity_scattering_tensor,axes=[[3],[0]]) ### This integrates over the angle and replaces it by a constant 
+		sigma += 0.5*self.gamma_imp*np.mean(gr,axis=3,keepdims=True)
 		
 		return sigma 
 		
@@ -277,7 +275,7 @@ class Eilenberger:
 	### RUN EQUILIBRIUM CALCULATIONS ###
 	#################################### 
 	
-	def BCS_coupling(self):
+	def calc_BCS_coupling(self):
 		### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
 		return 1./np.log(BCS_gap_constant*self.cutoff/self.Tc) 
 	

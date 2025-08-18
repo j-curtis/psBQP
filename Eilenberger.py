@@ -15,6 +15,19 @@ BCS_ratio = 2./BCS_gap_constant #1.765387449618725 ### Ratio of Delta(0)/Tc in B
 Pauli = [ np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j,-1.j],[1.j,0.j]]), np.array([[1.0,0.j],[0.j,-1.]]) ]
 Paulimin = 0.5*(Pauli[1] -1.j*Pauli[2] )
 
+### Methods for packing and unpacking complex to real tensors for scipy methods
+def _pack(z: np.ndarray) -> np.ndarray:
+	z = np.asarray(z, np.complex128)
+	return np.concatenate([z.real.ravel(), z.imag.ravel()])
+
+def _unpack(y: np.ndarray, shape) -> np.ndarray:
+    n = int(np.prod(shape))
+    re = y[:n].reshape(shape)
+    im = y[n:].reshape(shape)
+    return re + 1j*im
+
+
+
 class Eilenberger:
 	def __init__(self, nw, ntheta, cutoff,fine_grid=(None,None)):
 		self.verbose = False ### If this is true we will have more information and feedback given during calculations
@@ -22,6 +35,15 @@ class Eilenberger:
 		self.nw = nw if nw % 2 == 0 else nw + 1  # Ensure even number
 		self.ntheta = ntheta
 		self.cutoff = cutoff
+		
+		self.Tc = 1. ### By default we use units where Tc is one 	
+		
+		### Frequency and angular grids -- we will later implement adaptively sampled frequency grid to reduce need for number of points to get good resolution 
+		self.w_arr = np.linspace(-self.cutoff,self.cutoff,self.nw)
+		self.theta_arr = np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False)	
+		
+		### Internal eta for broadening of spectral functions 
+		self.zero = 2.*(self.w_arr[1]-self.w_arr[0]) ### This will be the small broadening for just the large grid ~= frequency step size 
 		
 		### We allow for an optional specification of an additional finer grid region
 		### This is done by passing a tuple fine_grid = (fine_nw, fine_cutoff) 
@@ -34,30 +56,21 @@ class Eilenberger:
 		else:
 			if self.fine_nw %2 == 0: self.fine_nw += 1
 			self.fine_grid = np.linspace(-self.fine_cutoff,self.fine_cutoff,self.fine_nw)
+			self.zero = 2.*(self.fine_grid[1]-self.fine_grid[0])
 	
-		
-		self.Tc = 1. ### By default we use units where Tc is one 
-		
-		### Frequency and angular grids -- we will later implement adaptively sampled frequency grid to reduce need for number of points to get good resolution 
-		self.w_arr = np.linspace(-self.cutoff,self.cutoff,self.nw)
-		if self.fine_grid is not None:
-			w_arr = np.concatenate([ self.w_arr,self.fine_grid ]) ### this joins the two arrays 
+			w_arr = np.concatenate([self.w_arr, self.fine_grid]) ### this joins the two arrays 
 			self.w_arr = np.unique(w_arr) ### sorts and removes duplicates 
-		
-		self.theta_arr = np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False)
 		
 		self.w_grid, self.theta_grid = np.meshgrid( self.w_arr , self.theta_arr ,indexing = 'ij') 
 		
 		self.grid_shape = self.w_grid.shape  # (Nw, Ntheta)
-		self.grid_size = np.prod(self.grid_shape)
-		
-		### Internal eta for broadening of spectral functions 
-		self.zero = 0.05*np.min(np.diff(self.w_arr)) ### Should be small but precise value should not matter 
 		
 		### Internal default parameters for SCBA solver 
-		self.scba_step = 0.05 ### Update gradient step 
-		self.scba_err = 1.e-3 ### total error for SCBA convergence 
-		self.scba_max_step = 1000 ### Total number of iterations before we throw an error 
+		### Taken from ChatGPT implementation of Anderson accelerated solver 
+		self.scba_hist = 8 ### For Anderson root finding algorithm this is the history of number of previous guesses we use 
+		self.scba_step = 0.075 ### Update gradient step 
+		self.scba_err = 1.e-3 ### relative error threshold for SCBA convergence 
+		self.scba_max_steps = 4000 ### Total number of iterations before we throw an error 
 	
 		### Generate the necessary Nambu-shaped tensors 
 		### Nambu tensor class is not yet working 
@@ -116,26 +129,6 @@ class Eilenberger:
 		gk = self._NambuMul(gr,f) - self._NambuMul(f,self._r2a(gr)) 
 		
 		return gk 
-				
-	def _sigma_r(self,gr): 
-		### This method computes the retarded self energy from gr   
-		sigma = np.zeros_like(gr) 
-		
-		### Impurity scattering contributions 
-		impurity_scattering_tensor = 0.5*self.gamma_imp*np.ones((self.ntheta,self.ntheta),dtype=complex)/self.ntheta 
-		
-		sigma += np.tensordot(gr,impurity_scattering_tensor,axes=[[3],[0]]) ### This integrates over the angle and replaces it by a constant 
-		
-		return sigma 
-		
-	def _Doppler_w_r(self,Q):
-		### returns the Doppler shifted frequency Nambu tensor with retarded causality 		
-		return (self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*self.zero*np.ones_like(self.w) )*self.Nambu_matrices[3] 
-			
-	def _Delta_p(self,gap):
-		### Returns the momentum resolved Nambu tensor gap  		
-		### Allows for a complex gap 
-		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function -1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
 		
 	def _Nambu_det(self,a):
 		### Computes the determinant of a Nambu matrix as a tensor over the grid of frequency and angle 			
@@ -149,12 +142,35 @@ class Eilenberger:
 		### Inverts and normalizes a retarded effective Hamiltonian
 		return - hr/np.sqrt(self._Nambu_det(hr)) 
 	
+	def _Doppler_w_r(self,Q):
+		### returns the Doppler shifted frequency Nambu tensor with retarded causality 		
+		return (self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*self.zero*np.ones_like(self.w) )*self.Nambu_matrices[3] 
+			
+	def _Delta_p(self,gap):
+		### Returns the momentum resolved Nambu tensor gap  		
+		### Allows for a complex gap 
+		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function -1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
+						
+	def _sigma_r(self,g): 
+		### This method computes the retarded self energy from g = [gr,f] 
+		gr = g[0,...]
+		sigma = np.zeros_like(gr) 
+		
+		### Impurity scattering contributions 
+		impurity_scattering_tensor = 0.5*self.gamma_imp*np.ones((self.ntheta,self.ntheta),dtype=complex)/self.ntheta 
+		
+		sigma += np.tensordot(gr,impurity_scattering_tensor,axes=[[3],[0]]) ### This integrates over the angle and replaces it by a constant 
+		
+		return sigma 
+		
 	def _calc_gr(self,f,gr0 = None,gap0 = None):
 		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f and (optionally) an initial guess for gr0 and gap0
+		### Uses Anderson acceleration technique from ChatGPT
 		
 		### Bare inverse Green's function
-		### Not a guess but is the static part of gr0 inverse 
-		hr0 = self._Doppler_w_r(self.Q0) ### For now we just use the equilibrium current 
+		### Not a guess but is the static part of gr inverse 
+		hr_bare = self._Doppler_w_r(self.Q0) ### For now we just use the equilibrium current 
+		hr_shape = hr_bare.shape
 		
 		### Initial guess for gap
 		if gap0 is None:
@@ -162,63 +178,36 @@ class Eilenberger:
 		
 		### Initial guess for gr0
 		if gr0 is None: 
-			gr0 = self._hr2gr(hr0)
+			gr0 = self._hr2gr(hr_bare)
 		
-		hr = hr0  - self._Delta_p(gap0) - self._sigma_r(gr0) 
-		gr = self._hr2gr(hr) 
+		### Helper function
+		### We cast as a root finding problem of x -f(x) = 0 where f(hr) = hr_bare - gap(gr) - sigma_r(gr)
+		def _root_func(hr_packed):
+			hr = _unpack(hr_packed,hr_shape)
 		
-		### Update function 
-		def _update_func(hr):
 			gr = self._hr2gr(hr)
-			sigma = self._sigma_r(gr) 
+			g = self._rf2g(gr,f)
+			gap = self._calc_gap(g)
+			sigma_r = self._sigma_r(g) 
 			
-			gap = self._calc_gap(self._rf2g(gr,f))
-			
-			### Now we update the inverse Green's function 
-			return hr0 - self._Delta_p(gap) - sigma 
+			hr_new = hr_bare - self._Delta_p(gap) - sigma_r 
+			return _pack(hr - hr_new)
 		
-		count = 0 
-		hr_new = hr + self.scba_step*( _update_func(hr) - hr ) 
-		gr_new = self._hr2gr(hr_new) 
+		### Initial iteration 
+		hr0 = _pack( hr_bare - self._Delta_p(gap0) - self._sigma_r(self._rf2g(gr0,f)) )
 		
-		err = np.sum(np.abs( gr_new - gr )) 
+		### Call to the scipy method 
+		sol = opt.root(_root_func, hr0,method="anderson", options=dict(ftol = self.scba_err, maxiter=self.scba_max_steps, tol_norm=np.linalg.norm, jac_options=dict(alpha=self.scba_step, M=self.scba_hist)))
 		
-		### This is a quick fix for an issue which can arise if the self-energy is zero and an initial ansatz with gr = (hr0)^-1 is passed, as happens when no guess is given
-		### In this case gr_new = gr as both are inverses of the same gap function and the result is the loop never executes as the error is numerically zero 
-		if err < 1.e-10:
-			err = 1. 
+		if self.verbose: print(sol.message)
 		
-		if self.verbose: print("Starting error: "+str(err)) 
-		count_exceeded = False
-		while err > self.scba_err: 
-			if count > self.scba_max_step:
-				if self.verbose: print("Max step count {m} exceeded.".format(m=self.scba_max_step))
-				count_exceeded = True
-				break
-	
-
-			hr_new = hr + self.scba_step*( _update_func(hr) - hr )  ### Increment the inverse GF  
-			gr_new = self._hr2gr(hr_new) ### Compute new Green's function 
-
-			err = np.sum( np.abs(hr_new - hr) )
-			if self.verbose: print("Loop {c}: Error {e:0.4f}, gap {g:0.2f}".format(c=count, e = err, g = np.abs(self._calc_gap(self._rf2g(gr,f)) ) ))
-			
-			count += 1 
-			
-			### Update the new functions to the old ones 		
-			hr = hr_new 
-			gr = gr_new
-			
-		### We must decide what to return if the result doesn't converge
-		### For now we will return the gap = 0 and the greens function will be returned as None 
-		if count_exceeded:
-			gap = 0.
-			gr = None 
-			
-		else:
-			gap = self._calc_gap(self._rf2g(gr,f)) 
-				
-		### Now we return the greens function and the gap
+		if not sol.success:
+			return None, 0.j
+		
+		### By this point it has worked 
+		hr = _unpack(sol.x,hr_shape)
+		gr = self._hr2gr(hr)
+		gap = self._calc_gap(self._rf2g(gr,f))
 
 		return gr, gap
 		

@@ -355,12 +355,37 @@ class Eilenberger:
 		### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
 		return 1./np.log(BCS_gap_constant*self.cutoff/self.Tc) 
 	
-	def calc_eq(self,gr0=None,gap0=None):
+	def calc_eq_old(self,gr0=None,gap0=None):
 		### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 
 		
 		gr, gap = self._calc_gr_old(self.fd_tensor,gr0,gap0) 
 		
 		return gr, gap 
+		
+	def calc_eq_gap(self,gap0=None):
+		### Uses Picard solver with optional initial guess
+		if gap0 is None: gap0 = 1.*BCS_ratio*self.Tc
+		gr = self._calc_gr(gap0,self.Q0) 
+		
+		iterations = 0
+		converged = False
+		err = 0. 
+		
+		gap = gap0 
+		
+		while not converged and iterations < self.scba_max_steps:
+			gap_new = self._calc_gap(self._rf2g(gr,self.fd_tensor)) 
+			
+			err = np.abs(gap_new - gap) 
+			if self.verbose: print(f"Loop: {iterations}, err: {err}")
+			 
+			gap = gap + self.scba_step*(gap_new - gap) 
+			
+			if err < self.scba_err: converged = True, print(f"Converged on {iterations} iterations")
+			iterations += 1 
+			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.")
+
+		return gap
 		
 	def precompute_hr(self,nDelta,nQ=None):
 		"""This will run a precomputing routine where gR is computed as a function of Delta(t) and Q(t) and then stored with interpolator to enable fast usage for ODE solver"""

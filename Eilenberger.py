@@ -5,7 +5,7 @@
 import numpy as np
 from scipy import integrate as intg
 from scipy import optimize as opt
-
+import time
 
 BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
 BCS_ratio = 2./BCS_gap_constant #1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
@@ -42,8 +42,8 @@ class Eilenberger:
 		self.w_arr = np.linspace(-self.cutoff,self.cutoff,self.nw)
 		self.theta_arr = np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False)	
 		
-		### Internal eta for broadening of spectral functions 
-		self.zero = 2.*(self.w_arr[1]-self.w_arr[0]) ### This will be the small broadening for just the large grid ~= frequency step size 
+		### Internal default eta for broadening of spectral functions 
+		self.eta = 2.*(self.w_arr[1]-self.w_arr[0]) ### This will be the small broadening for just the large grid ~= frequency step size 
 		
 		### We allow for an optional specification of an additional finer grid region
 		### This is done by passing a tuple fine_grid = (fine_nw, fine_cutoff) 
@@ -56,7 +56,7 @@ class Eilenberger:
 		else:
 			if self.fine_nw %2 == 0: self.fine_nw += 1
 			self.fine_grid = np.linspace(-self.fine_cutoff,self.fine_cutoff,self.fine_nw)
-			self.zero = 2.*(self.fine_grid[1]-self.fine_grid[0])
+			self.eta = 2.*(self.fine_grid[1]-self.fine_grid[0])
 	
 			w_arr = np.concatenate([self.w_arr, self.fine_grid]) ### this joins the two arrays 
 			self.w_arr = np.unique(w_arr) ### sorts and removes duplicates 
@@ -67,9 +67,10 @@ class Eilenberger:
 		
 		### Internal default parameters for SCBA solver 
 		### Taken from ChatGPT implementation of Anderson accelerated solver 
+		### Also used in the clunky hand-written Picard solver which seems to anyways work better
 		self.scba_hist = 5 ### For Anderson root finding algorithm this is the history of number of previous guesses we use 
-		self.scba_step = 0.1 ### Update gradient step 
-		self.scba_err = 1.e-2 ### relative error threshold for SCBA convergence 
+		self.scba_step = 0.05 ### Update gradient step 
+		self.scba_err = 1.e-3 ### relative error threshold for SCBA convergence 
 		self.scba_max_steps = 4000 ### Total number of iterations before we throw an error 
 	
 		### Generate the necessary Nambu-shaped tensors 
@@ -86,8 +87,8 @@ class Eilenberger:
 		self.Keldysh_shape = (2,*self.Nambu_shape) ### We now double for the Keldysh dof (we store only [R,K] )
 		
 		### Default function call for supercurrent will just return zero 
-		self.Q_t = lambda x: np.array([0.,0.]) 
-		self.Q0 = np.array([0.,0.]) ### A static background which is set to zero by default 
+		self.Q_t = lambda x: 0. 
+		self.Q0 =0. ### A static background which is set to zero by default 
 	
 	########################
 	### INTERNAL METHODS ### 
@@ -144,14 +145,14 @@ class Eilenberger:
 	
 	def _Doppler_w_r(self,Q):
 		### returns the Doppler shifted frequency Nambu tensor with retarded causality 		
-		return (self.w - Q[0]*np.cos(self.theta) - Q[1]*np.sin(self.theta) + 1.j*self.zero*np.ones_like(self.w) )*self.Nambu_matrices[3] 
-			
+		return ( self.w - Q*np.cos(self.theta) + 0.5j*self.eta*np.ones_like(self.w) )*self.Nambu_matrices[3] 
+		
 	def _Delta_p(self,gap):
 		### Returns the momentum resolved Nambu tensor gap  		
 		### Allows for a complex gap 
 		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function -1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
 						
-	def _sigma_r(self,g): 
+	def _sigma_r_from_g(self,g): 
 		### This method computes the retarded self energy from g = [gr,f] 
 		gr = g[0,...]
 		sigma = np.zeros_like(gr) 
@@ -161,13 +162,22 @@ class Eilenberger:
 		
 		return sigma 
 		
-	def _calc_gr(self,f,gr0 = None,gap0 = None):
-		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f and (optionally) an initial guess for gr0 and gap0
+	def _sigma_r(self,gr): 
+		### This method computes the retarded self energy from gr alone
+		sigma = np.zeros_like(gr) 
+		
+		### Impurity scattering contributions 
+		sigma += 0.5*self.gamma_imp*np.mean(gr,axis=3,keepdims=True)
+		
+		return sigma 
+		
+	def _calc_gr_old(self,f,gr0 = None,gap0 = None):
+		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f and (optionally) an initial guess for gr0 and gap0 and vector potential Q (Set to default) 
 		### Uses Anderson acceleration technique from ChatGPT
 		
 		### Bare inverse Green's function
 		### Not a guess but is the static part of gr inverse 
-		hr_bare = self._Doppler_w_r(self.Q0) ### For now we just use the equilibrium current 
+		hr_bare = self._Doppler_w_r(self.Q0) 
 		hr_shape = hr_bare.shape
 		
 		### Initial guess for gap
@@ -186,13 +196,13 @@ class Eilenberger:
 			gr = self._hr2gr(hr)
 			g = self._rf2g(gr,f)
 			gap = self._calc_gap(g)
-			sigma_r = self._sigma_r(g) 
+			sigma_r = self._sigma_r_from_g(g) 
 			
 			hr_new = hr_bare - self._Delta_p(gap) - sigma_r 
 			return _pack(hr - hr_new)
 		
 		### Initial iteration 
-		hr0 = _pack( hr_bare - self._Delta_p(gap0) - self._sigma_r(self._rf2g(gr0,f)) )
+		hr0 = _pack( hr_bare - self._Delta_p(gap0) - self._sigma_r_from_g(self._rf2g(gr0,f)) )
 		
 		### Call to the scipy method 
 		sol = opt.root(_root_func, hr0,method="anderson", options=dict(ftol = self.scba_err, maxiter=self.scba_max_steps, tol_norm=np.linalg.norm, jac_options=dict(alpha=self.scba_step, M=self.scba_hist)))
@@ -208,6 +218,65 @@ class Eilenberger:
 		gap = self._calc_gap(self._rf2g(gr,f))
 
 		return gr, gap
+		
+	def _calc_gr(self,gap,Q):
+		"""Computes gR(Delta,Q) self-consistently given gap and vector potential"""
+		
+		### Bare inverse Green's function
+		### Not a guess but is the static part of gr inverse 
+		hr_bare = self._Doppler_w_r(Q)  - self._Delta_p(gap) 
+		hr_shape = hr_bare.shape
+		
+		gr0 = self._hr2gr(hr_bare)
+		
+		### Helper function
+		def _sigma_func(hr):
+			#hr = _unpack(hr_packed,hr_shape)
+		
+			gr = self._hr2gr(hr)
+			sigma_r = self._sigma_r(gr) 
+		
+			#return _pack(sigma_r)
+			return sigma_r 
+		
+		### Initial iteration 
+		hr = hr_bare
+		
+		iterations = 0
+		converged = False 
+		err = 0.
+		
+		while not converged and iterations < self.scba_max_steps:
+			hr_new = hr_bare - _sigma_func(hr) 
+			
+			err = np.linalg.norm(hr_new - hr)/(np.linalg.norm(hr) +1.e-10 ) 
+			if self.verbose: print(f"Loop: {iterations}, err: {err}")
+			 
+			hr = hr + self.scba_step*(hr_new - hr) 
+			
+			if err < self.scba_err: converged = True, print(f"Converged on {iterations} iterations")
+			iterations += 1 
+			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.")
+		
+		return self._hr2gr(hr)
+			
+			
+		
+		### Call to the scipy method 
+		### We use least squares which may be better suited for the case where the function is nearly linear
+		sol = opt.root(_root_func, hr0,method="lm", options=dict(ftol = self.scba_err, maxiter = self.scba_max_steps, eps = self.scba_step ) )
+		
+		if self.verbose: print(sol.message)
+		
+		if not sol.success:
+			return None
+		
+		### By this point it has worked 
+		hr = _unpack(sol.x,hr_shape)
+		gr = self._hr2gr(hr)
+
+		return gr
+	
 		
 	def _calc_gap(self,g):
 		### This method computes the gap self consistently given the Greens function degree of freedom
@@ -226,9 +295,10 @@ class Eilenberger:
 	### SET SIMULATION PARAMETERS ### 
 	#################################
 
-	def set_d_wave(self):
-		### We change from s-wave to d-wave gap function 
-		self.gap_function = np.sqrt(2.)*np.cos(2.*self.theta_grid) ### The factor of sqrt(2) is normalization 
+	def set_d_wave(self,nodal=False):
+		### We change from s-wave to d-wave gap function (option to switch nodal and anti-nodal, default is antinodal)
+		if nodal: self.gap_function = np.sqrt(2.)*np.sin(2.*self.theta_grid) ### The factor of sqrt(2) is normalization 
+		else: self.gap_function = np.sqrt(2.)*np.cos(2.*self.theta_grid)
 		
 	def set_s_wave(self):
 		### We change from d-wave to s-wave gap function 
@@ -245,6 +315,12 @@ class Eilenberger:
 	def set_gamma_imp(self,gamma_imp):
 		### Set the elastic scattering rate
 		self.gamma_imp = gamma_imp
+		
+	def set_Dynes_eta(self,eta):
+		### Sets a finite value of the Dynes broadening (eta) parameter -- PAIR BREAKING 
+		self.eta = eta 
+		
+		### This will strongly renormalize Tc approximately linearly at small eta with coefficient dTc/deta = -pi/4 
 		
 	def set_temperature(self,T):
 		### Set the base temperature 
@@ -281,10 +357,89 @@ class Eilenberger:
 	
 	def calc_eq(self,gr0=None,gap0=None):
 		### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 
-		gr, gap = self._calc_gr(self.fd_tensor,gr0,gap0) 
+		
+		gr, gap = self._calc_gr_old(self.fd_tensor,gr0,gap0) 
 		
 		return gr, gap 
 		
+	def precompute_hr(self,nDelta,nQ=None):
+		"""This will run a precomputing routine where gR is computed as a function of Delta(t) and Q(t) and then stored with interpolator to enable fast usage for ODE solver"""
+		
+		### We will first generate the grid of points to interpolate over 
+		self.Delta_max = 2.*BCS_ratio*self.Tc 
+		self.Q_max = 10.*BCS_ratio*self.Tc ### voltage can be very large potentially 
+		self.nDelta = nDelta 
+		self.nQ = nQ 
+		
+		self.Deltas = self.Delta_max*( np.linspace(0.,1.,self.nDelta,dtype=complex) )**4 ### We use a non-uniform sampling which is denser at small values of Delta 
+	
+		if nQ is not None: 
+			self.Qs = np.linspace(-self.Q_max,self.Q_max,nQ)
+		if nQ is None:
+			self.nQ = 1 
+			self.Qs = np.array([0.]) 
+			
+		self.Delta_grid, self.Q_grid = np.meshgrid(self.Deltas,self.Qs,indexing='ij')
+		self.precompute_grid_shape = self.Delta_grid.shape
+		self.sigma_r_grid = np.zeros((*self.Nambu_shape, *self.precompute_grid_shape),dtype=complex )
+		### Now we precompute the solution to the SCBA for each point in the grid
+		
+		for i in range(self.nDelta):
+			for j in range(self.nQ):
+				gap = self.Delta_grid[i,j]
+				Q = self.Q_grid[i,j]
+				
+				if self.verbose: 
+					print(f"Precompute loop: {i}/{self.nDelta} x {j}/{self.nQ}")
+					print(f"Gap: {np.abs(gap):0.3f}")
+					print(f"Q: {Q:0.3f}")
+				t0 = time.time()
+				gr = self._calc_gr(gap,Q)
+				if gr is not None: 
+					self.sigma_r_grid[...,i,j] = self._sigma_r(gr)
+				t1 = time.time()
+				if self.verbose: print(f"Time: {t1-t0:0.2f}s\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

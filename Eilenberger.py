@@ -254,7 +254,8 @@ class Eilenberger:
 			 
 			hr = hr + self.scba_step*(hr_new - hr) 
 			
-			if err < self.scba_err: converged = True, print(f"Converged on {iterations} iterations")
+			if err < self.scba_err: converged = True
+			if converged and self.verbose: print(f"Converged on {iterations} iterations")
 			iterations += 1 
 			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.")
 		
@@ -373,15 +374,26 @@ class Eilenberger:
 		
 		gap = gap0 
 		
+		def _gap_err_func(gap_new,gap_old):
+			if np.abs(gap_old) > 0.:
+				return np.abs(np.abs(gap_new) - np.abs(gap_old) )/np.abs(gap_old) 
+				
+			else:
+				return np.abs(gap_new)
+		
+		
 		while not converged and iterations < self.scba_max_steps:
+			gr = self._calc_gr(gap,self.Q0)
 			gap_new = self._calc_gap(self._rf2g(gr,self.fd_tensor)) 
 			
-			err = np.abs(gap_new - gap) 
+			err = _gap_err_func(gap_new,gap) 
+			
 			if self.verbose: print(f"Loop: {iterations}, err: {err}")
 			 
 			gap = gap + self.scba_step*(gap_new - gap) 
 			
-			if err < self.scba_err: converged = True, print(f"Converged on {iterations} iterations")
+			if err < self.scba_err: converged = True
+			if converged and self.verbose: print(f"Converged on {iterations} iterations")
 			iterations += 1 
 			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.")
 

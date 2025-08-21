@@ -73,6 +73,7 @@ class Eilenberger:
 		self.scba_err = 1.e-3 ### relative error threshold for SCBA convergence 
 		self.scba_max_steps = 4000 ### Total number of iterations before we throw an error 
 	
+	
 		### Generate the necessary Nambu-shaped tensors 
 		### Nambu tensor class is not yet working 
 		self.Nambu_matrices = [ np.tensordot(sigma, np.ones_like(self.w_grid),axes=0 ) for sigma in Pauli ] ### These are now Pauli matrices and identity function on the momenta/frequency 
@@ -374,19 +375,11 @@ class Eilenberger:
 		
 		gap = gap0 
 		
-		def _gap_err_func(gap_new,gap_old):
-			if np.abs(gap_old) > 0.:
-				return np.abs(np.abs(gap_new) - np.abs(gap_old) )/np.abs(gap_old) 
-				
-			else:
-				return np.abs(gap_new)
-		
-		
 		while not converged and iterations < self.scba_max_steps:
 			gr = self._calc_gr(gap,self.Q0)
 			gap_new = self._calc_gap(self._rf2g(gr,self.fd_tensor)) 
 			
-			err = _gap_err_func(gap_new,gap) 
+			err = np.abs( np.abs(gap_new) - np.abs(gap) )/( max( np.abs(gap), 1.e-8) ) 
 			
 			if self.verbose: print(f"Loop: {iterations}, err: {err}")
 			 
@@ -399,12 +392,13 @@ class Eilenberger:
 
 		return gap
 		
-	def precompute_hr(self,nDelta,nQ=None):
+	def precompute_hr(self,nDelta,nQ = None,Q_max = None):
 		"""This will run a precomputing routine where gR is computed as a function of Delta(t) and Q(t) and then stored with interpolator to enable fast usage for ODE solver"""
 		
 		### We will first generate the grid of points to interpolate over 
 		self.Delta_max = 2.*BCS_ratio*self.Tc 
 		self.Q_max = 10.*BCS_ratio*self.Tc ### voltage can be very large potentially 
+		if Q_max is not None: self.Q_max = Q_max ### A more refined specification
 		self.nDelta = nDelta 
 		self.nQ = nQ 
 		
@@ -413,6 +407,7 @@ class Eilenberger:
 		if nQ is not None: 
 			self.Qs = np.linspace(-self.Q_max,self.Q_max,nQ)
 		if nQ is None:
+			self.Q_max = 0.
 			self.nQ = 1 
 			self.Qs = np.array([0.]) 
 			

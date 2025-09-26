@@ -7,6 +7,8 @@ from scipy import integrate as intg
 from scipy import optimize as opt
 import time
 
+zero = 1.e-6 ### small number for causality
+
 BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
 BCS_ratio = 2./BCS_gap_constant #1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
 
@@ -116,7 +118,7 @@ class Eilenberger:
 	
 	def _r2a(self,gr):
 		### This method conjugates a retarded object to get an advanced one 
-		ga = np.transpose(np.conjugate(gr),axes=(1,0,2,3))
+		ga = -np.transpose(np.conjugate(gr),axes=(1,0,2,3))
 		
 		ga = self._NambuMul(self.Nambu_matrices[3],ga)
 		ga = self._NambuMul(ga,self.Nambu_matrices[3])
@@ -142,16 +144,18 @@ class Eilenberger:
 				
 	def _hr2gr(self,hr):
 		### Inverts and normalizes a retarded effective Hamiltonian
-		return - hr/np.sqrt(self._Nambu_det(hr)) 
+		return -1.j* hr/np.sqrt(self._Nambu_det(hr)) 
 	
 	def _Doppler_w_r(self,Q):
-		### returns the Doppler shifted frequency Nambu tensor with retarded causality 		
-		return ( self.w - Q*np.cos(self.theta) + 0.5j*self.eta*np.ones_like(self.w) )*self.Nambu_matrices[3] 
+		### returns the Doppler shifted frequency Nambu tensor with retarded causality 	
+		### The value of eta is used in the self energy, here we only put a very small eta to choose retarded causality	
+		#return ( self.w - Q*np.cos(self.theta) + 0.5j*self.eta*np.ones_like(self.w) )*self.Nambu_matrices[3] 
+		return ( self.w - Q*np.cos(self.theta) + 1.j*zero*np.ones_like(self.w) )*self.Nambu_matrices[3] 
 		
 	def _Delta_p(self,gap):
 		### Returns the momentum resolved Nambu tensor gap  		
 		### Allows for a complex gap 
-		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function -1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
+		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function +1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
 						
 	def _sigma_r_from_g(self,g): 
 		### This method computes the retarded self energy from g = [gr,f] 
@@ -161,6 +165,9 @@ class Eilenberger:
 		### Impurity scattering contributions 
 		sigma += 0.5*self.gamma_imp*np.mean(gr,axis=3,keepdims=True)
 		
+		### Dynes eta parameter is included here as well
+		sigma += -0.5j*self.eta*self.Nambu_matrices[3]
+		
 		return sigma 
 		
 	def _sigma_r(self,gr): 
@@ -168,7 +175,10 @@ class Eilenberger:
 		sigma = np.zeros_like(gr) 
 		
 		### Impurity scattering contributions 
-		sigma += 0.5*self.gamma_imp*np.mean(gr,axis=3,keepdims=True)
+		sigma += -0.5j*self.gamma_imp*np.mean(gr,axis=3,keepdims=True)
+		
+		### Dynes inelastic scattering 
+		sigma += -0.5j*self.eta*self.Nambu_matrices[3]
 		
 		return sigma 
 		
@@ -220,38 +230,37 @@ class Eilenberger:
 
 		return gr, gap
 		
-	def _calc_gr(self,gap,Q):
-		"""Computes gR(Delta,Q) self-consistently given gap and vector potential"""
+	def _calc_gr(self,f,Q,gap0=None):
+		"""Computes gR self-consistently given occupation function f and vector potential"""
 		
 		### Bare inverse Green's function
 		### Not a guess but is the static part of gr inverse 
-		hr_bare = self._Doppler_w_r(Q)  - self._Delta_p(gap) 
-		hr_shape = hr_bare.shape
+		hr_bare = self._Doppler_w_r(Q)  
 		
-		gr0 = self._hr2gr(hr_bare)
-		
-		### Helper function
-		def _sigma_func(hr):
-			#hr = _unpack(hr_packed,hr_shape)
+		### Helper function: given an hr it will compute the self energy and gap, added together 
+		def _sigma_gap_func(hr):
 		
 			gr = self._hr2gr(hr)
 			sigma_r = self._sigma_r(gr) 
+			gap = self._calc_gap( self._rf2g(gr,f) ) 
 		
-			#return _pack(sigma_r)
-			return sigma_r 
-		
-		### Initial iteration 
-		hr = hr_bare
+			return sigma_r + self._Delta_p(gap), gap
+			
+
+		### Initial iteration -- we include a non-zero value of the gap to get a better initial guess when it is in the SC phase  
+		if gap0 is None: gap0 = BCS_ratio*self.Tc
+		hr = hr_bare - self._Delta_p(gap0)
 		
 		iterations = 0
 		converged = False 
 		err = 0.
 		
 		while not converged and iterations < self.scba_max_steps:
-			hr_new = hr_bare - _sigma_func(hr) 
+			sigma_gap, gap = _sigma_gap_func(hr) 
+			hr_new = hr_bare - sigma_gap 
 			
 			err = np.linalg.norm(hr_new - hr)/(np.linalg.norm(hr) +1.e-10 ) 
-			if self.verbose: print(f"Loop: {iterations}, err: {err}")
+			if self.verbose: print(f"Loop: {iterations}, err: {err}, gap: {gap}")
 			 
 			hr = hr + self.scba_step*(hr_new - hr) 
 			
@@ -261,25 +270,7 @@ class Eilenberger:
 			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.")
 		
 		return self._hr2gr(hr)
-			
-			
-		
-		### Call to the scipy method 
-		### We use least squares which may be better suited for the case where the function is nearly linear
-		sol = opt.root(_root_func, hr0,method="lm", options=dict(ftol = self.scba_err, maxiter = self.scba_max_steps, eps = self.scba_step ) )
-		
-		if self.verbose: print(sol.message)
-		
-		if not sol.success:
-			return None
-		
-		### By this point it has worked 
-		hr = _unpack(sol.x,hr_shape)
-		gr = self._hr2gr(hr)
 
-		return gr
-	
-		
 	def _calc_gap(self,g):
 		### This method computes the gap self consistently given the Greens function degree of freedom
 		
@@ -291,7 +282,7 @@ class Eilenberger:
 		tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
 	
 		### Now we integrate over energy and frequency and multiply by BCS constant (factor of 0.25 i is by definition of Keldysh part)
-		return -0.25j*self.BCS_coupling*self._integrate(tr) ### Call custom built integrator which is designed to handle adaptive grids 
+		return -0.25*self.BCS_coupling*self._integrate(tr) ### Call custom built integrator which is designed to handle adaptive grids 
 
 	#################################
 	### SET SIMULATION PARAMETERS ### 
@@ -357,14 +348,14 @@ class Eilenberger:
 		### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
 		return 1./np.log(BCS_gap_constant*self.cutoff/self.Tc) 
 	
-	def calc_eq_old(self,gr0=None,gap0=None):
+	def calc_eq_gap(self,gap0=None):
 		### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 
 		
-		gr, gap = self._calc_gr_old(self.fd_tensor,gr0,gap0) 
+		gr = self._calc_gr(self.fd_tensor,self.Q0,gap0) 
 		
-		return gr, gap 
+		return self._calc_gap(self._rf2g(gr,self.fd_tensor))
 		
-	def calc_eq_gap(self,gap0=None):
+	def calc_eq_gap_old(self,gap0=None):
 		### Uses Picard solver with optional initial guess
 		if gap0 is None: gap0 = 1.*BCS_ratio*self.Tc
 		gr = self._calc_gr(gap0,self.Q0) 

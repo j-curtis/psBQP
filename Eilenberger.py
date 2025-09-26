@@ -156,19 +156,6 @@ class Eilenberger:
 		### Returns the momentum resolved Nambu tensor gap  		
 		### Allows for a complex gap 
 		return 1.j*np.real(gap) * self.Nambu_matrices[2]*self.gap_function +1.j* np.imag(gap)*self.Nambu_matrices[1]*self.gap_function
-						
-	def _sigma_r_from_g(self,g): 
-		### This method computes the retarded self energy from g = [gr,f] 
-		gr = g[0,...]
-		sigma = np.zeros_like(gr) 
-		
-		### Impurity scattering contributions 
-		sigma += 0.5*self.gamma_imp*np.mean(gr,axis=3,keepdims=True)
-		
-		### Dynes eta parameter is included here as well
-		sigma += -0.5j*self.eta*self.Nambu_matrices[3]
-		
-		return sigma 
 		
 	def _sigma_r(self,gr): 
 		### This method computes the retarded self energy from gr alone
@@ -181,54 +168,6 @@ class Eilenberger:
 		sigma += -0.5j*self.eta*self.Nambu_matrices[3]
 		
 		return sigma 
-		
-	def _calc_gr_old(self,f,gr0 = None,gap0 = None):
-		### This method computes the retarded Greens function and gap self consistently given the Keldysh function f and (optionally) an initial guess for gr0 and gap0 and vector potential Q (Set to default) 
-		### Uses Anderson acceleration technique from ChatGPT
-		
-		### Bare inverse Green's function
-		### Not a guess but is the static part of gr inverse 
-		hr_bare = self._Doppler_w_r(self.Q0) 
-		hr_shape = hr_bare.shape
-		
-		### Initial guess for gap
-		if gap0 is None:
-			gap0 = BCS_ratio*self.Tc
-		
-		### Initial guess for gr0
-		if gr0 is None: 
-			gr0 = self._hr2gr(hr_bare)
-		
-		### Helper function
-		### We cast as a root finding problem of x -f(x) = 0 where f(hr) = hr_bare - gap(gr) - sigma_r(gr)
-		def _root_func(hr_packed):
-			hr = _unpack(hr_packed,hr_shape)
-		
-			gr = self._hr2gr(hr)
-			g = self._rf2g(gr,f)
-			gap = self._calc_gap(g)
-			sigma_r = self._sigma_r_from_g(g) 
-			
-			hr_new = hr_bare - self._Delta_p(gap) - sigma_r 
-			return _pack(hr - hr_new)
-		
-		### Initial iteration 
-		hr0 = _pack( hr_bare - self._Delta_p(gap0) - self._sigma_r_from_g(self._rf2g(gr0,f)) )
-		
-		### Call to the scipy method 
-		sol = opt.root(_root_func, hr0,method="anderson", options=dict(ftol = self.scba_err, maxiter=self.scba_max_steps, tol_norm=np.linalg.norm, jac_options=dict(alpha=self.scba_step, M=self.scba_hist)))
-		
-		if self.verbose: print(sol.message)
-		
-		if not sol.success:
-			return None, 0.j
-		
-		### By this point it has worked 
-		hr = _unpack(sol.x,hr_shape)
-		gr = self._hr2gr(hr)
-		gap = self._calc_gap(self._rf2g(gr,f))
-
-		return gr, gap
 		
 	def _calc_gr(self,f,Q,gap0=None):
 		"""Computes gR self-consistently given occupation function f and vector potential"""
@@ -354,34 +293,6 @@ class Eilenberger:
 		gr = self._calc_gr(self.fd_tensor,self.Q0,gap0) 
 		
 		return self._calc_gap(self._rf2g(gr,self.fd_tensor))
-		
-	def calc_eq_gap_old(self,gap0=None):
-		### Uses Picard solver with optional initial guess
-		if gap0 is None: gap0 = 1.*BCS_ratio*self.Tc
-		gr = self._calc_gr(gap0,self.Q0) 
-		
-		iterations = 0
-		converged = False
-		err = 0. 
-		
-		gap = gap0 
-		
-		while not converged and iterations < self.scba_max_steps:
-			gr = self._calc_gr(gap,self.Q0)
-			gap_new = self._calc_gap(self._rf2g(gr,self.fd_tensor)) 
-			
-			err = np.abs( np.abs(gap_new) - np.abs(gap) )/( max( np.abs(gap), 1.e-8) ) 
-			
-			if self.verbose: print(f"Loop: {iterations}, err: {err}")
-			 
-			gap = gap + self.scba_step*(gap_new - gap) 
-			
-			if err < self.scba_err: converged = True
-			if converged and self.verbose: print(f"Converged on {iterations} iterations")
-			iterations += 1 
-			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.")
-
-		return gap
 		
 	def precompute_hr(self,nDelta,nQ = None,Q_max = None):
 		"""This will run a precomputing routine where gR is computed as a function of Delta(t) and Q(t) and then stored with interpolator to enable fast usage for ODE solver"""

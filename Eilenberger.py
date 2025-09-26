@@ -7,7 +7,7 @@ from scipy import integrate as intg
 from scipy import optimize as opt
 import time
 
-zero = 1.e-6 ### small number for causality
+zero = 1.e-8 ### small number for causality
 
 BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
 BCS_ratio = 2./BCS_gap_constant #1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
@@ -171,6 +171,8 @@ class Eilenberger:
 		
 	def _calc_gr(self,f,Q,gap0=None):
 		"""Computes gR self-consistently given occupation function f and vector potential"""
+				
+		if gap0 is None: gap0 = BCS_ratio*self.Tc
 		
 		### Bare inverse Green's function
 		### Not a guess but is the static part of gr inverse 
@@ -187,7 +189,7 @@ class Eilenberger:
 			
 
 		### Initial iteration -- we include a non-zero value of the gap to get a better initial guess when it is in the SC phase  
-		if gap0 is None: gap0 = BCS_ratio*self.Tc
+
 		hr = hr_bare - self._Delta_p(gap0)
 		
 		iterations = 0
@@ -220,7 +222,7 @@ class Eilenberger:
 		### This will also reduce the tensor shape so we include inside this the gap function which is a tensor with the same shape as the Nambu tensors 
 		tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
 	
-		### Now we integrate over energy and frequency and multiply by BCS constant (factor of 0.25 i is by definition of Keldysh part)
+		### Now we integrate over energy and frequency and multiply by BCS constant (factor of 0.25 is by definition of Keldysh part)
 		return -0.25*self.BCS_coupling*self._integrate(tr) ### Call custom built integrator which is designed to handle adaptive grids 
 
 	#################################
@@ -259,7 +261,7 @@ class Eilenberger:
 		self.T = T 
 		
 		### We also form the appropriate occupation function tensor 
-		self.fd_tensor = np.tanh(0.5*self.w/self.T)
+		self.fd_tensor = self.Nambu_matrices[0]*np.tanh(0.5*self.w/self.T)
 	
 	def set_times(self,times):
 		### Simulation times passed as an array
@@ -287,12 +289,12 @@ class Eilenberger:
 		### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
 		return 1./np.log(BCS_gap_constant*self.cutoff/self.Tc) 
 	
-	def calc_eq_gap(self,gap0=None):
+	def calc_eq(self,gap0=None):
 		### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 
 		
 		gr = self._calc_gr(self.fd_tensor,self.Q0,gap0) 
 		
-		return self._calc_gap(self._rf2g(gr,self.fd_tensor))
+		return self._calc_gap(self._rf2g(gr,self.fd_tensor)), gr
 		
 	def precompute_hr(self,nDelta,nQ = None,Q_max = None):
 		"""This will run a precomputing routine where gR is computed as a function of Delta(t) and Q(t) and then stored with interpolator to enable fast usage for ODE solver"""

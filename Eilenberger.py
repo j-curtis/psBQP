@@ -208,7 +208,7 @@ class Eilenberger:
 			if err < self.scba_err: converged = True
 			if converged and self.verbose: print(f"Converged on {iterations} iterations")
 			iterations += 1 
-			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.")
+			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.") and hr = None 
 		
 		return self._hr2gr(hr)
 

@@ -145,6 +145,7 @@ class Eilenberger:
 	def _hr2gr(self,hr):
 		### Inverts and normalizes a retarded effective Hamiltonian
 		return -1.j* hr/np.sqrt(self._Nambu_det(hr)) 
+		#return np.sign(self.w)*hr/np.sqrt(-self._Nambu_det(hr))
 	
 	def _Doppler_w_r(self,Q):
 		### returns the Doppler shifted frequency Nambu tensor with retarded causality 	
@@ -169,38 +170,46 @@ class Eilenberger:
 		
 		return sigma 
 		
-	def _calc_gr(self,f,Q,gap0=None):
+	def _calc_gr(self,f,Q,gr0=None):
 		"""Computes gR self-consistently given occupation function f and vector potential"""
-				
-		if gap0 is None: gap0 = BCS_ratio*self.Tc
 		
 		### Bare inverse Green's function
 		### Not a guess but is the static part of gr inverse 
 		hr_bare = self._Doppler_w_r(Q)  
 		
 		### Helper function: given an hr it will compute the self energy and gap, added together 
-		def _sigma_gap_func(hr):
+		def _update_func(hr):
 		
 			gr = self._hr2gr(hr)
 			sigma_r = self._sigma_r(gr) 
 			gap = self._calc_gap( self._rf2g(gr,f) ) 
 		
-			return sigma_r + self._Delta_p(gap), gap
+			return hr_bare - sigma_r - self._Delta_p(gap), gap
 			
 
-		### Initial iteration -- we include a non-zero value of the gap to get a better initial guess when it is in the SC phase  
-
-		hr = hr_bare - self._Delta_p(gap0)
+		### Initial iteration -- if we aren't given a guess we will include a non-zero value of the gap to get a better initial guess when it is in the SC phase  
+		hr = hr_bare 
+		
+		if gr0 is None: 
+			gap = 0.05*BCS_ratio*self.Tc
+			hr += - self._Delta_p(gap)
+			
+		else:
+			### We compute the guess given the spectrum
+			hr += -self._sigma_r(gr0)
+			gap = self._calc_gap(self._rf2g(gr0,f))
+			hr += -self._Delta_p(gap)
+			
 		
 		iterations = 0
 		converged = False 
 		err = 0.
 		
 		while not converged and iterations < self.scba_max_steps:
-			sigma_gap, gap = _sigma_gap_func(hr) 
-			hr_new = hr_bare - sigma_gap 
+			hr_new, gap = _update_func(hr) 
 			
-			err = np.linalg.norm(hr_new - hr)/(np.linalg.norm(hr) +1.e-10 ) 
+			#err = np.linalg.norm( self._hr2gr(hr_new) - self._hr2gr(hr) )  #np.linalg.norm(hr_new - hr)/(np.linalg.norm(hr) +1.e-10 ) 
+			err = np.linalg.norm(hr_new - hr)/( np.linalg.norm(hr) + 1.e-12)
 			if self.verbose: print(f"Loop: {iterations}, err: {err}, gap: {gap}")
 			 
 			hr = hr + self.scba_step*(hr_new - hr) 
@@ -208,7 +217,9 @@ class Eilenberger:
 			if err < self.scba_err: converged = True
 			if converged and self.verbose: print(f"Converged on {iterations} iterations")
 			iterations += 1 
-			if iterations > self.scba_max_steps and self.verbose: print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.") and hr = None 
+			if iterations > self.scba_max_steps and self.verbose: 
+				print(f"Failed. Exceeded maximum of {self.scba_max_steps} steps.") 
+				hr = None 
 		
 		return self._hr2gr(hr)
 
@@ -220,10 +231,12 @@ class Eilenberger:
 		
 		### Now we compute the relevant Nambu trace 
 		### This will also reduce the tensor shape so we include inside this the gap function which is a tensor with the same shape as the Nambu tensors 
-		tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
+		#tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
+	
+		integrand = (self.gap_function*gk)[0,1,:,:] ### We select the lower matrix element 
 	
 		### Now we integrate over energy and frequency and multiply by BCS constant (factor of 0.25 is by definition of Keldysh part)
-		return -0.25*self.BCS_coupling*self._integrate(tr) ### Call custom built integrator which is designed to handle adaptive grids 
+		return -0.25*self.BCS_coupling*self._integrate(integrand) ### Call custom built integrator which is designed to handle adaptive grids 
 
 	#################################
 	### SET SIMULATION PARAMETERS ### 
@@ -289,10 +302,10 @@ class Eilenberger:
 		### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
 		return 1./np.log(BCS_gap_constant*self.cutoff/self.Tc) 
 	
-	def calc_eq(self,gap0=None):
+	def calc_eq(self,gr0=None):
 		### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 
 		
-		gr = self._calc_gr(self.fd_tensor,self.Q0,gap0) 
+		gr = self._calc_gr(self.fd_tensor,self.Q0,gr0) 
 		
 		return self._calc_gap(self._rf2g(gr,self.fd_tensor)), gr
 		

@@ -38,7 +38,7 @@ class BQPDynamics:
 	@classmethod
 	def _root_finder(cls,f):
 		### Wrapper for method we will use to find roots for gap equation. Would ideally use brentq but sometimes multiple solutions appear and this is not compatible with the brentq method naively
-		
+		#TODO: Can improve this method by providing the gradient of the f() function as well, it should increase stability and speed things up hopefully
 		lpoint = 0.
 		rpoint = 3.*BCS_ratio
 		
@@ -75,6 +75,7 @@ class BQPDynamics:
 	def BQP_doppler(self,gap,Q):
 		"""Compute Bogoliubov quasiparticle energy including the Doppler shift"""
 		### Returns a tensor of shape (2,Nxi,Ntheta)
+		#*  Q here is basically Doppler shift energy E_D, keeping in mind for later comparison
 		epm = np.zeros(self.nks_shape)
 		epm[0,...] = self.BQP_energy(gap) + 0.5*Q[0]*np.cos(self.theta_grid) + 0.5*Q[1]*np.sin(self.theta_grid)
 		epm[1,...] = self.BQP_energy(gap) - 0.5*Q[0]*np.cos(self.theta_grid) - 0.5*Q[1]*np.sin(self.theta_grid)
@@ -84,7 +85,6 @@ class BQPDynamics:
 	def gap_eqn_rhs(self,gap,nks):
 		"""Returns the function we should find the root of in order to solve the gap equation"""
 		E = self.BQP_energy(gap)
-		
 		integrand = 0.5*self.gap_function**2*(np.ones_like(E) - np.sum(nks,axis=0) )/E - 0.5*np.tanh(self.xi_grid/2.)/self.xi_grid ### Added the possibiltiy of a non-trivial pairing channel 
 		
 		return np.sum(integrand)*self.dxi/self.ntheta 

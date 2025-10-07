@@ -7,15 +7,16 @@ from scipy import integrate as intg
 from scipy import optimize as opt
 import time
 
-zero = 1.e-8 ### small number for causality
+zero = 1.e-8 ### small number for causality 
 
 BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
 BCS_ratio = 2./BCS_gap_constant #1.765387449618725 ### Ratio of Delta(0)/Tc in BCS limit 
 
 
 ### Various Pauli matrices 
-Pauli = [ np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j,-1.j],[1.j,0.j]]), np.array([[1.0,0.j],[0.j,-1.]]) ]
-Paulimin = 0.5*(Pauli[1] -1.j*Pauli[2] )
+Pauli = [np.eye(2,dtype=complex), np.array([[0.j,1.],[1.,0.j]]), np.array([[0.j,-1.j],[1.j,0.j]]), np.array([[1.0,0.j],[0.j,-1.]]) ]
+Paulimin = 0.5*(Pauli[1] -1.j*Pauli[2])
+Pauliplus = 0.5*(Pauli[1] +1.j*Pauli[2])
 
 ### Methods for packing and unpacking complex to real tensors for scipy methods
 def _pack(z: np.ndarray) -> np.ndarray:
@@ -29,11 +30,11 @@ def _unpack(y: np.ndarray, shape) -> np.ndarray:
     return re + 1j*im
 
 
-
 class Eilenberger:
 	def __init__(self, nw, ntheta, cutoff,fine_grid=(None,None)):
 		self.verbose = False ### If this is true we will have more information and feedback given during calculations
 	
+		# defining the size of the frequency grid and angle grid and setting the cut-off energy integration cut-off
 		self.nw = nw if nw % 2 == 0 else nw + 1  # Ensure even number
 		self.ntheta = ntheta
 		self.cutoff = cutoff
@@ -47,11 +48,11 @@ class Eilenberger:
 		### Internal default eta for broadening of spectral functions 
 		self.eta = 2.*(self.w_arr[1]-self.w_arr[0]) ### This will be the small broadening for just the large grid ~= frequency step size 
 		
-		### We allow for an optional specification of an additional finer grid region
+		### We allow for an optional specification of an additional finer grid region 
 		### This is done by passing a tuple fine_grid = (fine_nw, fine_cutoff) 
 		### We then generate a finer grid of fine_nw points up to fine_cutoff before switching to a coarser grid
 		self.fine_nw, self.fine_cutoff = fine_grid
-		  
+
 		if self.fine_nw is None:
 			self.fine_grid = None 
 	
@@ -74,7 +75,6 @@ class Eilenberger:
 		self.scba_step = 0.05 ### Update gradient step 
 		self.scba_err = 1.e-3 ### relative error threshold for SCBA convergence 
 		self.scba_max_steps = 4000 ### Total number of iterations before we throw an error 
-	
 	
 		### Generate the necessary Nambu-shaped tensors 
 		### Nambu tensor class is not yet working 
@@ -102,6 +102,7 @@ class Eilenberger:
 		### For the moment we assume that f is a scalar and therefore already has had the Nambu indices traced out 
 		
 		### We will simply sum this over all indices to return a single number 
+
 		return np.mean(np.trapz(f,self.w_arr,axis=0),axis=0)
 
 	def _NambuMul(self,x,y):
@@ -118,6 +119,7 @@ class Eilenberger:
 	
 	def _r2a(self,gr):
 		### This method conjugates a retarded object to get an advanced one 
+		#* Let's see how this works with small eta's etc. 
 		ga = -np.transpose(np.conjugate(gr),axes=(1,0,2,3))
 		
 		ga = self._NambuMul(self.Nambu_matrices[3],ga)
@@ -129,7 +131,7 @@ class Eilenberger:
 		### This method takes a gf = [gr, f] object and computes the proper Keldysh correlation funciton
 		gr = g[0,...]
 		f = g[1,...]
-		
+		#* Only correct if we ignore the other corrections which come from the convolution
 		gk = self._NambuMul(gr,f) - self._NambuMul(f,self._r2a(gr)) 
 		
 		return gk 
@@ -137,20 +139,23 @@ class Eilenberger:
 	def _Nambu_det(self,a):
 		### Computes the determinant of a Nambu matrix as a tensor over the grid of frequency and angle 			
 		det = a[0,0,...] * a[1,1,...] - a[0,1,...]*a[1,0,...] ### Has shape of the frequency and mesh grid
-
+		#* Note sure how this part works, but ok 
 		out = det[None,None,...]
 
 		return out 
-				
+	
 	def _hr2gr(self,hr):
 		### Inverts and normalizes a retarded effective Hamiltonian
+		#* This should be checked the roots are taken properly. Since numpy.sqrt() does not know which root you want to pick
+		#* Integration close to square root divergence needs to be properly regularized! 
 		return -1.j* hr/np.sqrt(self._Nambu_det(hr)) 
 		#return np.sign(self.w)*hr/np.sqrt(-self._Nambu_det(hr))
-	
+
 	def _Doppler_w_r(self,Q):
 		### returns the Doppler shifted frequency Nambu tensor with retarded causality 	
 		### The value of eta is used in the self energy, here we only put a very small eta to choose retarded causality	
 		#return ( self.w - Q*np.cos(self.theta) + 0.5j*self.eta*np.ones_like(self.w) )*self.Nambu_matrices[3] 
+		#! This zero here has to be larger than the energy spacing? Not 1e-8
 		return ( self.w - Q*np.cos(self.theta) + 1.j*zero*np.ones_like(self.w) )*self.Nambu_matrices[3] 
 		
 	def _Delta_p(self,gap):
@@ -166,10 +171,13 @@ class Eilenberger:
 		sigma += -0.5j*self.gamma_imp*np.mean(gr,axis=3,keepdims=True)
 		
 		### Dynes inelastic scattering 
+		#? Should this be here our in g somewhere? 
 		sigma += -0.5j*self.eta*self.Nambu_matrices[3]
 		
 		return sigma 
 		
+	#? Why are these two self-consistencies not done simulatenously? 
+	#? How stable is this when we know Anderson theorem will apply in equilibrium? 
 	def _calc_gr(self,f,Q,gr0=None):
 		"""Computes gR self-consistently given occupation function f and vector potential"""
 		
@@ -179,13 +187,12 @@ class Eilenberger:
 		
 		### Helper function: given an hr it will compute the self energy and gap, added together 
 		def _update_func(hr):
-		
+			
 			gr = self._hr2gr(hr)
 			sigma_r = self._sigma_r(gr) 
-			gap = self._calc_gap( self._rf2g(gr,f) ) 
+			gap = self._calc_gap( self._rf2g(gr,f)) 
 		
 			return hr_bare - sigma_r - self._Delta_p(gap), gap
-			
 
 		### Initial iteration -- if we aren't given a guess we will include a non-zero value of the gap to get a better initial guess when it is in the SC phase  
 		hr = hr_bare 
@@ -199,7 +206,6 @@ class Eilenberger:
 			hr += -self._sigma_r(gr0)
 			gap = self._calc_gap(self._rf2g(gr0,f))
 			hr += -self._Delta_p(gap)
-			
 		
 		iterations = 0
 		converged = False 
@@ -234,9 +240,9 @@ class Eilenberger:
 		#tr = np.trace( self.gap_function*self._NambuMul( 0.5*(self.Nambu_matrices[1] - 1.j*self.Nambu_matrices[2]), gk )  ) ### Trace should be over the nambu axes which are the first two axes and default for np.trace 
 	
 		integrand = (self.gap_function*gk)[0,1,:,:] ### We select the lower matrix element 
-	
+		#? not subtracting the Tc part, but everything is normalized according to Tc?
 		### Now we integrate over energy and frequency and multiply by BCS constant (factor of 0.25 is by definition of Keldysh part)
-		return -0.25*self.BCS_coupling*self._integrate(integrand) ### Call custom built integrator which is designed to handle adaptive grids 
+		return -0.125*self.BCS_coupling*self._integrate(integrand)### Call custom built integrator which is designed to handle adaptive grids 
 
 	#################################
 	### SET SIMULATION PARAMETERS ### 

@@ -31,6 +31,7 @@ class NambuTensor:
 			return NotImplemented
 			
 	### Overload * to give usual pointwise multiplication 
+	#? What are you overloading here actually? 
 	def __mul__(self,other):
 		"""Custom * operator."""
 		if isinstance(other,NambuTensor):
@@ -45,6 +46,8 @@ class NambuTensor:
 		else:
     			return NambuTensor(op(self.data, other))
 
+
+	#* I think you can handle these things through inheritence. Have nambu inherit from numpy array 
 	def __add__(self, other): return self._binary_ewise(other, np.add)
 	def __radd__(self, other): return self._binary_ewise(other, np.add)
 	def __sub__(self, other): return self._binary_ewise(other, np.subtract)

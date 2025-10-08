@@ -7,6 +7,12 @@ from scipy import integrate as intg
 from scipy import optimize as opt
 import time
 
+# import plotting for debugging, should be removed later
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+# importing custom made debugger which will ensure that at certain points the code runs as expected
+import debugger
+
 zero = 1.e-8 ### small number for causality 
 
 BCS_gap_constant = 2.*np.exp(np.euler_gamma)/np.pi ### 2e^gamma/pi constant often appearing in BCS integrals 
@@ -46,7 +52,7 @@ class Eilenberger:
 		self.theta_arr = np.linspace(0.,2.*np.pi,self.ntheta,endpoint=False)	
 		
 		### Internal default eta for broadening of spectral functions 
-		self.eta = 2.*(self.w_arr[1]-self.w_arr[0]) ### This will be the small broadening for just the large grid ~= frequency step size 
+		self.eta = 1.*(self.w_arr[1]-self.w_arr[0]) ### This will be the small broadening for just the large grid ~= frequency step size 
 		
 		### We allow for an optional specification of an additional finer grid region 
 		### This is done by passing a tuple fine_grid = (fine_nw, fine_cutoff) 
@@ -155,8 +161,8 @@ class Eilenberger:
 		### returns the Doppler shifted frequency Nambu tensor with retarded causality 	
 		### The value of eta is used in the self energy, here we only put a very small eta to choose retarded causality	
 		#return ( self.w - Q*np.cos(self.theta) + 0.5j*self.eta*np.ones_like(self.w) )*self.Nambu_matrices[3] 
-		#! This zero here has to be larger than the energy spacing? Not 1e-8
-		return ( self.w - Q*np.cos(self.theta) + 1.j*zero*np.ones_like(self.w) )*self.Nambu_matrices[3] 
+		#? This zero here has to be larger than the energy spacing? Not 1e-8?
+		return ( self.w - Q*np.cos(self.theta) + 1.j*zero*np.ones_like(self.w) + 1.j*self.eta * np.ones_like(self.w))*self.Nambu_matrices[3] 
 		
 	def _Delta_p(self,gap):
 		### Returns the momentum resolved Nambu tensor gap  		
@@ -178,7 +184,7 @@ class Eilenberger:
 		
 	#? Why are these two self-consistencies not done simulatenously? 
 	#? How stable is this when we know Anderson theorem will apply in equilibrium? 
-	def _calc_gr(self,f,Q,gr0=None):
+	def _calc_gr_OLD(self,f,Q,gr0=None):
 		"""Computes gR self-consistently given occupation function f and vector potential"""
 		
 		### Bare inverse Green's function
@@ -210,7 +216,7 @@ class Eilenberger:
 		iterations = 0
 		converged = False 
 		err = 0.
-		
+		#* Self-written method for finding the self-consistent solution
 		while not converged and iterations < self.scba_max_steps:
 			hr_new, gap = _update_func(hr) 
 			
@@ -229,6 +235,139 @@ class Eilenberger:
 		
 		return self._hr2gr(hr)
 
+
+	# flatten sigma_r and delta and separate real and imaginary parts
+
+	def _self_cons_delta_sigma(self,f,Q,gr0=None, root_method = 'anderson'):
+		# define the bare Hamiltonian: epsling + Doppler
+		h_r_bare = self._Doppler_w_r(Q)
+
+		# h_delta from gap 
+		h_r_delta = lambda gap : self._Delta_p(gap)
+
+		# g as a function of sigma_r and delta
+		gr_function = lambda sigma_r, delta : self._hr2gr(h_r_bare - sigma_r - h_r_delta(delta))
+
+		# save the original shape of sigma_r
+		original_sigma_r_shape = np.shape(h_r_bare)
+		sigma_size = np.prod(original_sigma_r_shape[:-1])
+
+		# Method which optimizes sigma^r
+		def _sigma_flat_complex(crt_sigma_real, crt_sigma_imag , crt_gap_real, crt_gap_imag, sigma_shape):
+			# sigma_r and delta self-consistencies as a function of sigma_r and delta
+
+			# note, here sigma_r is the average value so we remove the p-hat direction redundancy which just makes runs longer
+			sigma_r_self_cons = lambda crt_sigma, crt_gap : crt_sigma - np.mean(self._sigma_r(gr_function(np.tensordot(crt_sigma,np.ones(original_sigma_r_shape[-1]),axes=0),crt_gap)),axis=3)
+			
+			sigma_r = np.reshape(crt_sigma_real + 1.j*crt_sigma_imag,sigma_shape)
+			
+			delta = crt_gap_real + 1.j*crt_gap_imag
+			return np.append(np.real(sigma_r_self_cons(sigma_r,delta).flatten()),np.imag(sigma_r_self_cons(sigma_r,delta).flatten()))
+
+		# method which optimizes delta 
+		def _delta_flat_complex(crt_sigma_real, crt_sigma_imag , crt_gap_real, crt_gap_imag, sigma_shape):		
+			# sigma_r and delta self-consistencies as a function of sigma_r and delta
+			delta_self_cons = lambda crt_sigma, crt_gap : crt_gap - self._calc_gap(self._rf2g(gr_function(np.tensordot(crt_sigma,np.ones(original_sigma_r_shape[-1]),axes=0),crt_gap),f)) 
+
+			sigma_r = np.reshape(crt_sigma_real + 1.j*crt_sigma_imag,sigma_shape)
+			delta = crt_gap_real + 1.j*crt_gap_imag
+			return np.append(np.real(delta_self_cons(sigma_r,delta).flatten()),np.imag(delta_self_cons(sigma_r,delta).flatten())) 
+
+		# define the final self-consinstency solver (this is too big and unecessary)
+		sigma_delta_solver = lambda sigma_delta: np.append(_sigma_flat_complex(sigma_delta[:sigma_size],sigma_delta[sigma_size:-2],sigma_delta[-2:-1],sigma_delta[-1],original_sigma_r_shape[:-1]), _delta_flat_complex(sigma_delta[:sigma_size],sigma_delta[sigma_size:-2],sigma_delta[-2:-1],sigma_delta[-1],original_sigma_r_shape[:-1]))
+
+		# initial guess for the sigma and gap
+		if gr0 is None:
+			gap_0 = 1.2 * BCS_ratio*self.Tc 
+			sigma_r_0 = np.mean(self._sigma_r(self._hr2gr(h_r_bare)),axis=3)
+		else:
+			gap_0 = self._calc_gap(self._rf2g(gr0,f))
+			sigma_r_0 = np.mean(self._sigma_r(gr0),axis=3)
+
+
+		#sigma_0 = np.append(np.real(sigma_r_0.flatten()),np.imag(sigma_r_0.flatten())) 
+		#delta_0 = np.append(np.real(gap_0),np.imag(gap_0))
+		sigma_delta_0 = np.append(np.append(np.real(sigma_r_0.flatten()),np.imag(sigma_r_0.flatten())),np.append(np.real(gap_0),np.imag(gap_0)))
+
+		# sigma = 0 override 
+		sigma_r_0 = np.zeros(sigma_size)
+
+		"""
+		deltas = np.outer(np.linspace(0,10,100),[1,0])
+		vals = []
+		for delta_val in deltas:
+			vals+= [sigma_delta_solver(delta_val)[0]]
+		plt.plot(deltas[:,0],vals)
+		plt.plot(deltas[:,0], np.zeros_like(deltas[:,0]), 'k--')
+		plt.scatter(2 * BCS_ratio*self.Tc ,0,color='r')
+		assert False
+		"""
+	 
+		crt_sigma = sigma_delta_0[:-2]
+		crt_delta = sigma_delta_0[-2:]
+		crt_sigma = np.zeros(sigma_size * 2)
+
+		max_iter_tot = 20
+		max_iter_inter = 100
+		iteration_count = 0
+		tol = 1e-3 
+		old_sigma = crt_sigma
+		old_delta = crt_delta
+		for it in tqdm(range(max_iter_tot)):
+			delta_solver = lambda delta: _delta_flat_complex(crt_sigma[:sigma_size],crt_sigma[sigma_size:],delta[0],delta[1],original_sigma_r_shape[:-1])
+			sol_delta = opt.root(delta_solver,crt_delta,method=root_method,options={'maxiter':max_iter_inter})
+			crt_delta = sol_delta.x
+
+			sigma_solver = lambda sigma: _sigma_flat_complex(sigma[:sigma_size],sigma[sigma_size:],crt_delta[0],crt_delta[1],original_sigma_r_shape[:-1])
+			sol_sigma = opt.root(sigma_solver,crt_sigma,method=root_method,options={'maxiter':max_iter_inter})
+			crt_sigma = sol_sigma.x
+
+			if (sol_delta.success and sol_sigma.success) or (np.linalg.norm(crt_delta - old_delta) < tol and np.linalg.norm(crt_sigma - old_sigma) < tol):
+				break
+
+			old_sigma = crt_sigma
+			old_delta = crt_delta
+			iteration_count += max_iter_inter
+
+		# initial guess for the solver
+		#sigma_delta_0 = np.append(np.real(gap_0),np.imag(gap_0)) #* Guess for sigma = 0 case
+		
+		# solve and save the solution
+		#sigma_delta = opt.root(sigma_delta_solver,sigma_delta_0,method=root_method) 
+		
+		# convert the solution into canonical form
+		#sigma_flat = sigma_delta.x[:sigma_size ] + 1j*sigma_delta.x[sigma_size:-2]
+		sigma_flat = crt_sigma[:sigma_size ] + 1j*crt_sigma[sigma_size:]
+		delta_sol = crt_delta[0] + 1j*crt_delta[1]
+		sigma_r_sol = np.reshape(sigma_flat,original_sigma_r_shape[:-1])
+
+		# display run data
+		if self.verbose:
+			print('Method converged:',sol_delta.success and sol_sigma.success)
+			print('Error on the solution is:',max(np.linalg.norm(sol_delta.fun),np.linalg.norm(sol_sigma.fun)))
+			print('Number of iterations:', iteration_count)
+			print('Gap solution is', delta_sol)
+
+		return np.tensordot(sigma_r_sol,np.ones(original_sigma_r_shape[-1]),axes=0), delta_sol
+
+
+
+	def _calc_gr(self,f,Q,gr0=None, root_method = 'broyden1'):
+		# define the bare Hamiltonian: epsling + Doppler
+		h_r_bare = self._Doppler_w_r(Q)
+
+		# h_delta from gap 
+		h_r_delta = lambda gap : self._Delta_p(gap)
+
+		# g as a function of sigma_r and delta
+		gr_function = lambda sigma_r, delta : self._hr2gr(h_r_bare - sigma_r - h_r_delta(delta))
+
+
+		sigma_r, delta = self._self_cons_delta_sigma(f,Q,gr0,root_method)
+
+
+		return gr_function(sigma_r,delta)
+	
 	def _calc_gap(self,g):
 		### This method computes the gap self consistently given the Greens function degree of freedom
 		
@@ -242,7 +381,7 @@ class Eilenberger:
 		integrand = (self.gap_function*gk)[0,1,:,:] ### We select the lower matrix element 
 		#? not subtracting the Tc part, but everything is normalized according to Tc?
 		### Now we integrate over energy and frequency and multiply by BCS constant (factor of 0.25 is by definition of Keldysh part)
-		return -0.125*self.BCS_coupling*self._integrate(integrand)### Call custom built integrator which is designed to handle adaptive grids 
+		return -0.25*self.BCS_coupling*self._integrate(integrand)### Call custom built integrator which is designed to handle adaptive grids 
 
 	#################################
 	### SET SIMULATION PARAMETERS ### 

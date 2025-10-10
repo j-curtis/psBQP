@@ -34,9 +34,12 @@ def equilibrium_sweep(temperatures, params_dict, meshgrid, gr0 = None):
     gap,gr,sigma_r = jitted_run(temperatures[0],gr0 = gr0)
     print('first_gap', gap)
     gaps = []
+    grs = []
+    sigmas = []
     for temp in tqdm(temperatures):
         gap, gr, sigma_r = jitted_run(temp,gr0 = gr)
         gaps += [gap]
-        print(gap)
-
-    return (temperatures,gaps)
+        grs += [gr]
+        sigmas += [sigma_r]
+    print(gaps)
+    return gaps, grs, sigmas

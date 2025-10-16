@@ -10,7 +10,21 @@ import Eilenberger_compute
 
 from tqdm import tqdm
 
-def calc_equlibrium(temperature, params_dict, meshgrid,gr0 = None):
+""" A module with functions which run the code in equilibrium 
+"""
+
+def calc_equlibrium(temperature: float, params_dict: dict, meshgrid: dict,gr0 = None)->tuple:
+    """A function which computes the equilibrium gap and Green's function given parameters and meshgrid dictionaries as well as initial g0 guess
+
+    Args:
+        temperature (float): System temperature
+        params_dict (dict): Dictionary containing all the system parameters 
+        meshgrid (dict): Dictionary containing all the meshgrid parameters
+        gr0 (jnp.ndarray, optional): Initial guess for Green's function. Defaults to None.
+
+    Returns:
+        tuple: Collection of equilibrium gap, Green's function, and self energy
+    """
     ### This computes the equilibrium gap and Green's function (optionally) given initial guesses to pass to the solver 
     params_dict['temperature'] = temperature
     nambu_dict = mesh_generator.get_nambu_dict(meshgrid = meshgrid)
@@ -24,22 +38,47 @@ def calc_equlibrium(temperature, params_dict, meshgrid,gr0 = None):
     
 
 
-def equilibrium_sweep(temperatures, params_dict, meshgrid, gr0 = None):
+def equilibrium_sweep(temperatures: jnp.ndarray, params_dict: dict, meshgrid: dict, gr0 = None) -> tuple:
+    """A function which computes the equilibrium for multiple values of temperature
 
+    Args:
+        temperatures (jnp.ndarray): Temperature list
+        params_dict (dict): parameters dictionary
+        meshgrid (dict): meshgrid dictionary
+        gr0 (jnp.ndarray, optional): Initial guess for Green's function. Defaults to None.
+
+
+    Returns:
+        tuple: Collection of equilibrium gap, Green's function, and self energy for all the temperatures
+    """
+
+    #TODO: This can even be optimized using jax loops or just vectorization
+    #TODO: see how to do this with g0 as input
+    #TODO: remove Q from the params dict for later jitting
+    
+    # define a function which sweeps the temperature with explicility constant parameters and meshgrid 
+    # this is crucial to be able to jit the function \
     def temperature_sweep_function(temperature,gr0 = None):
         return calc_equlibrium(temperature = temperature, params_dict = params_dict, meshgrid = meshgrid,gr0 = gr0)
 
+    # jit the  function
     jitted_run = jax.jit(temperature_sweep_function)
 
+    # compile the jitted function once
     gap,gr,sigma_r = jitted_run(temperatures[0],gr0 = gr0)
     print('first_gap', gap)
     gaps = []
     grs = []
     sigmas = []
+
+    # run the for loop for all the temperatures 
     for temp in tqdm(temperatures):
         gap, gr, sigma_r = jitted_run(temp,gr0 = gr)
         gaps += [gap]
         grs += [gr]
         sigmas += [sigma_r]
-    print(gaps)
+
+    # this line here is to force compilation
+    print('The gaps are',  gaps)
+
     return gaps, grs, sigmas

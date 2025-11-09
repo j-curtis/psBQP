@@ -2,22 +2,32 @@
 import jax
 import jax.numpy as jnp
 
-import nambu_support
+#jax.config.update("jax_disable_jit", True)
 
-#TODO: Generalize to be able to take axis argument
-def custom_jax_trapz(y: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-    """Jax version of trapezoid integrator
 
-    Args:
-        y (jnp.ndarray): function to be integrated
-        x (jnp.ndarray): axis over which to integrate
+def custom_jax_trapz(y: jnp.ndarray, x = None, axis = -1) -> jnp.ndarray:
 
-    Returns:
-        jnp.ndarray: integral of y over x
-    """
-    dx = jnp.diff(x)
-    avg_y = 0.5 * (y[:-1] + y[1:])
-    return jnp.sum(dx * avg_y)
+    if x is None:
+        dx = 1/jnp.size(y, axis = axis) * jnp.ones(y.shape[axis])
+    else:
+        dx = jnp.diff(x, axis = 0)
+        dx = jnp.append(dx[0], dx)
+
+    avg_y = 0.5 * (jnp.roll(y, -1, axis = axis) + y)
+
+    if x is None:
+        return jnp.sum(avg_y * dx, axis = axis)
+    else:
+        shape = [1] *y.ndim
+        shape[axis] = dx.shape[0]
+        dx_reshaped = dx.reshape(shape)
+        return jnp.sum(dx_reshaped * avg_y, axis = axis)
+
+
+
+#TODO make this work! 
+def custom_matrix_inverter(matrix: jnp.ndarray, block_indicies = None) -> jnp.ndarray: 
+    pass 
 
 
 def _newton_nd(f, x0: jnp.ndarray, tol=1e-3, maxiter=20) -> jnp.ndarray:
@@ -186,4 +196,69 @@ def _iterative_jax_solver_with_jacobian(f1, f2,x0: jnp.ndarray, y0: jnp.ndarray,
     # call the while loop
     x_final, y_final, _ = jax.lax.while_loop(cond_fun, body_fun, (x0, y0, 0))
     return x_final, y_final
+
+
+#TODO diagonal jac has to be passed in as well it is state ddependent but its diagonal so inverse is trivial!
+def _iterative_solver(f, x0, jac = None,  optimization_parameters = None):
+    if optimization_parameters is None:
+        optimization_parameters = {"tol": 1e-3, "maxiter": 200}
+
+    tol = optimization_parameters["tol"]
+    maxiter = optimization_parameters["maxiter"]
+
+    # condition to break the loop
+    def cond_fun(state):
+        x, i = state
+        return jnp.logical_and(jnp.linalg.norm(f(x)) > tol, i < maxiter)
+
+    # newton step 
+    def body_fun(state):
+        x, i = state
+        #TODO: Change default to not computing the Jacobian at all!
+        if jac is None:
+            #J = jnp.ones((jnp.size(x), jnp.size(x)))
+            #f_remat = jax.remat(f)
+            J = (jax.jacfwd(f)(x)).real
+        else:
+            J = jac(x)
+        
+        dx = jnp.linalg.solve(J, f(x))
+        return (x - dx, i + 1)
+
+    # call the while loop
+    x_final, _ = jax.lax.while_loop(cond_fun, body_fun, (x0, 0))
+
+    return x_final
+
+#! Not implemented yet!!
+def _fast_iterative_solver(f, x0, jac = None, diagonal_jac = None,  optimization_parameters = None):
+    if optimization_parameters is None:
+        optimization_parameters = {"tol": 1e-3, "maxiter": 200}
+
+    tol = optimization_parameters["tol"]
+    maxiter = optimization_parameters["maxiter"]
+
+    # condition to break the loop
+    def cond_fun(state):
+        x, i = state
+        return jnp.logical_and(jnp.linalg.norm(f(x)) > tol, i < maxiter)
+
+    # newton step 
+    def body_fun(state):
+        x, i = state
+        #TODO: Change default to not computing the Jacobian at all!
+        if jac is None:
+            #J = jnp.ones((jnp.size(x), jnp.size(x)))
+            J = (jax.jacobian(f)(x)).real
+        else:
+            J = jac(x)
+        dx = jnp.linalg.solve(J, f(x))
+
+        return (x - dx, i + 1)
+
+    # call the while loop
+    x_final, _ = jax.lax.while_loop(cond_fun, body_fun, (x0, 0))
+
+    return x_final
+
 

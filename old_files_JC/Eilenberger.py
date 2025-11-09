@@ -80,7 +80,7 @@ class Eilenberger:
 		else:
 			if self.fine_nw %2 == 0: self.fine_nw += 1
 			self.fine_grid = jnp.linspace(-self.fine_cutoff,self.fine_cutoff,self.fine_nw)
-			self.eta = 2.*(self.fine_grid[1]-self.fine_grid[0])
+			self.eta = 2.*(self.fine_grid[1]-self.fine_grid[0])	
 	
 			w_arr = jnp.concatenate([self.w_arr, self.fine_grid]) ### this joins the two arrays 
 			self.w_arr = jnp.unique(w_arr) ### sorts and removes duplicates 

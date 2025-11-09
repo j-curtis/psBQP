@@ -72,7 +72,7 @@ def _Doppler_w_r(Q:float,nambu_dict: dict,eta: float) -> jnp.ndarray:
     #return ( self.w - Q*np.cos(self.theta) + 0.5j*self.eta*np.ones_like(self.w) )*self.Nambu_matrices[3]
     return (nambu_dict['nambu_omega_grid'] - Q*jnp.cos(nambu_dict['nambu_theta_grid']) + 1.j*1e-8*jnp.ones_like(nambu_dict['nambu_omega_grid']) + 1.j*eta * jnp.ones_like(nambu_dict['nambu_omega_grid']))*nambu_dict['nambu_matrices'][3] 
 
-		
+
 def _Delta_p(gap,nambu_dict: dict,gap_function: jnp.ndarray)-> jnp.ndarray:
     """A function convering the gap scalar into a momentum resolved Nambu tensor given gap symmetry function
 

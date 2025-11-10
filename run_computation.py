@@ -7,7 +7,8 @@ from nambu_class import NambuTensor
 from system_state import SupercondctingState
 
 from tqdm import tqdm
-jax.config.update("jax_disable_jit", True)
+# to disable jax add this to all the files
+#jax.config.update("jax_disable_jit", True)
 
 
 def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None,  Q_list = None):
@@ -31,9 +32,10 @@ def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimiz
         gap = eilenberger_object._calc_gap(self_consistent_state)
         return gap
 
-    vectorized_temperature_run = jax.vmap(temperature_run)
+    #vectorized_temperature_run = jax.vmap(temperature_run)
 
-    return temperature_run(temp_list[0])
+
+    return vectorized_temperature_run(temp_list)
 
 
 """

@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 # CONTAINS ALL STATIC THINGS WHICH ARE NOT ITERATED OVER 
 
 # have a self-consistency flag to indicate whether self-consistent equation has to be done! if dynamic then just compute new sigma, otherwise if g static compute self-consistently
-jax.config.update("jax_disable_jit", True)
+#jax.config.update("jax_disable_jit", True)
 
 # have last g as an argument to help self-consistency solver of course
 
@@ -227,7 +227,7 @@ class EilenbergerEvolution:
 
         # initial guess for the sigma and gap
         if gr0 is None:
-            gap_0 = 1.5 + 0.5 *1j 
+            gap_0 = 1.5 + 0.j
             delta_sigma_0 = delta_sigma_0.at[:2].set(self._delta_flatten(gap_0))
             gr0 = self._get_gr(Q= Q, delta = gap_0, sigma_rs = None)
             new_state = SupercondctingState(f,gr0)
@@ -242,27 +242,6 @@ class EilenbergerEvolution:
                 delta_sigma_0 = delta_sigma_0.at[self.break_off_indicies[crt_object_index] +2:self.break_off_indicies[crt_object_index+1] + 2].set(self.sigma_objects[crt_object_index]._sigma_r(new_state)._flatten_nambu_object(self.sigma_objects[crt_object_index]._get_sigma_indicies()))
 
         problem_solver = lambda delta_sigma_list: self._sigma_delta_solver(delta_sigma_list,f,Q)
-        problem_jacobian = lambda delta_sigma_list: self._delta_sigma_jacobian(delta_sigma_list,f,Q)
-        
-        analitical_jacobian = problem_jacobian(delta_sigma_0)
-        numerical_jacobian = jax.jacfwd(problem_solver)(delta_sigma_0)
-
-        print(numerical_jacobian)
-        print(analitical_jacobian)
-        
-        print('total difference is',jnp.sum(jnp.abs(analitical_jacobian - numerical_jacobian) ))
-        plt.title('Numerical jacobian')
-        plt.imshow(numerical_jacobian,cmap='Reds')
-        plt.colorbar()
-        plt.show()
-
-        plt.title('Analytical jacobian')
-        plt.imshow(analitical_jacobian,cmap='Reds')
-        plt.colorbar()
-        plt.show()
-        print('Program finished successfully, now crashing :)')
-        assert False
-
 
         jitted_solver = jax.jit(problem_solver)
         delta_sigma_final = copt._iterative_solver(jitted_solver, delta_sigma_0, optimization_parameters = self.optimization_parameters)
@@ -316,26 +295,29 @@ class EilenbergerEvolution:
         new_state = SupercondctingState(state_object.occupation, state_object.gr * crt_Z)
         gk = new_state._f2gk()
         integrand = -0.25*self.bcs_coupling * (gk * self._get_gap_symmetry_function())._trace('-')
-        term1 = ((state_object.gr * crt_Z )._flatten_nambu_object(included_indices=(1,2,3)))
+        term1 = ((state_object.gr)._flatten_nambu_object_to_complex(included_indices=(1,2,3)))
         
-        data_reshape_size = tuple(self.grid_shape) + (6,)
+        data_reshape_size = tuple(self.grid_shape) + (3,)
         new_data = jnp.reshape(term1,data_reshape_size)
         axes = (new_data.ndim-1,) + tuple(range(0, new_data.ndim-1))
         term1 = jnp.transpose(new_data,axes = axes) 
-        
-        term1 = jnp.einsum('ijk,jk -> ijk',term1,(integrand)/-crt_Z**3)
-        
+        term_total = jnp.zeros( (6,) + self.grid_shape, dtype=jnp.complex64)
+        term_total.at[::2].set(term1)
+        term_total.at[1::2].set(term1) 
+
+        term_total = jnp.einsum('ijk,jk -> ijk',term_total,(integrand)/crt_Z**2) 
+
         def compute_trace(index):
             #* Most likely correct, has be successfull so far,  by testing delta = 0 case 
             crt_tau = NambuTensor( jnp.ones_like(crt_Z) * (1j)**(index%2), (index+2)//2)
-            #* + sign goes here because g_a has a minus sign relative to g_r
+            #* + sign goes here because g_a has a minus sign relative to g_
             result = -0.25*self.bcs_coupling * (crt_tau @ state_object.occupation + state_object.occupation @ crt_tau._involution())._trace('-')/crt_Z
             return result
 
         indicies = [0,1,2,3,4,5]
         term2 =  jnp.array([compute_trace(index) for index in indicies]) 
 
-        return self._delta_flatten(term1 - term2)
+        return self._delta_flatten(term_total - term2)
 
     def _delta_sigma_jacobian(self,delta_sigma_list,f,Q):
 
@@ -355,10 +337,6 @@ class EilenbergerEvolution:
         #! something very weird is going on we can access array elements that do not exist
         #* return a delta matrix of shape (2,6,1000,20)
         delta_matrix = self._delta_condition_dg(state_object, crt_Z)
-        print(jnp.shape(delta_matrix))
-        print(delta_matrix[0,:,0,0])
-        print(delta_matrix[0,4,:,0])
-
         #* Perform epsilon and theta average
         delta_matrix_average = self._integrate_over_axis(delta_matrix, axis = (-2,-1))
 
@@ -388,8 +366,7 @@ class EilenbergerEvolution:
                     crt_delta_average = self._integrate_over_axis(delta_matrix, axis = average_indicies[crt_index])
                 
                 crt_included_indicies = jnp.sort(jnp.append(jnp.array(self.sigma_objects[crt_index]._get_sigma_indicies()) * 2, jnp.array(self.sigma_objects[crt_index]._get_sigma_indicies()) * 2 +1)) - 2
-                print(crt_included_indicies)
-                print(crt_delta_average[:,crt_included_indicies])
+
                 crt_data = (crt_delta_average[:,crt_included_indicies]).flatten()
                 #! Reshape is probably wrong again 
                 out_matrix = out_matrix.at[:2,2 + self.break_off_indicies[crt_index]: 2 + self.break_off_indicies[crt_index+1]].set(crt_data.reshape(2, -self.break_off_indicies[crt_index] + self.break_off_indicies[crt_index+1]))

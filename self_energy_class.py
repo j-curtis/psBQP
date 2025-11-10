@@ -24,7 +24,6 @@ from jax import tree_util
 
 
 # a set of rules describing how sigma is computed from g thats it! 
-#@tree_util.register_pytree_node_class
 class SelfEnergy(ABC):
      
     def __init__(self, scattering_rate: float, theta_arr, omega_arr):

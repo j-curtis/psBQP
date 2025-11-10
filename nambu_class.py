@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from jax import tree_util
 import jax 
 import custom_optimizer
-jax.config.update("jax_disable_jit", True)
+#jax.config.update("jax_disable_jit", True)
 
 # contain the description of the Nambu class and its methods 
 
@@ -179,6 +179,21 @@ class NambuTensor:
         out_data = jnp.array(out_data)
         axes = tuple(range(1, out_data.ndim)) + (0,)
         return (jnp.transpose(out_data,axes = axes)).flatten() # output is xyz, xyz, xyz .... 
+
+    def _flatten_nambu_object_to_complex(self, included_indices = (0,1,2,3)): 
+        id_trace = self._trace(pauli_index = 0)/2
+        x_trace = self._trace(pauli_index = 1)/2
+        y_trace = self._trace(pauli_index = 2)/2
+        z_trace = self._trace(pauli_index = 3)/2
+
+        out_data_unfilt = jnp.stack((id_trace,id_trace,x_trace,y_trace,z_trace))
+        included_indicies_modified = (jnp.array(included_indices))
+        out_data = out_data_unfilt[included_indicies_modified]
+        
+        out_data = jnp.array(out_data)
+        axes = tuple(range(1, out_data.ndim)) + (0,)
+        return (jnp.transpose(out_data,axes = axes)).flatten() # output is xyz, xyz, xyz .... 
+
 
     @staticmethod
     def _unflatten_nambu_object(data, data_shape, included_indices = jnp.array([0,1,2,3])): 

@@ -35,7 +35,7 @@ def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimiz
     #vectorized_temperature_run = jax.vmap(temperature_run)
 
 
-    return vectorized_temperature_run(temp_list)
+    return temperature_run(temp_list[0])
 
 
 """

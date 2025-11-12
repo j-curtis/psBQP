@@ -195,6 +195,15 @@ class EilenbergerEvolution:
             #sigma_r = jnp.sum(sigma_rs, axis = 0)
         return  self._hr2gr(h_r)
 
+    def _get_hr(self, Q:float, delta, sigma_rs = None, indices = None):
+        #* Here sigma_rs is just a list of evaluated sigmas
+        h_r = self._Doppler_w_r(Q = Q) - (NambuTensor(1j *  jnp.real(delta) * self._get_gap_symmetry_function(), 2) +  NambuTensor(1j*jnp.imag(delta) * self._get_gap_symmetry_function(), 1)) 
+        if sigma_rs is not None:
+            for crt_sigma in sigma_rs:
+                h_r = h_r.__sub__(crt_sigma, expansion_indices_right = (2,3))
+            #sigma_r = jnp.sum(sigma_rs, axis = 0)
+        return h_r
+
     def _calc_gap(self, state_object):
         gk = state_object._f2gk()
         integrand = (gk * self._get_gap_symmetry_function())._trace('-') 
@@ -212,9 +221,38 @@ class EilenbergerEvolution:
         return jnp.tanh(0.5*self.w_grid/temperature)
 
     def _calc_self_consistent_gr(self, initial_state,Q: float):
-        delta, sigmas = self._self_consistent_delta_sigma(initial_state, Q = Q)
-        state_f = initial_state.occupation 
-        return SupercondctingState(state_f,self._get_gr(Q = Q, delta = delta, sigma_rs = sigmas))
+        #delta, sigmas = self._self_consistent_delta_sigma(initial_state, Q = Q)
+        #state_f = initial_state.occupation 
+        #return SupercondctingState(state_f,self._get_gr(Q = Q, delta = delta, sigma_rs = sigmas))
+        h_r = self._self_consistent_hr(initial_state, Q = Q)
+        gr = self._hr2gr(h_r)
+        return SupercondctingState(initial_state.occupation,gr)
+
+    def _self_consistent_hr(self, initial_state,Q: float):
+
+        gr0 = initial_state.gr
+        f = initial_state.occupation
+
+        # initial guess for the sigma and gap
+        if gr0 is None:
+            gap_0 = 1.5 + 0.j             
+            hr0 = (self._get_hr(Q= Q, delta = gap_0, sigma_rs = None) - self._Doppler_w_r(Q = Q))._flatten_nambu_object((1,2,3))
+        else:
+            gap_0 = self._calc_gap(initial_state) 
+            if self.sigma_objects is not None:
+                sigma_list = []
+                for crt_object_index in range(jnp.shape(self.sigma_objects)[0]):
+                    sigma_list += [self.sigma_objects[crt_object_index]._sigma_r(initial_state)._flatten_nambu_object(self.sigma_objects[crt_object_index]._get_sigma_indicies())]
+            hr0 = self._get_hr(Q= Q, delta = gap_0, sigma_rs = sigma_list) - self._Doppler_w_r(Q = Q)._flatten_nambu_object((1,2,3))
+       
+        
+        problem_solver = lambda dhr: self._self_consistent_dh(dh = dhr, Q = Q, f = f)
+
+        jitted_solver = jax.jit(problem_solver)
+
+        dh_final = copt._iterative_solver(jitted_solver, hr0, optimization_parameters = self.optimization_parameters)
+
+        return NambuTensor._unflatten_nambu_object(dh_final, self.grid_shape, (1,2,3)) + self._Doppler_w_r(Q = Q)
 
     def _self_consistent_delta_sigma(self, initial_state,Q: float):
 
@@ -224,6 +262,7 @@ class EilenbergerEvolution:
         new_state = initial_state
 
         delta_sigma_0 = jnp.zeros(self.break_off_indicies[-1] + 2)
+        #TODO: Add a mechanism which recognizes over which axis we can average to reduce the dimensionality of the problem. It should be passed as an arguemnt to hr function 
 
         # initial guess for the sigma and gap
         if gr0 is None:
@@ -258,6 +297,23 @@ class EilenbergerEvolution:
                 sigma_list += [self.sigma_objects[ind]._unflatten_nambu_object(crt_flat_sigma,self.sigma_objects[ind].sigma_shape, included_indices = self.sigma_objects[ind]._get_sigma_indicies())]
 
             return self._delta_unflatten(delta_final), sigma_list
+
+
+    def _self_consistent_dh(self, dh,Q:float,f):
+        
+        h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.grid_shape, included_indices = (1,2,3))
+        
+        crt_state = SupercondctingState(f,self._hr2gr(h_total))
+            
+        delta_value =  self._calc_gap(state_object = crt_state)
+        sigma_values = []
+        
+        for crt_obj_index in range(jnp.shape(self.sigma_objects)[0]):
+            sigma_values += [self.sigma_objects[crt_obj_index]._sigma_r(system_state = crt_state)]
+    
+
+        return (h_total - self._get_hr(Q = Q, delta = delta_value, sigma_rs = sigma_values))._flatten_nambu_object((1,2,3))
+
 
     def _sigma_delta_solver(self,delta_sigma_list,f,Q):
         result = jnp.zeros(delta_sigma_list.size)

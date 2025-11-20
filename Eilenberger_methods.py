@@ -70,8 +70,9 @@ class EilenbergerEvolution:
         self.critical_temperature = system_parameters['critical_temperature']
         self.gap_symmetry = system_parameters['gap_symmetry']
         self.bcs_coupling = self._get_BCS_coupling()
-        self.average_indicies = system_parameters['average_indicies']
-
+        self.average_indices = jax.lax.stop_gradient(system_parameters['average_indices'])
+        self.dh_grid = tuple([ self.grid_shape[i] if i+2 not in self.average_indices else 1 for i in range(len(self.grid_shape))])
+        #self.dh_grid_shape = tuple([(self.grid_shape[i] if i in self.keep_indices else 1) for i in range(len(self.grid_shape))])
 
         self.optimization_parameters = optimization_parameters
         self.sigma_scatterings = sigma_scatterings
@@ -238,25 +239,25 @@ class EilenbergerEvolution:
         #TODO: Check the real-imaginary structure of the Jacobian A B B -A should be the structure! - not true, broken by the gap since gap does not come analytically
         # initial guess for the sigma and gap
         if gr0 is None:
-            gap_0 = (1.0 + 0.5j) * 10         
-            hr0 = (self._get_hr(Q= Q, delta = gap_0, sigma_rs = None) - self._Doppler_w_r(Q = Q))._flatten_nambu_object((1,2,3))
+            gap_0 = (1.0 + 0.0j) * 2
+            hr0 = ((self._get_hr(Q= Q, delta = gap_0, sigma_rs = None) - self._Doppler_w_r(Q = Q)))._average(axis = self.average_indices)._flatten_nambu_object((1,2,3))
         else:
             gap_0 = self._calc_gap(initial_state) 
             if self.sigma_objects is not None:
                 sigma_list = []
                 for crt_object_index in range(jnp.shape(self.sigma_objects)[0]):
                     sigma_list += [self.sigma_objects[crt_object_index]._sigma_r(initial_state)._flatten_nambu_object(self.sigma_objects[crt_object_index]._get_sigma_indicies())]
-            hr0 = self._get_hr(Q= Q, delta = gap_0, sigma_rs = sigma_list) - self._Doppler_w_r(Q = Q)._flatten_nambu_object((1,2,3))
+            hr0 = (self._get_hr(Q= Q, delta = gap_0, sigma_rs = sigma_list) - self._Doppler_w_r(Q = Q))._average(axis = self.average_indices)._flatten_nambu_object((1,2,3))
 
         problem_solver = lambda dhr: self._self_consistent_dh(dh = dhr, Q = Q, f = f)
         
-        problem_solver_jacobian = lambda dhr: self._self_consistent_dh_jacobian(dhr, Q = Q, f = f)
+        #problem_solver_jacobian = lambda dhr: self._self_consistent_dh_jacobian(dhr, Q = Q, f = f)
 
         jitted_solver = jax.jit(problem_solver)
-        jitted_jacobian = jax.jit(problem_solver_jacobian)
+        #jitted_jacobian = jax.jit(problem_solver_jacobian)
 
-        dh_final = copt._iterative_solver(jitted_solver, hr0, jac = jitted_jacobian, optimization_parameters = self.optimization_parameters)
-        return NambuTensor._unflatten_nambu_object(dh_final, self.grid_shape, (1,2,3)) + self._Doppler_w_r(Q = Q)
+        dh_final = copt._iterative_solver(jitted_solver, hr0, optimization_parameters = self.optimization_parameters)
+        return NambuTensor._unflatten_nambu_object(dh_final, self.dh_grid, (1,2,3)) + self._Doppler_w_r(Q = Q)
 
     def _self_consistent_delta_sigma(self, initial_state,Q: float):
 
@@ -303,7 +304,7 @@ class EilenbergerEvolution:
 
     def _self_consistent_dh(self, dh,Q:float,f):
         
-        h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.grid_shape, included_indices = (1,2,3))
+        h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.dh_grid, included_indices = (1,2,3))
         
         crt_state = SupercondctingState(f,self._hr2gr(h_total))
             
@@ -313,7 +314,7 @@ class EilenbergerEvolution:
             for crt_obj_index in range(jnp.shape(self.sigma_objects)[0]):
                 sigma_values += [self.sigma_objects[crt_obj_index]._sigma_r(system_state = crt_state)]
     
-        return (h_total - self._get_hr(Q = Q, delta = delta_value, sigma_rs = sigma_values))._flatten_nambu_object((1,2,3))
+        return (h_total - self._get_hr(Q = Q, delta = delta_value, sigma_rs = sigma_values))._average(axis = self.average_indices)._flatten_nambu_object((1,2,3))
 
     def _dg_dsigma(self,hr):
         crt_g = self._hr2gr(hr)
@@ -345,7 +346,7 @@ class EilenbergerEvolution:
         return out_data * -0.25*self.bcs_coupling/ 2 / jnp.pi * (self.w_arr[1] - self.w_arr[0]) * (self.theta_arr[1] - self.theta_arr[0]) 
 
     def _self_consistent_dh_jacobian(self, dh,Q:float,f):
-        h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.grid_shape, included_indices = (1,2,3))
+        h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.dh_grid, included_indices = (1,2,3))
         
         crt_state = SupercondctingState(f,self._hr2gr(h_total))
 

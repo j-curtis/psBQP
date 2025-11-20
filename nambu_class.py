@@ -155,6 +155,10 @@ class NambuTensor:
     def _involution(self):
         return  NambuTensor(jnp.ones(self.data_shape[2:]), 3) @ (self._conj())._transpose() @  NambuTensor(jnp.ones(self.data_shape[2:]), 3) 
 
+    def _average(self, axis): 
+        return NambuTensor(jnp.mean(self.data, axis = axis),None)
+
+
     def _integrate(self, integration_weights = None, integration_axis = None):
         ### We will simply sum this over all indices to return a single number 
         if integration_axis is None: integration_axis = 2

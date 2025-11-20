@@ -66,10 +66,12 @@ class EilenbergerEvolution:
         self.w_arr = jax.lax.stop_gradient(omega_array) 
         self.theta_arr = jax.lax.stop_gradient(theta_array) # used to be self.theta
         self.grid_shape = jax.lax.stop_gradient(grid_shape) # used to be self.grid_shape 
-
+    
         self.critical_temperature = system_parameters['critical_temperature']
         self.gap_symmetry = system_parameters['gap_symmetry']
         self.bcs_coupling = self._get_BCS_coupling()
+        self.average_indicies = system_parameters['average_indicies']
+
 
         self.optimization_parameters = optimization_parameters
         self.sigma_scatterings = sigma_scatterings
@@ -232,10 +234,11 @@ class EilenbergerEvolution:
 
         gr0 = initial_state.gr
         f = initial_state.occupation
-
+        #TODO: Add a mechanism which recognizes over which axis we can average to reduce the dimensionality of the problem. It should be passed as an arguemnt to hr function 
+        #TODO: Check the real-imaginary structure of the Jacobian A B B -A should be the structure! - not true, broken by the gap since gap does not come analytically
         # initial guess for the sigma and gap
         if gr0 is None:
-            gap_0 = 1.5 + 0.j             
+            gap_0 = (1.0 + 0.5j) * 10         
             hr0 = (self._get_hr(Q= Q, delta = gap_0, sigma_rs = None) - self._Doppler_w_r(Q = Q))._flatten_nambu_object((1,2,3))
         else:
             gap_0 = self._calc_gap(initial_state) 
@@ -244,14 +247,15 @@ class EilenbergerEvolution:
                 for crt_object_index in range(jnp.shape(self.sigma_objects)[0]):
                     sigma_list += [self.sigma_objects[crt_object_index]._sigma_r(initial_state)._flatten_nambu_object(self.sigma_objects[crt_object_index]._get_sigma_indicies())]
             hr0 = self._get_hr(Q= Q, delta = gap_0, sigma_rs = sigma_list) - self._Doppler_w_r(Q = Q)._flatten_nambu_object((1,2,3))
-       
-        
+
         problem_solver = lambda dhr: self._self_consistent_dh(dh = dhr, Q = Q, f = f)
+        
+        problem_solver_jacobian = lambda dhr: self._self_consistent_dh_jacobian(dhr, Q = Q, f = f)
 
         jitted_solver = jax.jit(problem_solver)
+        jitted_jacobian = jax.jit(problem_solver_jacobian)
 
-        dh_final = copt._iterative_solver(jitted_solver, hr0, optimization_parameters = self.optimization_parameters)
-
+        dh_final = copt._iterative_solver(jitted_solver, hr0, jac = jitted_jacobian, optimization_parameters = self.optimization_parameters)
         return NambuTensor._unflatten_nambu_object(dh_final, self.grid_shape, (1,2,3)) + self._Doppler_w_r(Q = Q)
 
     def _self_consistent_delta_sigma(self, initial_state,Q: float):
@@ -262,7 +266,6 @@ class EilenbergerEvolution:
         new_state = initial_state
 
         delta_sigma_0 = jnp.zeros(self.break_off_indicies[-1] + 2)
-        #TODO: Add a mechanism which recognizes over which axis we can average to reduce the dimensionality of the problem. It should be passed as an arguemnt to hr function 
 
         # initial guess for the sigma and gap
         if gr0 is None:
@@ -298,7 +301,6 @@ class EilenbergerEvolution:
 
             return self._delta_unflatten(delta_final), sigma_list
 
-
     def _self_consistent_dh(self, dh,Q:float,f):
         
         h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.grid_shape, included_indices = (1,2,3))
@@ -307,13 +309,71 @@ class EilenbergerEvolution:
             
         delta_value =  self._calc_gap(state_object = crt_state)
         sigma_values = []
-        
-        for crt_obj_index in range(jnp.shape(self.sigma_objects)[0]):
-            sigma_values += [self.sigma_objects[crt_obj_index]._sigma_r(system_state = crt_state)]
+        if self.sigma_objects is not None:
+            for crt_obj_index in range(jnp.shape(self.sigma_objects)[0]):
+                sigma_values += [self.sigma_objects[crt_obj_index]._sigma_r(system_state = crt_state)]
     
-
         return (h_total - self._get_hr(Q = Q, delta = delta_value, sigma_rs = sigma_values))._flatten_nambu_object((1,2,3))
 
+    def _dg_dsigma(self,hr):
+        crt_g = self._hr2gr(hr)
+        crt_z = self._hr2z(hr)
+        g_flat = (crt_g/jnp.sqrt(crt_z))._flatten_nambu_object((1,2,3))
+        g_flat_new = g_flat[: jnp.size(g_flat)//2] + 1j * g_flat[jnp.size(g_flat)//2:]
+        data_reshape_size = tuple(self.grid_shape) + (3,)
+        new_data = jnp.reshape(g_flat_new,data_reshape_size)
+        axes = (new_data.ndim-1,) + tuple(range(0, new_data.ndim-1))
+        new_data = jnp.transpose(new_data,axes = axes) 
+        return (-jnp.einsum('ijk, mjk -> imjk', new_data, new_data) + jnp.tensordot(jnp.identity(3), 1/crt_z, axes = 0)) 
+
+
+    def _ddelta_dg(self, state_object, Q:float):
+
+        out_data = jnp.zeros((3,3) + self.grid_shape) + 0j
+        
+        for m in range(0,3):
+            traces_1_m = (NambuTensor(jnp.ones(self.grid_shape), m + 1) @ ( state_object.occupation))._trace('-')
+            traces_2_m = (NambuTensor(jnp.ones(self.grid_shape), 3) @ NambuTensor(jnp.ones(self.grid_shape), m + 1) @ NambuTensor(jnp.ones(self.grid_shape), 3) @ (state_object.occupation)._conj()._transpose())._trace('+')
+            sigma_nambu = 2 * (-1)**(m+1) * (- 1j* NambuTensor(traces_1_m, '-') +  1j* NambuTensor( traces_2_m, '+'))._flatten_nambu_object(included_indices = (1,2,3))
+            sigma_nambu = 1j * sigma_nambu[jnp.size(sigma_nambu)//2:]
+            data_reshape_size = tuple(self.grid_shape) + (3,)
+            sigma_nambu = jnp.reshape(sigma_nambu,data_reshape_size)
+            axes = (sigma_nambu.ndim-1,) + tuple(range(0, sigma_nambu.ndim-1))
+            sigma_nambu = jnp.transpose(sigma_nambu,axes = axes) 
+            out_data = out_data.at[:,m].set(sigma_nambu)
+
+        return out_data * -0.25*self.bcs_coupling/ 2 / jnp.pi * (self.w_arr[1] - self.w_arr[0]) * (self.theta_arr[1] - self.theta_arr[0]) 
+
+    def _self_consistent_dh_jacobian(self, dh,Q:float,f):
+        h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.grid_shape, included_indices = (1,2,3))
+        
+        crt_state = SupercondctingState(f,self._hr2gr(h_total))
+
+        delta_derivative = self._ddelta_dg(state_object = crt_state, Q = Q)
+        dgdh = self._dg_dsigma(hr = h_total)
+
+        # Block checking ddelta/dg
+        #print(self._delta_flatten(delta_derivative[1].transpose(1,2,0).flatten()).flatten())
+        #my_func = lambda gr: self._calc_gap(state_object = SupercondctingState(f,NambuTensor._unflatten_nambu_object(gr,data_shape= self.grid_shape, included_indices = (1,2,3)))).real
+        #derivative = jax.jacobian(my_func)(crt_state.gr._flatten_nambu_object((1,2,3)))
+        #print(self._delta_flatten(delta_derivative[1].transpose(1,2,0).flatten()).flatten())
+        #print(derivative)
+        #print(jnp.max(jnp.abs(derivative - self._delta_flatten(delta_derivative[1].transpose(1,2,0).flatten()).flatten())))
+        # assert False
+
+        delta_complex_result = jnp.einsum('ikep, kjep -> ijep', delta_derivative, dgdh) * 1j
+        delta_complex_result = jnp.einsum('ijep, fr -> friepj', delta_complex_result, jnp.ones(self.grid_shape))
+
+        delta_complex_result = jnp.reshape(delta_complex_result, (3 * np.prod(self.grid_shape), 3 * np.prod(self.grid_shape)))
+        #! Get rid of this, this no work 
+        matrix_out = jnp.zeros((6 * np.prod(self.grid_shape), 6 * np.prod(self.grid_shape)), dtype = jnp.float32) 
+
+        matrix_out = matrix_out.at[: 3 * np.prod(self.grid_shape), : 3 * np.prod(self.grid_shape)].set(delta_complex_result.real * 0)
+        matrix_out = matrix_out.at[3 * np.prod(self.grid_shape):, 3 * np.prod(self.grid_shape):].set(delta_complex_result.real)
+        matrix_out = matrix_out.at[: 3 * np.prod(self.grid_shape), 3 * np.prod(self.grid_shape):].set(delta_complex_result.real * 0)
+        matrix_out = matrix_out.at[3 * np.prod(self.grid_shape):, : 3 * np.prod(self.grid_shape)].set(delta_complex_result.imag) 
+
+        return jnp.identity(6 * np.prod(self.grid_shape)) - matrix_out
 
     def _sigma_delta_solver(self,delta_sigma_list,f,Q):
         result = jnp.zeros(delta_sigma_list.size)
@@ -345,35 +405,6 @@ class EilenbergerEvolution:
             output = output.at[self.break_off_indicies[crt_obj_index]:self.break_off_indicies[crt_obj_index+1]].set(self.sigma_objects[crt_obj_index]._self_consistency(sigma = sigmas[crt_obj_index],system_state = crt_state)._flatten_nambu_object(self.sigma_objects[crt_obj_index]._get_sigma_indicies()))
         return output
 
-    def _delta_condition_dg(self,state_object,crt_Z):
-        #* Careful with \sum_i d/dg^R_i * g^R_i term and with powers of crt_Z since there is a square root 
-        #TODO: make this evaluation more efficient
-        new_state = SupercondctingState(state_object.occupation, state_object.gr * crt_Z)
-        gk = new_state._f2gk()
-        integrand = -0.25*self.bcs_coupling * (gk * self._get_gap_symmetry_function())._trace('-')
-        term1 = ((state_object.gr)._flatten_nambu_object_to_complex(included_indices=(1,2,3)))
-        
-        data_reshape_size = tuple(self.grid_shape) + (3,)
-        new_data = jnp.reshape(term1,data_reshape_size)
-        axes = (new_data.ndim-1,) + tuple(range(0, new_data.ndim-1))
-        term1 = jnp.transpose(new_data,axes = axes) 
-        term_total = jnp.zeros( (6,) + self.grid_shape, dtype=jnp.complex64)
-        term_total.at[::2].set(term1)
-        term_total.at[1::2].set(term1) 
-
-        term_total = jnp.einsum('ijk,jk -> ijk',term_total,(integrand)/crt_Z**2) 
-
-        def compute_trace(index):
-            #* Most likely correct, has be successfull so far,  by testing delta = 0 case 
-            crt_tau = NambuTensor( jnp.ones_like(crt_Z) * (1j)**(index%2), (index+2)//2)
-            #* + sign goes here because g_a has a minus sign relative to g_
-            result = -0.25*self.bcs_coupling * (crt_tau @ state_object.occupation + state_object.occupation @ crt_tau._involution())._trace('-')/crt_Z
-            return result
-
-        indicies = [0,1,2,3,4,5]
-        term2 =  jnp.array([compute_trace(index) for index in indicies]) 
-
-        return self._delta_flatten(term_total - term2)
 
     def _delta_sigma_jacobian(self,delta_sigma_list,f,Q):
 

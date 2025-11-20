@@ -2,6 +2,8 @@
 import jax
 import jax.numpy as jnp
 
+from jax.scipy.sparse.linalg import gmres
+
 #jax.config.update("jax_disable_jit", True)
 
 
@@ -218,11 +220,15 @@ def _iterative_solver(f, x0, jac = None,  optimization_parameters = None):
         if jac is None:
             #J = jnp.ones((jnp.size(x), jnp.size(x)))
             #f_remat = jax.remat(f)
+            print(x.shape)
             J = (jax.jacfwd(f)(x)).real
-        else:
-            J = jac(x)
+            dx = jnp.linalg.solve(J, f(x))
         
-        dx = jnp.linalg.solve(J, f(x))
+        else:
+            #J = jac(x)
+            Jf = lambda u, _x: jac(_x) @ u
+            dx, info = gmres(lambda u: Jf(u,x), f(x), tol = 1e-5, maxiter= 200)  
+        
         return (x - dx, i + 1)
 
     # call the while loop

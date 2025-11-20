@@ -95,6 +95,7 @@ class ElasticScattering(SelfEnergy):
         #TODO: should somehow indicate that there is a delta function in energy! for now just adding a dummy index in energy and putting the values on diagonal
         #TODO: This is technically wrong result for now, but lets keep it and see what happens 
         g_tensor_out = jnp.einsum('ijkl, m -> imjkl', g_tensor, jnp.ones(self.omega_arr.shape[0]))
+        
         return  (-0.5j*self.scattering_rate * g_tensor_out).real #TODO: Figure out how 1j factor mixes things? This is very wrong probably
 
 

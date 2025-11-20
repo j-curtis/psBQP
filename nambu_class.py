@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import tree_util
 import jax 
 import custom_optimizer
+import numpy as np
 #jax.config.update("jax_disable_jit", True)
 
 # contain the description of the Nambu class and its methods 
@@ -172,13 +173,13 @@ class NambuTensor:
         y_trace = self._trace(pauli_index = 2)/2
         z_trace = self._trace(pauli_index = 3)/2
 
-        out_data_unfilt = jnp.stack((id_trace.real,id_trace.imag,x_trace.real,x_trace.imag,y_trace.real,y_trace.imag,z_trace.real,z_trace.imag))
-        included_indicies_modified = jnp.sort(jnp.append(jnp.array(included_indices) * 2, jnp.array(included_indices) * 2 + 1))
-        out_data = out_data_unfilt[included_indicies_modified]
-        
+        out_data_unfilt = jnp.stack((id_trace,x_trace,y_trace,z_trace))
+        out_data = out_data_unfilt[jnp.array(included_indices)]
         out_data = jnp.array(out_data)
         axes = tuple(range(1, out_data.ndim)) + (0,)
-        return (jnp.transpose(out_data,axes = axes)).flatten() # output is xyz, xyz, xyz .... 
+        data_out = (jnp.transpose(out_data,axes = axes)).flatten()
+
+        return  jnp.append(data_out.real, data_out.imag) # output is xyz, xyz, xyz .... 
 
     def _flatten_nambu_object_to_complex(self, included_indices = (0,1,2,3)): 
         id_trace = self._trace(pauli_index = 0)/2
@@ -194,18 +195,18 @@ class NambuTensor:
         axes = tuple(range(1, out_data.ndim)) + (0,)
         return (jnp.transpose(out_data,axes = axes)).flatten() # output is xyz, xyz, xyz .... 
 
-
     @staticmethod
     def _unflatten_nambu_object(data, data_shape, included_indices = jnp.array([0,1,2,3])): 
-        data_reshape_size = tuple(data_shape) + (jnp.size(included_indices) *2,)
+        data_reshape_size = tuple(data_shape) + (jnp.size(included_indices),)
         #print(data_reshape_size)
-        new_data = (jnp.reshape(data,data_reshape_size))
-        axes = (new_data.ndim-1,) + tuple(range(0, new_data.ndim-1))
-        data = jnp.transpose(new_data,axes = axes) 
+        new_data_real = (jnp.reshape(data[: np.prod(data_reshape_size)],data_reshape_size))
+        new_data_imag = (jnp.reshape(data[np.prod(data_reshape_size):],data_reshape_size))
+        axes = (new_data_real.ndim-1,) + tuple(range(0, new_data_real.ndim-1))
+        data_real = jnp.transpose(new_data_real,axes = axes) 
+        data_imag = jnp.transpose(new_data_imag,axes = axes)
         out_data = 0 
-
         for i in range(len(included_indices)): 
-            out_data += NambuTensor(data[i*2] + 1j*data[i*2 + 1],included_indices[i])
+            out_data += NambuTensor(data_real[i] + 1j*data_imag[i],included_indices[i])
 
         return out_data 
 

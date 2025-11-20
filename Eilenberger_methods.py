@@ -256,9 +256,9 @@ class EilenbergerEvolution:
         problem_solver_jacobian = lambda dhr: self._self_consistent_dh_jacobian(dhr, Q = Q, f = f)
 
         jitted_solver = jax.jit(problem_solver)
-        #jitted_jacobian = jax.jit(problem_solver_jacobian)
+        jitted_jacobian = jax.jit(problem_solver_jacobian)
 
-        dh_final = copt._iterative_solver(jitted_solver, hr0, optimization_parameters = self.optimization_parameters)
+        dh_final = copt._iterative_solver(jitted_solver, hr0, jac = jitted_jacobian, optimization_parameters = self.optimization_parameters)
         return NambuTensor._unflatten_nambu_object(dh_final, self.dh_grid, (1,2,3)) + self._Doppler_w_r(Q = Q)
 
     def _self_consistent_delta_sigma(self, initial_state,Q: float):
@@ -331,16 +331,15 @@ class EilenbergerEvolution:
 
 
     def _ddelta_dg(self, state_object, Q:float):
-
+    
         out_data = jnp.zeros((3,3) + self.grid_shape) + 0j
-        
+        data_reshape_size = tuple(self.grid_shape) + (3,)
+
         for m in range(0,3):
-            traces_1_m = (NambuTensor(jnp.ones(self.grid_shape), m + 1) @ ( state_object.occupation))._trace('-')
-            traces_2_m = (NambuTensor(jnp.ones(self.grid_shape), 3) @ NambuTensor(jnp.ones(self.grid_shape), m + 1) @ NambuTensor(jnp.ones(self.grid_shape), 3) @ (state_object.occupation)._conj()._transpose())._trace('+')
+            traces_1_m = (NambuTensor(jnp.ones(self.grid_shape), m + 1) @ ( state_object.occupation ))._trace('-') * self._get_gap_symmetry_function()
+            traces_2_m = (NambuTensor(jnp.ones(self.grid_shape), 3) @ NambuTensor(jnp.ones(self.grid_shape), m + 1) @ NambuTensor(jnp.ones(self.grid_shape), 3) @ (state_object.occupation)._conj()._transpose())._trace('+') * self._get_gap_symmetry_function()
             sigma_nambu = 2 * (-1)**(m+1) * (- 1j* NambuTensor(traces_1_m, '-') +  1j* NambuTensor( traces_2_m, '+'))._flatten_nambu_object(included_indices = (1,2,3))
-            sigma_nambu = 1j * sigma_nambu[jnp.size(sigma_nambu)//2:]
-            data_reshape_size = tuple(self.grid_shape) + (3,)
-            sigma_nambu = jnp.reshape(sigma_nambu,data_reshape_size)
+            sigma_nambu = jnp.reshape(1j * sigma_nambu[jnp.size(sigma_nambu)//2:],data_reshape_size)
             axes = (sigma_nambu.ndim-1,) + tuple(range(0, sigma_nambu.ndim-1))
             sigma_nambu = jnp.transpose(sigma_nambu,axes = axes) 
             out_data = out_data.at[:,m].set(sigma_nambu)
@@ -348,6 +347,7 @@ class EilenbergerEvolution:
         return out_data * -0.25*self.bcs_coupling/ 2 / jnp.pi * (self.w_arr[1] - self.w_arr[0]) * (self.theta_arr[1] - self.theta_arr[0]) 
 
     def _self_consistent_dh_jacobian(self, dh,Q:float,f):
+
         h_total = self._Doppler_w_r(Q) + NambuTensor._unflatten_nambu_object(dh, self.dh_grid, included_indices = (1,2,3))
         
         crt_state = SupercondctingState(f,self._hr2gr(h_total))
@@ -356,9 +356,10 @@ class EilenbergerEvolution:
         dgdh = self._dg_dsigma(hr = h_total)
 
         delta_complex_result = jnp.einsum('ikep, kjep -> ijep', delta_derivative, dgdh) * 1j
-        #print(delta_complex_result.shape)
+        #! This has to be fixed so it works dynamically as the size of the grid changes
         delta_complex_result = jnp.tensordot(jnp.average(delta_complex_result,axis = self.average_indices), jnp.outer( jnp.array([1]), jnp.array([1])), axes = 0)
-        #print(delta_complex_result.shape)
+        #* reflecting the fact that there is no epsilon dependence
+        #* In principle totally uneccesary and then the grid change wouldnt evene be the problem
         delta_complex_result = jnp.einsum('ijep, fr -> friepj', delta_complex_result, jnp.ones(self.dh_grid))
 
         delta_complex_result = jnp.reshape(delta_complex_result, (3 * np.prod(self.dh_grid), 3 * np.prod(self.dh_grid)))

@@ -32,7 +32,14 @@ def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimiz
         gap = eilenberger_object._calc_gap(self_consistent_state)
         return gap
 
-    vectorized_temperature_run = jax.vmap(temperature_run)
+    #vectorized_temperature_run = jax.vmap(temperature_run)
+
+    out_data = []
+    for i in tqdm(temp_list):
+        out_data += [temperature_run(i)]
+        print(out_data[-1])
+    return out_data
+
     return vectorized_temperature_run(temp_list)
 
 """

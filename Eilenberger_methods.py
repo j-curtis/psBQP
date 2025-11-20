@@ -45,7 +45,10 @@ class EilenbergerEvolution:
             self.fine_cutoff = None
 
         omega_array = jnp.linspace(-self.cutoff, self.cutoff, self.omega_size)
+        omega_array_base = jnp.linspace(-self.cutoff, self.cutoff, self.omega_size)
+        omega_array = jnp.sinh( omega_array/self.cutoff * jnp.arcsinh(self.cutoff/0.25) ) * 0.25
         theta_array = jnp.linspace(0., 2. * jnp.pi, self.theta_size, endpoint=False)
+        self.eta =  3 * (omega_array[self.omega_size//2 + 2] - omega_array[self.omega_size//2])
 
         # if fine grid is specified generate it
         fine_omega_array = None    
@@ -72,7 +75,6 @@ class EilenbergerEvolution:
         self.bcs_coupling = self._get_BCS_coupling()
         self.average_indices = jax.lax.stop_gradient(system_parameters['average_indices'])
         self.dh_grid = tuple([ self.grid_shape[i] if i+2 not in self.average_indices else 1 for i in range(len(self.grid_shape))])
-        #self.dh_grid_shape = tuple([(self.grid_shape[i] if i in self.keep_indices else 1) for i in range(len(self.grid_shape))])
 
         self.optimization_parameters = optimization_parameters
         self.sigma_scatterings = sigma_scatterings
@@ -251,7 +253,7 @@ class EilenbergerEvolution:
 
         problem_solver = lambda dhr: self._self_consistent_dh(dh = dhr, Q = Q, f = f)
         
-        #problem_solver_jacobian = lambda dhr: self._self_consistent_dh_jacobian(dhr, Q = Q, f = f)
+        problem_solver_jacobian = lambda dhr: self._self_consistent_dh_jacobian(dhr, Q = Q, f = f)
 
         jitted_solver = jax.jit(problem_solver)
         #jitted_jacobian = jax.jit(problem_solver_jacobian)
@@ -353,28 +355,22 @@ class EilenbergerEvolution:
         delta_derivative = self._ddelta_dg(state_object = crt_state, Q = Q)
         dgdh = self._dg_dsigma(hr = h_total)
 
-        # Block checking ddelta/dg
-        #print(self._delta_flatten(delta_derivative[1].transpose(1,2,0).flatten()).flatten())
-        #my_func = lambda gr: self._calc_gap(state_object = SupercondctingState(f,NambuTensor._unflatten_nambu_object(gr,data_shape= self.grid_shape, included_indices = (1,2,3)))).real
-        #derivative = jax.jacobian(my_func)(crt_state.gr._flatten_nambu_object((1,2,3)))
-        #print(self._delta_flatten(delta_derivative[1].transpose(1,2,0).flatten()).flatten())
-        #print(derivative)
-        #print(jnp.max(jnp.abs(derivative - self._delta_flatten(delta_derivative[1].transpose(1,2,0).flatten()).flatten())))
-        # assert False
-
         delta_complex_result = jnp.einsum('ikep, kjep -> ijep', delta_derivative, dgdh) * 1j
-        delta_complex_result = jnp.einsum('ijep, fr -> friepj', delta_complex_result, jnp.ones(self.grid_shape))
+        #print(delta_complex_result.shape)
+        delta_complex_result = jnp.tensordot(jnp.average(delta_complex_result,axis = self.average_indices), jnp.outer( jnp.array([1]), jnp.array([1])), axes = 0)
+        #print(delta_complex_result.shape)
+        delta_complex_result = jnp.einsum('ijep, fr -> friepj', delta_complex_result, jnp.ones(self.dh_grid))
 
-        delta_complex_result = jnp.reshape(delta_complex_result, (3 * np.prod(self.grid_shape), 3 * np.prod(self.grid_shape)))
-        #! Get rid of this, this no work 
-        matrix_out = jnp.zeros((6 * np.prod(self.grid_shape), 6 * np.prod(self.grid_shape)), dtype = jnp.float32) 
+        delta_complex_result = jnp.reshape(delta_complex_result, (3 * np.prod(self.dh_grid), 3 * np.prod(self.dh_grid)))
+        #! Get rid of this, this no work due to memory problems 
+        matrix_out = jnp.zeros((6 * np.prod(self.dh_grid), 6 * np.prod(self.dh_grid)), dtype = jnp.float32) 
 
-        matrix_out = matrix_out.at[: 3 * np.prod(self.grid_shape), : 3 * np.prod(self.grid_shape)].set(delta_complex_result.real * 0)
-        matrix_out = matrix_out.at[3 * np.prod(self.grid_shape):, 3 * np.prod(self.grid_shape):].set(delta_complex_result.real)
-        matrix_out = matrix_out.at[: 3 * np.prod(self.grid_shape), 3 * np.prod(self.grid_shape):].set(delta_complex_result.real * 0)
-        matrix_out = matrix_out.at[3 * np.prod(self.grid_shape):, : 3 * np.prod(self.grid_shape)].set(delta_complex_result.imag) 
+        matrix_out = matrix_out.at[: 3 * np.prod(self.dh_grid), : 3 * np.prod(self.dh_grid)].set(delta_complex_result.real * 0)
+        matrix_out = matrix_out.at[3 * np.prod(self.dh_grid):, 3 * np.prod(self.dh_grid):].set(delta_complex_result.real)
+        matrix_out = matrix_out.at[: 3 * np.prod(self.dh_grid), 3 * np.prod(self.dh_grid):].set(delta_complex_result.real * 0)
+        matrix_out = matrix_out.at[3 * np.prod(self.dh_grid):, : 3 * np.prod(self.dh_grid)].set(delta_complex_result.imag) 
 
-        return jnp.identity(6 * np.prod(self.grid_shape)) - matrix_out
+        return jnp.identity(6 * np.prod(self.dh_grid)) - matrix_out
 
     def _sigma_delta_solver(self,delta_sigma_list,f,Q):
         result = jnp.zeros(delta_sigma_list.size)

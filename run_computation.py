@@ -26,7 +26,7 @@ def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimiz
     self_consistent_states = []
     gaps = []
 
-    #@jax.jit
+    @jax.jit
     def temperature_run(temp):
         self_consistent_state = eilenberger_object._run_temperature_computation(Q = Q_val, T = temp)
         gap = eilenberger_object._calc_gap(self_consistent_state)

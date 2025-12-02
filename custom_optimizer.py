@@ -217,18 +217,19 @@ def _iterative_solver(f, x0, jac = None,  optimization_parameters = None):
     def body_fun(state):
         x, i = state
         #TODO: Change default to not computing the Jacobian at all!
-        if jac is None:
+        if jac is None or optimization_parameters['custom_jac'] == False:
             #J = jnp.ones((jnp.size(x), jnp.size(x)))
             #f_remat = jax.remat(f)
-            print(x.shape)
             J = (jax.jacfwd(f)(x)).real
-            dx = jnp.linalg.solve(J, f(x))
         
         else:
             #J = jac(x)
-            Jf = lambda u, _x: jac(_x) @ u
-            dx, info = gmres(lambda u: Jf(u,x), f(x), tol = 1e-5, maxiter= 200)  
-        
+            J = jac(x)
+            #TODO: Use gmres instead of jnp.linalg.solve
+            #dx, info = gmres(lambda u: Jf(u,x), f(x), tol = 1e-5, maxiter= 200)  
+
+        dx = jnp.linalg.solve(J, f(x))
+
         return (x - dx, i + 1)
 
     # call the while loop

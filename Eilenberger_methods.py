@@ -257,7 +257,6 @@ class EilenbergerEvolution:
 
         jitted_solver = jax.jit(problem_solver)
         jitted_jacobian = jax.jit(problem_solver_jacobian)
-
         dh_final = copt._iterative_solver(jitted_solver, hr0, jac = jitted_jacobian, optimization_parameters = self.optimization_parameters)
         return NambuTensor._unflatten_nambu_object(dh_final, self.dh_grid, (1,2,3)) + self._Doppler_w_r(Q = Q)
 
@@ -359,7 +358,7 @@ class EilenbergerEvolution:
         #! This has to be fixed so it works dynamically as the size of the grid changes
         delta_complex_result = jnp.tensordot(jnp.average(delta_complex_result,axis = self.average_indices), jnp.outer( jnp.array([1]), jnp.array([1])), axes = 0)
         #* reflecting the fact that there is no epsilon dependence
-        #* In principle totally uneccesary and then the grid change wouldnt evene be the problem
+        #* In principle totally uneccesary and then the grid change wouldnt evene be the problem 
         delta_complex_result = jnp.einsum('ijep, fr -> friepj', delta_complex_result, jnp.ones(self.dh_grid))
 
         delta_complex_result = jnp.reshape(delta_complex_result, (3 * np.prod(self.dh_grid), 3 * np.prod(self.dh_grid)))

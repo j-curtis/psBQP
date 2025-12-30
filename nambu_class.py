@@ -69,9 +69,6 @@ class NambuTensor:
 
         return NambuTensor(result,None)
 
-    def __del__(self):
-        del self.data
-
     # when operating with nambu matrices, automatically expand if the shape of the two matrrices is not the same! 
     def _make_same_dimension(self, other, expansion_indices_left = None, expansion_indices_right = None):
         
@@ -82,24 +79,24 @@ class NambuTensor:
         #* It assumes here that the other object knows about how many dimensions there are but just has 1 size and not full size 
         elif expansion_indices_left is None and expansion_indices_right is not None:
             new_data = other.data
-            #new_data = jnp.expand_dims(other.data, axis = tuple(expansion_indices_right)) 
+            new_data = jnp.expand_dims(other.data, axis = tuple(expansion_indices_right)) 
             new_data *= jnp.ones(self.data.shape)
             other_obj = NambuTensor(new_data,None)
             return self, other_obj
 
         elif expansion_indices_left is not None and expansion_indices_right is None:
             new_data = self.data
-            #new_data = jnp.expand_dims(self.data, axis = tuple(expansion_indices_left)) 
+            new_data = jnp.expand_dims(self.data, axis = tuple(expansion_indices_left)) 
             new_data *= jnp.ones(other.data.shape)
 
             self_obj = NambuTensor(new_data,None)
             return self_obj, other
 
         else:
-            #new_data_left = jnp.expand_dims(self.data, axis = tuple(expansion_indices_left + 2)) 
+            new_data_left = jnp.expand_dims(self.data, axis = tuple(expansion_indices_left + 2)) 
             new_data_left *= jnp.ones(other.data.shape)
 
-            #new_data_right = jnp.expand_dims(other.data, axis = tuple(expansion_indices_right + 2)) 
+            new_data_right = jnp.expand_dims(other.data, axis = tuple(expansion_indices_right + 2)) 
             new_data_right *= jnp.ones(self.data.shape)
 
             self_obj = NambuTensor(new_data_left,None)
@@ -158,8 +155,7 @@ class NambuTensor:
     def _average(self, axis): 
         return NambuTensor(jnp.mean(self.data, axis = axis),None)
 
-
-    def _integrate(self, integration_weights = None, integration_axis = None):
+    def _integrate(self, integration_weights = None, integration_axis = None,):
         ### We will simply sum this over all indices to return a single number 
         if integration_axis is None: integration_axis = 2
         else: integration_axis = integration_axis + 2 
@@ -167,9 +163,13 @@ class NambuTensor:
         #new_data = jnp.expand_dims(self.data, axis = tuple(expansion_indices_left)) 
 
         result = custom_optimizer.custom_jax_trapz(self.data,integration_weights, integration_axis)
- 
-        result = jnp.expand_dims(result, axis = (integration_axis,))
-        return NambuTensor(result,None)
+        #result = jnp.expand_dims(result, axis = (integration_axis,))
+        #print('result is', result)
+        return result
+
+    @staticmethod
+    def _join_nambu_list(nambu_list):
+        return NambuTensor(jnp.concatenate([nambu.data for nambu in nambu_list], axis = 2),None)
 
     def _flatten_nambu_object(self, included_indices = (0,1,2,3)): 
         id_trace = self._trace(pauli_index = 0)/2
@@ -225,6 +225,12 @@ class NambuTensor:
     def tree_unflatten(aux_data, children):
         data, data_shape = children
         return NambuTensor(data, None)
+
+    def _nambu_gradient(self, included_indices = (0,1,2,3), x_vals = None, axis = 0):
+        return NambuTensor._unflatten_nambu_object(jnp.gradient(self._flatten_nambu_object(included_indices), jnp.tile(x_vals, jnp.size(included_indices) * 2), axis = axis), self.data_shape[2:], included_indices)
+
+
+#TODO Add nambu tensor gradient computation instead of the same one in the Usadel_methods
 
 def get_pauli_matrix(index = None) -> jnp.array:
     """A function returning the Pauli matrices or the whole list (if index is none)

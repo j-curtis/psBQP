@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 # import custom classes
-from Eilenberger_methods import EilenbergerEvolution
+from Usadel_methods import UsadelEvolution
 from nambu_class import NambuTensor
 from system_state import SupercondctingState
 
@@ -13,67 +13,72 @@ from tqdm import tqdm
 
 def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None,  Q_list = None):
 
-    # generate the mesh and initialize static system parameters
-    eilenberger_object = EilenbergerEvolution(grid_parameters, system_parameters, optimization_parameters, sigma_scatterings = sigma_scatterings)
+    usadel_object = UsadelEvolution(grid_parameters, system_parameters, optimization_parameters, sigma_scatterings = sigma_scatterings)
 
     gr0 = None
 
     if Q_list is None:
-        Q_val = 0 
+        Q_list = jnp.array([0])
     else:
         Q_val = Q_list[0]
 
     self_consistent_states = []
-    gaps = []
-
+    
     @jax.jit
-    def temperature_run(temp):
-        self_consistent_state = eilenberger_object._run_temperature_computation(Q = Q_val, T = temp)
-        gap = eilenberger_object._calc_gap(self_consistent_state)
-        return gap
+    def temperature_run(temp, crt_Q, gr):
+        gr, gap, current = usadel_object._run_temperature_computation(Q = crt_Q, T = temp, gr0 = gr)
+        return gr,gap, current
+
+    gaps = jnp.zeros((len(temp_list),len(Q_list)),dtype = jnp.float32)
 
     #vectorized_temperature_run = jax.vmap(temperature_run)
+    crt_gaps = []
+    crt_currents = []
+    for crt_Q_index in tqdm(range(len(Q_list))):
+        for crt_temp_index in range(len(temp_list)):
+            gr0, gap, current = temperature_run(temp_list[crt_temp_index], Q_list[crt_Q_index], gr0)
+            crt_gaps += [jnp.abs(gap)]
+            crt_currents += [current]
 
-    out_data = []
-    for i in tqdm(temp_list):
-        out_data += [temperature_run(i)]
-        print(out_data[-1])
-    return out_data
+    return jnp.reshape(jnp.array(crt_gaps), (len(temp_list),len(Q_list))), jnp.reshape(jnp.array(crt_currents), (len(temp_list),len(Q_list)))
 
-    return vectorized_temperature_run(temp_list)
+def real_time_evolve(temperature, current_function, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None):
 
-"""
+    usadel_object = UsadelEvolution(grid_parameters, system_parameters, optimization_parameters, sigma_scatterings = sigma_scatterings)
 
-def equilibrium_sweep(temperatures: jnp.ndarray, params_dict: dict, meshgrid: dict, gr0 = None) -> tuple:
+    gr0 = None
+
+    timestamps = jnp.linspace(-grid_parameters['time_duration'], grid_parameters['time_duration'], grid_parameters['time_sampling'])
+    ts_indices = jnp.arange(grid_parameters['time_sampling']-1)
+    current_pulse = current_function(timestamps)
+
+    current_evolution = []
+    gap_evolution = []
+    Q_list = []
     
-    #TODO: This can even be optimized using jax loops or just vectorization
-    #TODO: see how to do this with g0 as input
-    #TODO: remove Q from the params dict for later jitting
-    
-    # define a function which sweeps the temperature with explicility constant parameters and meshgrid 
-    # this is crucial to be able to jit the function \
-    def temperature_sweep_function(temperature,gr0 = None):
-        return calc_equlibrium(temperature = temperature, params_dict = params_dict, meshgrid = meshgrid,gr0 = gr0)
+    @jax.jit
+    def time_run(crt_Q, gr):
+        gr, gap, current = usadel_object._run_temperature_computation(Q = crt_Q, T = temperature, gr0 = gr)
+        return gr,gap, current
 
-    # jit the  function
-    jitted_run = jax.jit(temperature_sweep_function)
+    inital_state, inital_gap, inital_current = time_run(0.0, gr0)
 
-    # compile the jitted function once
-    gap,gr,sigma_r = jitted_run(temperatures[0],gr0 = gr0)
-    print('first_gap', gap)
-    gaps = []
-    grs = []
-    sigmas = []
+    current_evolution += [inital_current]
+    gap_evolution += [jnp.abs(inital_gap)]
+    Q_list += [0.0]
+    #TODO These pre-factors need to be figured out 
+    max_current = system_parameters['current_maximum']  
+    prefactor = 1
+    resistance_factor = 2/jnp.pi/system_parameters['z_t/R_n']
 
-    # run the for loop for all the temperatures 
-    for temp in tqdm(temperatures):
-        gap, gr, sigma_r = jitted_run(temp,gr0 = gr)
-        gaps += [gap]
-        grs += [gr]
-        sigmas += [sigma_r]
+    for crt_time_index in tqdm(ts_indices):
+        gr0, gap, current = time_run(Q_list[crt_time_index], gr0)
+        gap_evolution += [jnp.abs(gap)]
+        usadel_prefactor = usadel_object._calc_dtQ_prefactor_new(gr0,temperature) 
+        dQ = ((current_pulse[crt_time_index] - current) * max_current) * (timestamps[crt_time_index+1] - timestamps[crt_time_index])/(resistance_factor + usadel_prefactor) 
+        #print('dQ/dt', dQ/ (timestamps[crt_time_index+1] - timestamps[crt_time_index]) )
+        Q_list += [Q_list[crt_time_index] + dQ]
+        current_evolution += [current + dQ/ (timestamps[crt_time_index+1] - timestamps[crt_time_index]) * usadel_prefactor/max_current]
 
-    # this line here is to force compilation
-    print('The gaps are',  gaps)
 
-    return gaps, grs, sigmas 
-"""
+    return timestamps, current_pulse, jnp.array(current_evolution), jnp.array(gap_evolution), jnp.array(Q_list)

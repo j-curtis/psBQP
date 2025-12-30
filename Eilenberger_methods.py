@@ -342,7 +342,6 @@ class EilenbergerEvolution:
             axes = (sigma_nambu.ndim-1,) + tuple(range(0, sigma_nambu.ndim-1))
             sigma_nambu = jnp.transpose(sigma_nambu,axes = axes) 
             out_data = out_data.at[:,m].set(sigma_nambu)
-
         return out_data * -0.25*self.bcs_coupling/ 2 / jnp.pi * (self.w_arr[1] - self.w_arr[0]) * (self.theta_arr[1] - self.theta_arr[0]) 
 
     def _self_consistent_dh_jacobian(self, dh,Q:float,f):

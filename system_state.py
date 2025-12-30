@@ -12,7 +12,7 @@ class SupercondctingState:
 
     def __init__(self, f0, gr0 = None):
         self.gr = gr0
-        self.occupation = jax.lax.stop_gradient(f0)
+        self.occupation = f0
 
     @jax.jit
     def _r2a(self): 

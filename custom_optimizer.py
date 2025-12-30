@@ -26,7 +26,6 @@ def custom_jax_trapz(y: jnp.ndarray, x = None, axis = -1) -> jnp.ndarray:
         return jnp.sum(dx_reshaped * avg_y, axis = axis)
 
 
-
 #TODO make this work! 
 def custom_matrix_inverter(matrix: jnp.ndarray, block_indicies = None) -> jnp.ndarray: 
     pass 
@@ -220,7 +219,7 @@ def _iterative_solver(f, x0, jac = None,  optimization_parameters = None):
         if jac is None or optimization_parameters['custom_jac'] == False:
             #J = jnp.ones((jnp.size(x), jnp.size(x)))
             #f_remat = jax.remat(f)
-            J = (jax.jacfwd(f)(x)).real
+            J = (jax.jacfwd(f)(x))
         
         else:
             #J = jac(x)
@@ -236,6 +235,17 @@ def _iterative_solver(f, x0, jac = None,  optimization_parameters = None):
     x_final, _ = jax.lax.while_loop(cond_fun, body_fun, (x0, 0))
 
     return x_final
+
+def make_separable_jacobian(self, function_f, block_size, x_eval):
+
+    df_block = jnp.linalg.inv(jax.jacfwd(function_f))
+
+    def jacobian(g):
+        df_vals = jax.vmap(df_block)(g)
+
+
+
+
 
 #! Not implemented yet!!
 def _fast_iterative_solver(f, x0, jac = None, diagonal_jac = None,  optimization_parameters = None):

@@ -21,20 +21,21 @@ from nambu_class import NambuTensor
 import jax
 import jax.numpy as jnp
 from jax import tree_util
-
+from custom_optimizer import custom_jax_trapz as custom_integrate
 
 # a set of rules describing how sigma is computed from g thats it! 
+@tree_util.register_pytree_node_class
 class SelfEnergy(ABC):
      
-    def __init__(self, scattering_rate: float, theta_arr, omega_arr):
+    def __init__(self, scattering_rate: float, omega_arr):
         self.scattering_rate = scattering_rate
-        self.theta_arr = theta_arr
         self.omega_arr = omega_arr
-        self.system_shape = theta_arr.shape[-1] * omega_arr.shape[-1]
+        self.system_shape = omega_arr.shape[-1]
         self.sigma_shape = self._sigma_shape()
         self.sigma_indicies = self._get_sigma_indicies()
+
     @abstractmethod
-    def _sigma_r(self,system_state):
+    def _sigma_r(self,gr,f):
         pass
 
     @abstractmethod
@@ -44,9 +45,11 @@ class SelfEnergy(ABC):
     def _self_consistency(self,system_state,sigma):
         return sigma - self._sigma_r(system_state)
 
+    """
     @abstractmethod
     def _sigma_jacobian(self,system_state,z):
         pass
+    """ 
 
     @abstractmethod
     def _get_sigma_indicies(self):
@@ -66,6 +69,16 @@ class SelfEnergy(ABC):
             out_data += NambuTensor(new_data[i*2] + 1j*new_data[i*2 + 1],included_indices[i])
 
         return out_data 
+
+    def tree_flatten(self):
+        children = self.scattering_rate, self.omega_arr
+        aux_data = None
+        return children, aux_data
+
+    def tree_unflatten(aux_data, children):
+        scattering_rate, omega_arr = children
+        return SelfEnergy(scattering_rate, omega_arr)
+
 
 class ElasticScattering(SelfEnergy):
 
@@ -117,3 +130,45 @@ class DynesScattering(SelfEnergy):
     def _sigma_jacobian(self,system_state,z):
         index_size = self._get_sigma_indicies()
         return jnp.zeros((2 * len(index_size), 6, self.omega_arr.shape[0],self.theta_arr.shape[0]),dtype = jnp.float32)
+
+@tree_util.register_pytree_node_class
+class PhononScattering(SelfEnergy):
+
+    def __init__(self, scattering_rate: float, omega_arr, temperature):
+        super().__init__(scattering_rate, omega_arr)
+        self.name = 'Phonon' 
+        self.temperature = temperature
+    
+    def _sigma_r(self,gr,f):
+        gk = gr @ f + f @ gr._involution()
+        #epsilon_diff = jnp.outer(self.omega_arr ,jnp.ones_like(self.omega_arr)) - jnp.outer(jnp.ones_like(self.omega_arr),self.omega_arr)
+        
+        epsilon_diff = self.omega_arr[None,:] - self.omega_arr[:,None]
+
+        kernel1 = epsilon_diff**2/(jnp.abs(jnp.tanh(epsilon_diff/2/self.temperature)) + 1e-4)
+        kernel2 = (epsilon_diff**2 * jnp.sign(epsilon_diff))
+
+        deps = jnp.diff(self.omega_arr,prepend= self.omega_arr[0])
+
+        #* Somehow this avoids large memory allocation
+        #? Should use trapezoid rule and not sum like this but ok 
+        integrated1 = jnp.einsum('...i,ij -> ...j', (gr*deps).data, kernel1)
+        integrated2 = jnp.einsum('...i,ij -> ...j', (gk*deps).data, kernel2)
+        return NambuTensor( -0.25j * self.scattering_rate/jnp.max(self.omega_arr)**3 * (integrated1 - 0.5 * integrated2),None)
+
+
+    def _sigma_shape(self):
+        return (self.omega_arr.shape[0],)
+
+    def _get_sigma_indicies(self):
+        return (2,3)
+
+
+    def tree_flatten(self):
+        children = self.scattering_rate, self.omega_arr, self.temperature
+        aux_data = None
+        return children, aux_data
+
+    def tree_unflatten(aux_data, children):
+        scattering_rate, omega_arr, temperature = children
+        return SelfEnergy(scattering_rate, omega_arr, temperature)

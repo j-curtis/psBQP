@@ -12,7 +12,6 @@ import self_energy_class
 
 from matplotlib import pyplot as plt 
 
-
 class UsadelEvolution:
     def __init__(self, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None):
         # setting the grid parameters of the system

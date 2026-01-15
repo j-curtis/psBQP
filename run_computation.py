@@ -69,7 +69,7 @@ def real_time_evolve(temperature, current_function, grid_parameters, system_para
     #TODO These pre-factors need to be figured out 
     max_current = system_parameters['current_maximum']  
     prefactor = 1
-    resistance_factor = 2/jnp.pi/system_parameters['z_t/R_n']
+    resistance_factor = 1/2/system_parameters['z_t/R_n'] #* removed 2/pi/system_parameters['z_t/R_n'] and made it current version -- to be checked
 
     for crt_time_index in tqdm(ts_indices):
         gr0, gap, current = time_run(Q_list[crt_time_index], gr0)

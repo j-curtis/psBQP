@@ -139,7 +139,7 @@ class UsadelEvolution:
         return h_r
 
     def _get_current(self, gr, f, Q):
-        prefactor = 1j / self.current_maximum
+        prefactor = 1j / self.current_maximum * (jnp.pi/4 / (2 * jnp.pi ))
         tau_3 = NambuTensor(jnp.ones_like(self.w_arr) * 1, 3)
         gk = gr @ f + f @ gr._involution()
         integrand = (gr @ tau_3._commutator(gk) - gk @ tau_3._commutator(gr._involution()))._trace(3)
@@ -199,7 +199,6 @@ class UsadelEvolution:
 
         return self._integrate_over_omega((deps_f_comm + gr @ deps_f_comm @ gr._involution())._trace(3), axis = 0).real/(2 * jnp.pi)
 
-
     def _calc_dtQ_prefactor_new(self, gr, temperature):
         f = NambuTensor(self._thermal_occupation_numbers(temperature = temperature),0)
         gk = gr @ f + f @ gr._involution()
@@ -208,7 +207,7 @@ class UsadelEvolution:
 
         res =  gr @ tau_3 @ deps_gk + gr._involution() @ tau_3 @ deps_gk
 
-        return self._integrate_over_omega((gr @ tau_3 @ deps_gk + gr._involution() @ tau_3 @ deps_gk)._trace(3), axis = 0).real/(2 * jnp.pi)
+        return  jnp.pi/4 * self._integrate_over_omega((gr @ tau_3 @ deps_gk + gr._involution() @ tau_3 @ deps_gk)._trace(3), axis = 0).real/(2 * jnp.pi)
 
     def _test_jacobian(Q, T, gr0 = None):
         f = NambuTensor(self._thermal_occupation_numbers(temperature = T),0)

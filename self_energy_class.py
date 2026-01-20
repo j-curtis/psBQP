@@ -143,18 +143,19 @@ class PhononScattering(SelfEnergy):
         gk = gr @ f + f @ gr._involution()
         #epsilon_diff = jnp.outer(self.omega_arr ,jnp.ones_like(self.omega_arr)) - jnp.outer(jnp.ones_like(self.omega_arr),self.omega_arr)
         
-        epsilon_diff = self.omega_arr[None,:] - self.omega_arr[:,None]
+        epsilon_diff = (self.omega_arr[None,:] - self.omega_arr[:,None])
 
-        kernel1 = epsilon_diff**2/(jnp.abs(jnp.tanh(epsilon_diff/2/self.temperature)) + 1e-4)
+        kernel1 = epsilon_diff**2/(jnp.tanh(jnp.abs(epsilon_diff/2/self.temperature) + 1e-4)) 
         kernel2 = (epsilon_diff**2 * jnp.sign(epsilon_diff))
 
         deps = jnp.diff(self.omega_arr,prepend= self.omega_arr[0])
-
+        
         #* Somehow this avoids large memory allocation
         #? Should use trapezoid rule and not sum like this but ok 
-        integrated1 = jnp.einsum('...i,ij -> ...j', (gr*deps).data, kernel1)
+        integrated1 = -jnp.einsum('...i,ij -> ...j', (gr*deps).data, kernel1)
         integrated2 = jnp.einsum('...i,ij -> ...j', (gk*deps).data, kernel2)
-        return NambuTensor( -0.25j * self.scattering_rate/jnp.max(self.omega_arr)**3 * (integrated1 - 0.5 * integrated2),None)
+        return NambuTensor( -0.25j * self.scattering_rate/7/1.202056 * (integrated1 - 0.5 * integrated2),None)
+        #return NambuTensor( -0.25j * self.scattering_rate/jnp.max(self.omega_arr)**3 * (integrated1 - 0.5 * integrated2),None)
 
 
     def _sigma_shape(self):

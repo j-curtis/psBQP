@@ -16,7 +16,7 @@ class UsadelEvolution:
     def __init__(self, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None):
         # setting the grid parameters of the system
         #omega_sampling: int, theta_sampling: int, cutoff: float, fine_omega_sampling = None, fine_cutoff = None
-        self.omega_size = grid_parameters['omega_sampling'] if grid_parameters['omega_sampling'] % 2 == 0 else grid_parameters['omega_sampling'] + 1
+        self.omega_size = grid_parameters['omega_sampling'] if grid_parameters['omega_sampling'] % 2 == 1 else grid_parameters['omega_sampling'] 
         self.cutoff = grid_parameters['cutoff']
         self.eta = 2 * self.cutoff/self.omega_size
 
@@ -167,7 +167,7 @@ class UsadelEvolution:
     def _calculate_self_consistent_state(self, f, Q, gr0 = None):
 
         if gr0 is None:
-            gap_0 = (1.0 * 1.7 + 0.0j) 
+            gap_0 = (1.0 * 1.0 + 0.0j) 
             gr0 = self._hr2gr(self._get_hr(Q = Q, delta = gap_0, sigma_r = None))
 
         else:

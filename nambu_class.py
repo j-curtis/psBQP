@@ -150,9 +150,8 @@ class NambuTensor:
         return det[None,None,...]
 
     def _involution(self):
-        #? return  NambuTensor(jnp.ones(self.data_shape[2:]), 3) @ (self._conj()) @  NambuTensor(jnp.ones(self.data_shape[2:]), 3) 
         return  NambuTensor(jnp.ones(self.data_shape[2:]), 3) @ (self._conj())._transpose() @  NambuTensor(jnp.ones(self.data_shape[2:]), 3) 
-
+ 
     def _average(self, axis): 
         return NambuTensor(jnp.mean(self.data, axis = axis),None)
 

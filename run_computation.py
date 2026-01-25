@@ -42,6 +42,28 @@ def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimiz
 
     return jnp.reshape(jnp.array(crt_gaps), (len(temp_list),len(Q_list))), jnp.reshape(jnp.array(crt_currents), (len(temp_list),len(Q_list)))
 
+def calculate_phonon_scattering_scan(temp_list, scattering_list, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None):
+
+    gr0 = None 
+
+    gaps = jnp.zeros((len(temp_list),len(scattering_list)),dtype = jnp.float32)
+
+    crt_gaps = []
+    crt_gs = []
+    for scattering_rate in tqdm(scattering_list):
+        for temperature in temp_list:
+            sigma_scatterings['Phonon'] = scattering_rate
+            system_parameters['temperature'] = temperature
+            crt_usadel_object = UsadelEvolution(grid_parameters, system_parameters, optimization_parameters, sigma_scatterings = sigma_scatterings)
+            gr0, gap,current = crt_usadel_object._run_temperature_computation(Q = 0.0, T = temperature, gr0 = gr0)
+            crt_gaps += [jnp.abs(gap)]
+            print(jnp.abs(gap))
+            crt_gs += [gr0]
+
+    return jnp.reshape(jnp.array(crt_gaps), (len(temp_list),len(scattering_list))), crt_gs
+
+
+
 def real_time_evolve(temperature, current_function, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None):
 
     usadel_object = UsadelEvolution(grid_parameters, system_parameters, optimization_parameters, sigma_scatterings = sigma_scatterings)
@@ -71,7 +93,7 @@ def real_time_evolve(temperature, current_function, grid_parameters, system_para
     prefactor = 1
     if 'R_c/z_t' in system_parameters:
         #TODO: check! 
-        contact_resistance_prefactor = 1 + 1/system_parameters['z_t/R_c']/2
+        contact_resistance_prefactor = 1 + 1* system_parameters['R_c/z_t']/2
     else:
         contact_resistance_prefactor = 1
 

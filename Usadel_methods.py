@@ -16,7 +16,7 @@ class UsadelEvolution:
     def __init__(self, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None):
         # setting the grid parameters of the system
         #omega_sampling: int, theta_sampling: int, cutoff: float, fine_omega_sampling = None, fine_cutoff = None
-        self.omega_size = grid_parameters['omega_sampling'] if grid_parameters['omega_sampling'] % 2 == 1 else grid_parameters['omega_sampling'] 
+        self.omega_size = grid_parameters['omega_sampling'] if grid_parameters['omega_sampling'] % 2 == 1 else grid_parameters['omega_sampling'] +1 
         self.cutoff = grid_parameters['cutoff']
         self.eta = 2 * self.cutoff/self.omega_size
 
@@ -45,9 +45,22 @@ class UsadelEvolution:
             omega_array = jnp.concatenate((omega_array, fine_omega_array))
             omega_array = jnp.unique(omega_array)
 
+
         # generate the meshgrid of the energy and angle arrays
         
-        self.w_arr = jax.lax.stop_gradient(omega_array)     
+        if 'eta_width' in system_parameters:
+            eta_width = system_parameters['eta_width']
+        else:
+            eta_width = 1/20
+
+        ones_array = (jnp.abs(omega_array) <= 3).astype(float)
+        gaussian_left_array = jnp.exp(-((omega_array - 3)/self.cutoff)**2 / eta_width)
+        gaussian_right_array = jnp.exp(-((omega_array + 3)/self.cutoff)**2 / eta_width)
+        filter_lists = jnp.vstack((gaussian_left_array, ones_array, gaussian_right_array))
+        self.eta_filter = jnp.max(filter_lists.T, axis = 1)           
+        self.w_arr = jax.lax.stop_gradient(omega_array)
+        #self.eta_filter = (jnp.abs(omega_array) <= 10).astype(jnp.float32)
+        #self.eta_filter = jnp.exp(-(omega_array/self.cutoff)**2 / eta_width)
         self.critical_temperature = system_parameters['critical_temperature']
         self.temperature = system_parameters['temperature']
         self.bcs_coupling = self._get_BCS_coupling()
@@ -124,13 +137,13 @@ class UsadelEvolution:
     def _calc_gap(self, g_r, f):
         gk = g_r @ f + f @ g_r._involution()
         integrand = (gk)._trace('-') 
-        return -0.25*self.bcs_coupling * (self._integrate_over_omega((integrand),axis = 0))  
+        return -0.25*self.bcs_coupling * (self._integrate_over_omega((integrand),axis = 0)).real
 
     def _hr2gr(self, hr, indicies = None):
-        return -1.j* hr/jnp.sqrt(hr._determinant()) 
+        return -1.j* hr/jnp.sqrt( hr._determinant()) 
 
     def _Doppler_w_r(self, Q:float,indices = None):
-        return NambuTensor(self.w_arr + 1.j * self.eta, 3)
+        return NambuTensor(self.w_arr + 1.j * self.eta * self.eta_filter, 3)
         
     def _get_hr(self, Q:float, delta, sigma_r = None, indices = None):
         h_r = self._Doppler_w_r(Q = Q) - (NambuTensor(1j *  jnp.real(delta) * np.ones_like(self.w_arr), 2) +  NambuTensor(1j*jnp.imag(delta) * np.ones_like(self.w_arr), 1)) 
@@ -167,7 +180,7 @@ class UsadelEvolution:
     def _calculate_self_consistent_state(self, f, Q, gr0 = None):
 
         if gr0 is None:
-            gap_0 = (1.0 * 1.0 + 0.0j) 
+            gap_0 = (1.0 * 1.7 + 0.0j) 
             gr0 = self._hr2gr(self._get_hr(Q = Q, delta = gap_0, sigma_r = None))
 
         else:

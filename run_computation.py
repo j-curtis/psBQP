@@ -70,7 +70,7 @@ def real_time_evolve(temperature, current_function, grid_parameters, system_para
 
     gr0 = None
 
-    timestamps = jnp.linspace(-grid_parameters['time_duration'], grid_parameters['time_duration'], grid_parameters['time_sampling'])
+    timestamps = jnp.linspace(-grid_parameters['time_duration'] * 2, grid_parameters['time_duration'], grid_parameters['time_sampling'])
     ts_indices = jnp.arange(grid_parameters['time_sampling']-1)
     current_pulse = current_function(timestamps)
 

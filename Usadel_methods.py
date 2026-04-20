@@ -184,7 +184,7 @@ class UsadelEvolution:
             gr0 = self._hr2gr(self._get_hr(Q = Q, delta = gap_0, sigma_r = None))
 
         else:
-            gap_0 = self._calc_gap(gr0, f) + 0.2 # added this to see gap revival actually
+            gap_0 = self._calc_gap(gr0, f) #+ 0.2 # added this to see gap revival actually
             
 
         solver_function = lambda gr: self._self_consistent_gr(NambuTensor._unflatten_nambu_object(gr, self.w_arr.shape, (2,3)), Q, f = f)

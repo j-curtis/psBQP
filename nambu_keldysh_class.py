@@ -5,7 +5,6 @@ Handles matrix operations, Pauli decomposition, and integration over energy/angl
 
 import numpy as np
 
-
 class NambuKeldyshTensor:
     """Container for 2x2 Nambu matrices with additional dimensions (frequency, angle, etc.)."""
 

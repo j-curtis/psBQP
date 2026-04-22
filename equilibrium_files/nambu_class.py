@@ -18,7 +18,7 @@ class NambuTensor:
         
         # if the input data has a lot of dimensions then we assume its already a nambu tensor
 
-        # if not a nambu tensor make one
+        # if not a nambu tensor ma  ke one
         #NOTE: The data_in is not allowed to be of the shape (2,2)
         if pauli_channel is None:
             if (len(data_in.shape) < 2):
@@ -50,6 +50,7 @@ class NambuTensor:
         else:
             result = jnp.einsum('ij...,jk...->ik...', self.data, other.data)
         return NambuTensor(result,None)
+
 
     def __mul__(self,other,expansion_indices_left = None, expansion_indices_right = None):   
         if type(other) is NambuTensor and not (expansion_indices_left is None and expansion_indices_right is None):

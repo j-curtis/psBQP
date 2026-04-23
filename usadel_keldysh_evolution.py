@@ -4,6 +4,7 @@ Handles time evolution of retarded Green's function g^R and distribution functio
 """
 
 import numpy as np
+from tqdm import tqdm
 from nambu_keldysh_class import NambuKeldyshTensor
 from state_object_class import StateObject
 from equilibrium_class import EquilibriumSolver
@@ -272,7 +273,7 @@ class UsadelKeldyshEvolution:
 
     # ========== Real-Time Evolution ==========
 
-    def _evolve_gr_by_one_timestep(self, state, external_field=None):
+    def _compute_new_gr_column(self, state, external_field=None):
         """
         Evolve retarded Green's function gr by one timestep.
 
@@ -336,7 +337,7 @@ class UsadelKeldyshEvolution:
 
         return gr_new, gr_diagonal_new
 
-    def _evolve_gk_by_one_timestep(self, state, external_field=None):
+    def _compute_new_gk_column(self, state, external_field=None):
         """
         Evolve Keldysh Green's function gk by one timestep.
 
@@ -407,9 +408,7 @@ class UsadelKeldyshEvolution:
         gk_new = gk_last_column - 1j * tau3 @ (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
 
         # Diagonal element
-        gk_diagonal_new = tau3 @ gk_last_column[-1] @ tau3
-
-
+        gk_diagonal_new = gk_last_column[-1]
         return gk_new, gk_diagonal_new
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):
@@ -417,25 +416,46 @@ class UsadelKeldyshEvolution:
         Evolve state by one timestep, generating new entries.
 
         Steps:
-        1. Extract current time slice from state
-        2. Call _evolve_gr_by_one_timestep() to get new gr
-        3. Call _evolve_gk_by_one_timestep() to get new gk
-        4. Update state using state._update_state_object()
+        1. Initialize thermal distribution if needed
+        2. Call _compute_new_gr_column() to get new gr row and diagonal
+        3. Call _compute_new_gk_column() to get new gk row and diagonal
+        4. Compute gap from new gk diagonal element
+        5. Update state using state.update_state_object()
+        6. Return gap and current at new time
 
         Args:
             state: StateObject with current data
-            time_index: Current time index
+            time_index: Current time index (not used, kept for compatibility)
             external_field: Optional external perturbation
 
         Returns:
-            Updated StateObject
+            gap_new: Gap value at new time t
+            current_new: Current at new time t (zero for now)
 
         Calls:
-            - _evolve_gr_by_one_timestep(state, time_index, external_field)
-            - _evolve_gk_by_one_timestep(state, time_index, external_field)
-            - state._update_state_object(new_gr, new_gk, time_index)
+            - _compute_new_gr_column(state, external_field)
+            - _compute_new_gk_column(state, external_field)
+            - state.update_state_object(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)
         """
-        pass
+        # Initialize thermal distribution if not already done
+        if not hasattr(self, 'thermal_dist'):
+            self.get_thermal_occupation(self.temperature)
+
+        # Compute new gr and gk rows and diagonals
+        new_gr_row, new_gr_diag = self._compute_new_gr_column(state, external_field)
+        new_gk_row, new_gk_diag = self._compute_new_gk_column(state, external_field)
+
+        # Update state with new row, column, diagonal
+        state.update_state_object(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)
+
+        # Compute gap at new time using state method
+        gap_history = state.get_gap_history()
+        gap_new = gap_history[-1]  # Extract gap at newest time
+
+        # Current is zero for now (Stage 2 of project)
+        current_new = 0.0
+
+        return gap_new, current_new
 
     def real_time_evolution(self, initial_state, num_timesteps, external_field=None):
         """
@@ -444,12 +464,10 @@ class UsadelKeldyshEvolution:
         Evolves state forward in time, extracting observables at each step.
 
         Steps:
-        1. Initialize state from initial_state
+        1. Initialize observables arrays
         2. For each timestep:
             a. Call _evolve_state_by_one_timestep()
-            b. Extract gap using state.get_gap()
-            c. Extract current using state.get_current()
-            d. Store gap and current in arrays
+            b. Store returned gap and current values
         3. Return evolved state and observable time series
 
         Args:
@@ -464,8 +482,23 @@ class UsadelKeldyshEvolution:
 
         Calls:
             - _evolve_state_by_one_timestep(state, time_index, external_field)
-            - state.get_gap()
-            - state.get_current()
         """
-        pass
+        # Initialize arrays to track observables
+        gaps = np.zeros(num_timesteps, dtype=complex)
+        currents = np.zeros(num_timesteps, dtype=complex)
+
+        # Start with initial state
+        state = initial_state
+
+        # Evolve over time with progress bar
+        for time_index in tqdm(range(num_timesteps), desc="Real-time evolution"):
+            # Evolve by one timestep and get observables
+            gap_new, current_new = self._evolve_state_by_one_timestep(
+                state, time_index, external_field
+            )
+            # Store observables
+            gaps[time_index] = gap_new
+            currents[time_index] = current_new
+
+        return state, gaps, currents
 

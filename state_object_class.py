@@ -86,47 +86,60 @@ class StateObject:
 
     # ========== Utilities ==========
 
-    def _update_state_object(self, new_gr, new_gk, time_index):
+    def update_state_object(self, new_gr_row, new_gr_diag, new_gk_row, new_gk_diag):
         """
-        Update state with newly computed timestep.
+        Update state object with new time step using sliding window.
 
-        Inserts new_gr and new_gk at specified time_index in the stored data.
+        Updates both g^R and g^K by adding new row/column/diagonal and removing oldest.
 
         Args:
-            new_gr: New retarded Green's function at timestep (NambuKeldyshTensor)
-            new_gk: New Keldysh Green's function at timestep (NambuKeldyshTensor)
-            time_index: Time index to update
-
-        Called by:
-            - UsadelKeldyshEvolution._evolve_state_by_one_timestep()
+            new_gr_row: New row for g^R(t_new, t_j) - shape (2,2,N_t) or NambuKeldyshTensor
+            new_gr_diag: New diagonal element g^R(t_new, t_new) - shape (2,2) or NambuKeldyshTensor
+            new_gk_row: New row for g^K(t_new, t_j) - shape (2,2,N_t) or NambuKeldyshTensor
+            new_gk_diag: New diagonal element g^K(t_new, t_new) - shape (2,2) or NambuKeldyshTensor
         """
-        pass
+        N_t = self.gr.data.shape[2]
 
+        # g^R column is zero due to causality (retarded function vanishes for t < t')
+        gr_column = np.zeros((2, 2, N_t), dtype=complex)
+
+        # g^K column computed from row using transformation: τ₃ @ (g^K_row)^† @ τ₃
+        tau3 = np.array([[1, 0], [0, -1]], dtype=complex)
+
+        # Extract row data (handle both NambuKeldyshTensor and array inputs)
+        if isinstance(new_gk_row, NambuKeldyshTensor):
+            gk_row_data = new_gk_row.data[:, :, 0, :N_t] if new_gk_row.data.ndim == 4 else new_gk_row.data
+        else:
+            gk_row_data = new_gk_row
+
+        # Hermitian conjugate: transpose (2,2) Nambu indices and complex conjugate
+        gk_row_dag = gk_row.conj().transpose() 
+
+        # Apply τ₃ from left and right: τ₃ @ gk_row^† @ τ₃
+        gk_column = tau_3 * gk_row_dag * tau_3
+        #TODO: keep better track of rows and columns 
+        # Update both Green's functions using update_entries
+        self.gr.update_entries(new_gr_row, gr_column, new_gr_diag)
+        self.gk.update_entries(new_gk_row, gk_column, new_gk_diag)
+        
     # ========== Consistency Checks ==========
 
     def check_normalization(self):
-        """Verify normalization: g^R @ g^R = -1."""
+        """Verify normalization: g^R @ g^R = 1. -- stage 1.5"""
         pass
 
     def check_keldysh_relation(self):
-        """Verify g^K = g^R @ f - f @ g^A."""
+        """Verify g^K = g^R @ f - f @ g^A. -- stage 1.5"""
         pass
 
     # ========== String Representation ==========
 
     def __str__(self):
         """String representation showing state properties."""
-        try:
-            gap_history = self.get_gap_history()
-            gap_str = f"Gap(t_final) = {gap_history[-1]:.6f}"
-        except (ValueError, AttributeError, IndexError):
-            gap_str = "Gap: Not computed"
-
-        try:
-            current_history = self.get_current_history()
-            current_str = f"Current(t_final) = {current_history[-1]:.6f}"
-        except (ValueError, AttributeError, IndexError, TypeError):
-            current_str = "Current: Not implemented (Stage 2)"
+        gap_history = self.get_gap_history()
+        gap_str = f"Gap(t_final) = {gap_history[-1]:.6f}"
+        current_history = self.get_current_history()
+        current_str = f"Current(t_final) = {current_history[-1]:.6f}"
 
         return f"StateObject:\n  {gap_str}\n  {current_str}\n  Shape: {self.gr.data.shape if self.gr is not None else 'N/A'}"
 

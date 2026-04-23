@@ -236,6 +236,61 @@ class NambuKeldyshTensor:
                 pauli_matrix[1,0]*self.data[0,1,...] +
                 pauli_matrix[1,1]*self.data[1,1,...])
 
+    # ========== Sliding Window Update ==========
+
+    def update_entries(self, new_upper_row, new_lower_column, new_diagonal):
+        """
+        Update matrix using sliding window: add new timestep, remove oldest.
+
+        Efficiently shifts data using np.roll and overwrites last entries.
+        Maintains (2, 2, Nt, Nt) shape by removing oldest and adding newest time.
+
+        Args:
+            new_upper_row: New row entries g[Nt-1, j] for j < Nt
+                          Shape: (2, 2, Nt) or NambuKeldyshTensor
+            new_lower_column: New column entries g[i, Nt-1] for i < Nt
+                             Shape: (2, 2, Nt) or NambuKeldyshTensor
+            new_diagonal: New diagonal element g[Nt-1, Nt-1]
+                         Shape: (2, 2) or NambuKeldyshTensor
+
+        Updates:
+            self.data: Modified in-place, oldest time removed, newest added
+        """
+        Nt = self.data.shape[2]
+
+        # Extract raw arrays from inputs
+        if isinstance(new_upper_row, NambuKeldyshTensor):
+            upper_row_data = new_upper_row.data[:, :, 0, :Nt] if new_upper_row.data.ndim == 4 else new_upper_row.data
+        else:
+            upper_row_data = new_upper_row
+
+        if isinstance(new_lower_column, NambuKeldyshTensor):
+            lower_col_data = new_lower_column.data[:, :, :Nt, 0] if new_lower_column.data.ndim == 4 else new_lower_column.data
+        else:
+            lower_col_data = new_lower_column
+
+        if isinstance(new_diagonal, NambuKeldyshTensor):
+            diag_data = new_diagonal.data[:, :, 0, 0] if new_diagonal.data.ndim == 4 else new_diagonal.data
+        else:
+            diag_data = new_diagonal
+
+        # Roll data to remove oldest time (index 0) and make space at end
+        # Roll by -1 along both time axes to shift: [0,1,2,...,Nt-1] -> [1,2,...,Nt-1,?]
+        self.data = np.roll(self.data, shift=-1, axis=2)  # Shift along first time axis
+        self.data = np.roll(self.data, shift=-1, axis=3)  # Shift along second time axis
+
+        # Now overwrite last row (index Nt-1) with new data
+        self.data[:, :, Nt-1, :Nt-1] = upper_row_data[:, :, :Nt-1]
+
+        # Overwrite last column (index Nt-1) with new data
+        self.data[:, :, :Nt-1, Nt-1] = lower_col_data[:, :, :Nt-1]
+
+        # Overwrite diagonal (Nt-1, Nt-1) with new diagonal
+        self.data[:, :, Nt-1, Nt-1] = diag_data
+
+        # Update shape (should be unchanged, but good practice)
+        self.data_shape = self.data.shape
+
 
 def get_pauli_matrix(index = None) -> np.array:
     """A function returning the Pauli matrices or the whole list (if index is none)

@@ -19,32 +19,63 @@ class UsadelKeldyshEvolution:
         Initialize Usadel evolution solver.
 
         Args:
-            grid_parameters: dict with omega_sampling, cutoff, fine grids
+            grid_parameters: dict with omega_sampling, cutoff, time_sampling, time_duration
             system_parameters: dict with critical_temperature, eta, etc.
             optimization_parameters: solver settings
             sigma_scatterings: dict of scattering mechanisms and rates
         """
-        pass
+
+        # Generate time grid
+        self._generate_time_grid()
+        
+        # Generate omega grid from extended time domain
+        self._generate_omega_grid()
+
+
+
+        # Set eta with warning if too small
+        self.eta = system_parameters['eta']
+        recommended_eta = 10.0 / self.tmax
+        if self.eta < recommended_eta:
+            print(f"WARNING: eta = {self.eta:.4f} is smaller than recommended value {recommended_eta:.4f}")
+            print(f"         Recommended: eta >= 10/T_max = 10/{self.tmax:.2f}")
+            print(f"         Consider using larger T_max or increasing eta to avoid numerical issues.")
+
+
+        self.critical_temperature = system_parameters['critical_temperature']
+        self.temperature = system_parameters['temperature']
+
 
     # ========== Grid and Parameter Setup ==========
 
     @staticmethod
     def get_bcs_gap_constant() -> float:
-        """Return BCS gap constant: 2*exp(gamma_E)/pi."""
-        pass
+        """Return BCS gap constant: 2*exp(gamma_E)/pi.
+
+        Returns:
+            float: BCS gap constant ≈ 1.134
+        """
+        return 2.0 * np.exp(np.euler_gamma) / np.pi
 
     @staticmethod
     def get_bcs_ratio() -> float:
-        """Return Delta(0)/T_c ratio in BCS limit."""
-        pass
+        """Return Delta(0)/T_c ratio in BCS limit.
+
+        Returns:
+            float: BCS ratio ≈ 1.764
+        """
+        return 2.0 / UsadelKeldyshEvolution.get_bcs_gap_constant()
 
     def _get_BCS_coupling(self) -> float:
-        """Compute BCS coupling constant from critical temperature."""
-        pass
+        """Compute BCS coupling constant from critical temperature.
 
-    def _generate_sigma_objects(self):
-        """Create self-energy objects from scattering dictionary."""
-        pass
+        Uses the relation between BCS coupling λ and T_c for a fixed cutoff
+        in the clean s-wave BCS equation.
+
+        Returns:
+            float: BCS coupling constant λ
+        """
+        return 1.0 / np.log(UsadelKeldyshEvolution.get_bcs_gap_constant() * self.energy_cutoff / self.critical_temperature)
 
     def _generate_time_grid(self):
         """
@@ -55,7 +86,60 @@ class UsadelKeldyshEvolution:
 
         Called by: __init__
         """
-        pass
+        # Extract time grid parameters (support multiple naming conventions)
+        if 'time_sampling' in self.grid_parameters:
+            self.N_t = self.grid_parameters['time_sampling']
+        elif 'N_t' in self.grid_parameters:
+            self.N_t = self.grid_parameters['N_t']
+        else:
+            raise ValueError("grid_parameters must contain 'time_sampling' or 'N_t'")
+
+        if 'time_duration' in self.grid_parameters:
+            self.t_max = self.grid_parameters['time_duration']
+        elif 't_max' in self.grid_parameters:
+            self.t_max = self.grid_parameters['t_max']
+        else:
+            raise ValueError("grid_parameters must contain 'time_duration' or 't_max'")
+
+        # Compute time step
+        self.delta_t = self.t_max / (self.N_t - 1)
+
+        # Generate time grid
+        self.time_grid = np.linspace(-self.t_max, 0, self.N_t)
+
+
+    def _generate_omega_grid(self):
+        """
+        Generate angular frequency (omega) grid from Fourier transform of extended time grid.
+
+        Extends current time grid [-T_max, 0] to [-T_max, +T_max], then computes
+        angular frequency grid using FFT convention e^{i omega t}.
+
+        Stores:
+            self.omega_grid: Angular frequency array
+            self.energy_cutoff: Maximum omega value
+        """
+        # Extend time grid from [-T_max, 0] to [-T_max, +T_max]
+        # Use 2*ntpoints - 1 to avoid duplicating t=0
+        n_extended = 2 * self.ntpoints - 1
+        extended_time_grid = np.linspace(-self.tmax, self.tmax, n_extended)
+        dt_extended = extended_time_grid[1] - extended_time_grid[0]
+
+        # Get frequency bins from FFT
+        # np.fft.fftfreq gives frequencies f in cycles per unit time
+        # Convention: F(f) = Σ f(t) * e^{-2πi f t}
+        freq = np.fft.fftfreq(n_extended, d=dt_extended)
+
+        # Convert to angular frequency: ω = 2π*f
+        # This gives us the correct convention e^{i ω t}
+        omega = 2 * np.pi * freq
+
+        # Shift to center around 0 (zero frequency in middle)
+        self.omega_grid = np.fft.fftshift(omega)
+
+        # Energy cutoff is the maximum absolute omega value (Nyquist frequency)
+        self.energy_cutoff = np.max(np.abs(self.omega_grid))
+
 
     # ========== Initial State Generation ==========
 

@@ -5,6 +5,8 @@ Handles time evolution of retarded Green's function g^R and distribution functio
 
 import numpy as np
 from nambu_keldysh_class import NambuKeldyshTensor
+from state_object_class import StateObject
+from equilibrium_class import EquilibriumSolver
 import self_energy_class
 
 
@@ -24,23 +26,25 @@ class UsadelKeldyshEvolution:
             optimization_parameters: solver settings
             sigma_scatterings: dict of scattering mechanisms and rates
         """
+        # Store parameters
+        self.grid_parameters = grid_parameters
+        self.system_parameters = system_parameters
+        self.optimization_parameters = optimization_parameters
+        self.sigma_scatterings = sigma_scatterings
 
         # Generate time grid
         self._generate_time_grid()
-        
+
         # Generate omega grid from extended time domain
         self._generate_omega_grid()
 
-
-
         # Set eta with warning if too small
         self.eta = system_parameters['eta']
-        recommended_eta = 10.0 / self.tmax
+        recommended_eta = 5.0 / self.tmax
         if self.eta < recommended_eta:
             print(f"WARNING: eta = {self.eta:.4f} is smaller than recommended value {recommended_eta:.4f}")
             print(f"         Recommended: eta >= 10/T_max = 10/{self.tmax:.2f}")
             print(f"         Consider using larger T_max or increasing eta to avoid numerical issues.")
-
 
         self.critical_temperature = system_parameters['critical_temperature']
         self.temperature = system_parameters['temperature']
@@ -88,24 +92,24 @@ class UsadelKeldyshEvolution:
         """
         # Extract time grid parameters (support multiple naming conventions)
         if 'time_sampling' in self.grid_parameters:
-            self.N_t = self.grid_parameters['time_sampling']
-        elif 'N_t' in self.grid_parameters:
-            self.N_t = self.grid_parameters['N_t']
+            self.ntpoints = self.grid_parameters['time_sampling']
+        elif 'n_tpoints' in self.grid_parameters:
+            self.ntpoints = self.grid_parameters['n_tpoints']
         else:
-            raise ValueError("grid_parameters must contain 'time_sampling' or 'N_t'")
+            raise ValueError("grid_parameters must contain 'time_sampling' or 'n_tpoints'")
 
         if 'time_duration' in self.grid_parameters:
-            self.t_max = self.grid_parameters['time_duration']
+            self.tmax = self.grid_parameters['time_duration']
         elif 't_max' in self.grid_parameters:
-            self.t_max = self.grid_parameters['t_max']
+            self.tmax = self.grid_parameters['t_max']
         else:
             raise ValueError("grid_parameters must contain 'time_duration' or 't_max'")
 
         # Compute time step
-        self.delta_t = self.t_max / (self.N_t - 1)
+        self.delta_t = self.tmax / (self.ntpoints - 1)
 
         # Generate time grid
-        self.time_grid = np.linspace(-self.t_max, 0, self.N_t)
+        self.time_grid = np.linspace(-self.tmax, 0, self.ntpoints)
 
 
     def _generate_omega_grid(self):
@@ -143,22 +147,63 @@ class UsadelKeldyshEvolution:
 
     # ========== Initial State Generation ==========
 
-    def _generate_initial_state(self):
+    def generate_initial_state(self, Q=0.0, gr0=None):
         """
-        Generate initial state from equilibrium and truncate for t,t' < 0.
+        Generate initial state from equilibrium for t,t' < 0.
 
         Steps:
-        1. Call equilibrium_solver.compute_self_cons_equilibrium() to get equilibrium gr, gk
-        2. Truncate to only t,t' < 0 time indices
-        3. Construct StateObject with initial time slices
+        1. Create EquilibriumSolver object
+        2. Compute equilibrium gr and gk in frequency domain
+        3. Fourier transform to two-time representation (only t,t' < 0)
+        4. Construct and return StateObject with equilibrium data
+
+        Args:
+            Q: Phase gradient (default 0)
+            gr0: Initial guess for equilibrium gr (optional)
 
         Returns:
             StateObject with equilibrium data for t < 0
 
         Calls:
-            - Equilibrium_class.compute_self_cons_equilibrium()
+            - EquilibriumSolver.compute_equilibrium_gr()
+            - EquilibriumSolver.fourier_transform_to_two_time()
         """
-        pass
+        # Create equilibrium solver with current grid parameters
+        # Need to add omega_grid to grid_parameters for equilibrium solver
+        grid_params_with_omega = self.grid_parameters.copy()
+        grid_params_with_omega['omega_grid'] = self.omega_grid
+        grid_params_with_omega['energy_cutoff'] = self.energy_cutoff
+
+        equilibrium_solver = EquilibriumSolver(
+            grid_params_with_omega,
+            self.system_parameters,
+            self.optimization_parameters,
+            self.sigma_scatterings
+        )
+
+        # Compute equilibrium Green's functions in frequency domain
+        gr_eq, gk_eq = equilibrium_solver.compute_equilibrium_gr(
+            temperature=self.temperature,
+            Q=Q,
+            gr0=gr0,
+            compute_gk=True
+        )
+
+        # Transform to two-time representation (returns only t,t' < 0)
+        gr_two_time, gk_two_time = equilibrium_solver.fourier_transform_to_two_time(gr_eq, gk_eq)
+
+        # Get BCS coupling constant for StateObject
+        bcs_coupling = self._get_BCS_coupling()
+
+        # Create and return StateObject
+        initial_state = StateObject(
+            gr=gr_two_time,
+            gk=gk_two_time,
+            bcs_coupling_constant=bcs_coupling,
+            grid_params=self.grid_parameters
+        )
+
+        return initial_state
 
     # ========== Hamiltonian Construction ==========
 
@@ -178,57 +223,194 @@ class UsadelKeldyshEvolution:
 
     # ========== Thermal Distributions ==========
 
-    def _get_thermal_occupation(self, temperature):
+    def get_thermal_occupation(self, temperature):
         """
-        Generate equilibrium Fermi-Dirac distribution function.
+        Generate thermal occupation function in two-time representation.
+
+        Uses analytic form: f(τ) = 2πi T / sinh(π τ T)
+        Converts from f(τ = t-t') to f(t,t') and stores in self.thermal_dist
 
         Args:
             temperature: Temperature in energy units
 
         Returns:
-            f(omega) = tanh(omega / 2T) as NambuKeldyshTensor
+            None (stores result in self.thermal_dist)
         """
-        pass
+        # Create tau grid spanning from -tmax to tmax
+        # For times t,t' in [-tmax, 0], tau = t - t' ranges from -tmax to tmax
+        n_tau = 2 * self.ntpoints - 1
+        tau_grid = np.linspace(-self.tmax, self.tmax, n_tau)
+        dtau = tau_grid[1] - tau_grid[0]
+
+        # Compute f(τ) = 2πi T / sinh(π τ T) for all tau values
+        # Add small regularization to avoid division by zero at tau=0
+        eps = 1e-12
+        f_tau = 2.0 * np.pi * 1j * temperature / np.sinh(np.pi * (tau_grid + eps) * temperature) #! This will create numerical problems, should find a way to deal with it.
+
+        # Convert from f(τ) to f(t,t') for times t,t' < 0
+        # Create meshgrid of time values (only for negative times)
+        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
+
+        # Compute tau = t_i - t_j for all pairs
+        tau_matrix = t_i - t_j
+
+        # Find closest tau index for each (t,t') pair
+        # tau_grid starts at -tmax, so index 0 corresponds to tau = -tmax
+        tau_idx_matrix = np.round((tau_matrix + self.tmax) / dtau).astype(int)
+
+        # Create mask for valid indices
+        valid_mask = (tau_idx_matrix >= 0) & (tau_idx_matrix < n_tau)
+
+        # Initialize f(t,t') array
+        f_tt = np.zeros((self.ntpoints, self.ntpoints), dtype=complex)
+
+        # Fill f(t,t') using advanced indexing (vectorized)
+        f_tt[valid_mask] = f_tau[tau_idx_matrix[valid_mask]]
+
+        # Store in self.thermal_dist
+        self.thermal_dist = f_tt
 
     # ========== Real-Time Evolution ==========
 
-    def _evolve_gr_by_one_timestep(self, state, time_index, external_field=None):
+    def _evolve_gr_by_one_timestep(self, state, external_field=None):
         """
         Evolve retarded Green's function gr by one timestep.
 
-        Computes gr at new timestep from current state data.
+        Computes g^R(t_{time_index}, t_j) for all j < time_index using the
+        discretized Usadel equation (without A(t) terms).
+
+        Update equation:
+        g^R_{i+1,j} = g^R_{ij} + τ_3 Δt Δ_i g^R_{ij} + (η Δt / 2) τ_3² g^R_{ij}
+                      + τ_3 (g^R_{ij} - g^R_{i,j-1}) τ_3
+                      + τ_3 Δt g^R_{ij} Δ_j + (η Δt / 2) τ_3 g^R_{ij} τ_3
 
         Args:
             state: StateObject with current gr data
-            time_index: Current time index
-            external_field: Optional external perturbation
+            time_index: New time index to compute (i+1 in equations)
+            external_field: Optional external perturbation (not used)
 
         Returns:
-            new_gr: Updated retarded Green's function at next timestep
+            new_gr_row: List of NambuKeldyshTensor objects for g^R(t_new, t_j)
 
         Called by:
             - _evolve_state_by_one_timestep()
         """
-        pass
+        # Current time index (i in the equations)
 
-    def _evolve_gk_by_one_timestep(self, state, time_index, external_field=None):
+        # Extract gap history
+        gap_history = state.get_gap_history()
+
+        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_index=1) +  NambuKeldyshTensor(np.imag(gap_history), pauli_index=2)
+        # Create τ_3 Pauli matrix as NambuKeldyshTensor (identity in time)
+        tau3 = NambuKeldyshTensor(np.array([[1.0]], dtype=complex), pauli_index=3)
+
+        # Create array to store new row
+        new_gr_row = []
+
+        # Loop over all j from 0 to i to compute g^R_{i+1, j}
+        
+        # Extract g^R_{ij} as (2, 2) matrix and wrap as NambuKeldyshTensor
+        gr_last_column = state.gr[-1:-2]  # Shape (2, 2, 1, Nt) #TODO: append a zero at the end of this list.
+        gr_difference = state.gr.gradient(axis = 1) #TODO implement the gradient of a nambu object by differentiating w.r.t. selected axis.
+        # Compute update equation terms
+        # Term 1: τ_3 Δt Δ_i g^R_{ij}
+        term1 = -1j * gap_tensor[-1:-2] * gr_last_column 
+
+        # Term 2: (η Δt / 2) τ_3² g^R_{ij} = (η Δt / 2) g^R_{ij}
+        # Since τ_3² = I
+        term2 = gr_last_column * (self.eta) * 1j
+
+        # Term 3: τ_3 (g^R_{ij} - g^R_{i,j-1}) τ_3
+        term3 = (gr_difference/self.delta_t) * tau3 * 1j
+
+        # Term 4: τ_3 Δt g^R_{ij} Δ_j
+        term4 = gr_last_column * gap_tensor * 1j
+
+        # Term 5: (η Δt / 2) τ_3 g^R_{ij} τ_3
+        term5 = - gr_ij * tau3 * (self.eta) * 1j #TODO: check the minus sign
+
+        # Combine all terms: g^R_{i+1,j} = g^R_{ij} + sum of terms
+        gr_new = gr_ij - 1j * tau_3 * (term1 + term2 + term3 + term4 + term5) * self.delta_t
+
+        gr_diagonal_new = tau_3 * gr_last_column[-1] * tau_3 #* basically stays constant if tau_3 only
+
+        return gr_new, gr_diagonal_new
+
+    def _evolve_gk_by_one_timestep(self, state, external_field=None):
         """
         Evolve Keldysh Green's function gk by one timestep.
 
-        Computes gk at new timestep from current state data.
+        Computes g^K(t_{i+1}, t_j) using the discretized Usadel equation
+        with Dynes self-energy (without A(t) terms).
+
+        Update equation (using η instead of η/2):
+        g^K_{i+1,j} = g^K_{ij} - i τ_3 Δt [RHS terms including thermal self-energy]
 
         Args:
-            state: StateObject with current gk data
-            time_index: Current time index
-            external_field: Optional external perturbation
+            state: StateObject with current gk and gr data
+            external_field: Optional external perturbation (not used)
 
         Returns:
-            new_gk: Updated Keldysh Green's function at next timestep
+            gk_new: New row of g^K
+            gk_diagonal_new: New diagonal element
 
         Called by:
             - _evolve_state_by_one_timestep()
         """
-        pass
+        # Extract gap history and create gap tensor
+        gap_history = state.get_gap_history()
+        gap_tensor = (NambuKeldyshTensor(np.real(gap_history), pauli_index=1) +
+                     NambuKeldyshTensor(np.imag(gap_history), pauli_index=2))
+
+        # Create τ_3 Pauli matrix
+        tau3 = NambuKeldyshTensor(np.array([[1.0]], dtype=complex), pauli_index=3)
+
+        # Extract last row of g^K
+        gk_last_column = state.gk[-1:-2]  # Shape (2, 2, 1, Nt)
+
+        # Compute gradient in t' direction
+        gk_difference = state.gk.gradient(axis=1)
+
+        # Compute g^A = -involution(g^R)
+        ga = -state.gr.involution()
+
+        gr_last_column = state.gr[-1:-2]
+        ga_last_row = ga[:, -1:-2]
+
+
+        # Term 1: i Δ_i g^K_{ij}
+        term1 = -1j * gap_tensor[-1:-2] * gk_last_column
+
+        # Term 2: -iη τ_3 g^K_{ij}
+        term2 = 1j * self.eta * tau3 * gk_last_column
+
+        # Term 3: -i (g^K_{ij} - g^K_{i,j-1})/Δt τ_3
+        term3 = 1j * (gk_difference / self.delta_t) * tau3
+
+        # Term 4: -i g^K_{ij} Δ_j
+        term4 = 1j * gk_last_column * gap_tensor
+
+        # Term 5: -iη g^K_{ij} τ_3
+        term5 = 1j * self.eta * gk_last_column @ tau3
+
+        # Term 6: 2iη Δt Σ_k F_{i,k} τ_3 g^A_{k,j}
+        # Convolution: sum over k from 0 to j of F[i,k] * g^A[k,j]
+        # F is thermal_dist (Nt x Nt), extract F[i, :] and convolve with g^A[:, j]
+        F_row = self.thermal_dist[-1, :]  # F[i, k] for last time i
+        term6 = 2 * self.eta * 1j * self.delta_t * self.thermal_dist @ ga_last_row  # Placeholder
+
+        # Term 7: -2iη Δt Σ_k g^R_{i,k} F_{k,j} τ_3
+        # Convolution: sum over k from 0 to i of g^R[i,k] * F[k,j]
+        term7 = -2 * self.eta * 1j * self.delta_t * gr_last_column @ self.thermal_dist 
+
+        # Combine all terms (excluding convolutions for now - marked TODO)
+        gk_new = gk_last_column - 1j * tau3 @ (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
+
+        # Diagonal element
+        gk_diagonal_new = tau3 @ gk_last_column[-1] @ tau3
+
+
+        return gk_new, gk_diagonal_new
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):
         """

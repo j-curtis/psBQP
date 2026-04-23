@@ -13,21 +13,47 @@ class StateObject:
     Stores Green's functions and derived quantities.
     """
 
-    def __init__(self, gr=None, gk=None):
+    def __init__(self, gr=None, gk=None, grid_params=None):
         """
-        Initialize state object with Green's functions.
+        Initialize state object with Green's functions and grid parameters.
 
         Args:
             gr: Retarded Green's function g^R (NambuKeldyshTensor)
             gk: Keldysh Green's function g^K (NambuKeldyshTensor)
+            grid_params: Dictionary with grid parameters
         """
-        pass
+        self.gr = gr
+        self.gk = gk
+
+        # Extract grid parameters
+        if grid_params is not None:
+            self.cutoff = grid_params['cutoff']
+            self.T_max = grid_params.get('time_duration', grid_params.get('T_max'))
+
+            # Compute dt from time grid
+            if 'dt' in grid_params:
+                self.dt = grid_params['dt']
+            elif 'time_sampling' in grid_params and 'time_duration' in grid_params:
+                self.dt = grid_params['time_duration'] / (grid_params['time_sampling'] - 1)
+            else:
+                self.dt = None
+        else:
+            self.cutoff = None
+            self.T_max = None
+            self.dt = None
 
     # ========== Green's Function Relations ==========
 
     def _r2a(self):
-        """Compute advanced Green's function: g^A = -(g^R)^†."""
-        pass
+        """
+        Compute advanced Green's function from retarded.
+
+        Uses involution: g^A = -(g^R)^†
+
+        Returns:
+            NambuKeldyshTensor: Advanced Green's function g^A
+        """
+        return -self.gr.involution()
 
     # ========== State Properties ==========
 
@@ -36,14 +62,10 @@ class StateObject:
         pass
 
     def get_current(self, Q=None):
-        """Compute supercurrent."""
+        """Compute total current."""
         pass
 
     # ========== Utilities ==========
-
-    def copy(self):
-        """Create deep copy of state."""
-        pass
 
     def _update_state_object(self, new_gr, new_gk, time_index):
         """
@@ -71,26 +93,14 @@ class StateObject:
         """Verify g^K = g^R @ f - f @ g^A."""
         pass
 
-    # ========== I/O Methods ==========
-
-    def save(self, filepath):
-        """Save state to file."""
-        pass
-
-    @staticmethod
-    def load(filepath):
-        """Load state from file."""
-        pass
-
     # ========== String Representation ==========
 
     def __str__(self):
         """String representation showing state properties."""
-        pass
+        gap = self.get_gap()
+        current = self.get_current()
 
-    def __repr__(self):
-        """Detailed representation."""
-        pass
+        return f"Current gap is {gap}\nCurrent current is {current}"
 
     # ========== Cleanup ==========
 

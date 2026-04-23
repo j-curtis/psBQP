@@ -203,6 +203,3 @@ class UsadelKeldyshEvolution:
         """
         pass
 
-    def _calc_dtQ_prefactor_new(self, gr, temperature):
-        """Compute prefactor for dQ/dt equation."""
-        pass

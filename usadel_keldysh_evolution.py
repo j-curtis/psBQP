@@ -295,27 +295,27 @@ class UsadelKeldyshEvolution:
         # Extract gap history
         gap_history = state.get_gap_history()
 
-        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=1) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=2)
+
+        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
         # Create τ_3 Pauli matrix as NambuKeldyshTensor (identity in time)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
         # Extract g^R_{ij} as (2, 2) matrix and wrap as NambuKeldyshTensor
-        gr_last_row = state.gr[-2:-1]  # Shape (2, 2, 1, Nt)
-        gr_difference = state.gr.gradient(axis=1)
+        gr_last_row = state.gr[-1:,:]  # Shape (2, 2, 1, Nt)
+        gr_difference = state.gr[-1:].gradient(axis=1)
 
-        # Compute update equation terms
+        term1 = -1j * gap_tensor[-1] * gr_last_row
 
-        term1 = -1j * gap_tensor[-2:-1] * gr_last_row
+        term2 = tau3 * (self.eta) * 1j * gr_last_row 
 
-        term2 = tau3 *gr_last_row * (self.eta) * 1j
-
-        term3 = (gr_difference[-2:-1] / self.delta_t) * tau3 * 1j
+        term3 = (gr_difference / self.delta_t) * tau3 * 1j
 
         term4 = gr_last_row * gap_tensor * 1j
 
         term5 = -gr_last_row * tau3 * (self.eta) * 1j
 
-        gr_new = gr_last_row - 1j * tau3 * (term1 + term2 + term3 + term4 + term5) * self.delta_t
+        gr_new = gr_last_row + 1j * tau3 * self.delta_t * (term1 + term2 + term3 + term4 + term5) 
+        #print(np.max(np.abs((gr_new - gr_last_row).data)))
 
         # Diagonal element: basically stays constant for tau_3 only Hamiltonian
         gr_diagonal_new = tau3 * gr_last_row[-1, -1] * tau3
@@ -346,7 +346,7 @@ class UsadelKeldyshEvolution:
 
         # Extract gap history and create gap tensor
         gap_history = state.get_gap_history()
-        gap_tensor = (NambuKeldyshTensor(np.real(gap_history), pauli_channel=1) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=2))
+        gap_tensor = (NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1))
 
         #TODO: in future implementation we should just call sigma_K directly for the convolution and sigma_K might have additional terms! 
 
@@ -354,7 +354,7 @@ class UsadelKeldyshEvolution:
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
         # Extract last row of g^K
-        gk_last_row = state.gk[-2:-1]  # Shape (2, 2, 1, Nt)
+        gk_last_row = state.gk[-1:]  # Shape (2, 2, 1, Nt)
 
         # Compute gradient in t' direction
         gk_difference = state.gk.gradient(axis=1)
@@ -362,34 +362,33 @@ class UsadelKeldyshEvolution:
         # Compute g^A = -involution(g^R)
         ga = state._r2a()
 
-        gr_last_row = state.gr[-2:-1]
-        ga_last_column = ga[:,-2:-1]  # Shape (2, 2, 1, Nt)
+        gr_last_row = state.gr[-1:]
+        ga_last_column = ga[:,-1:]  # Shape (2, 2, 1, Nt)
 
-        term1 = -1j * gap_tensor[-2:-1] * gk_last_row
+        term1 = -1j * gap_tensor[-1:] * gk_last_row
 
         term2 = 1j * self.eta * tau3 * gk_last_row
 
-        term3 = 1j * (gk_difference[-2:-1] / self.delta_t) * tau3
+        term3 = 1j * (gk_difference[-1:] / self.delta_t) * tau3
 
         term4 = 1j * gk_last_row * gap_tensor
 
         term5 = 1j * self.eta * gk_last_row * tau3
 
-        term6 = + 2 * 1j * self.eta * tau3 * self.thermal_dist @ ga_last_column
+        term6 = + 2 * 1j * self.eta * tau3 * self.thermal_dist @ ga_last_column * self.delta_t
 
-        term7 = - 2 * 1j * self.eta * gr_last_row @ self.thermal_dist * tau3
+        term7 = - 2 * 1j * self.eta * gr_last_row @ self.thermal_dist * tau3 * self.delta_t
 
         # Combine all terms
         gk_new = gk_last_row - 1j * tau3 * (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
 
         gk_new_column = tau3 * gk_last_row.complete_transpose().conj() * tau3
 
-        gk_i_ip1 = gk_new_column[-2:-1]
+        gk_i_ip1 = gk_new_column[-1:]
 
         # Diagonal element
-        gk_diagonal_new = 1
 
-        term1_diag = -1j * gap_tensor[-2:-1] * gk_i_ip1
+        term1_diag = -1j * gap_tensor[-1:] * gk_i_ip1
 
         term2_diag = 1j * self.eta * tau3 * gk_i_ip1
 
@@ -399,12 +398,14 @@ class UsadelKeldyshEvolution:
 
         term5_diag = 1j * self.eta * gk_i_ip1 * tau3
 
-        term6_diag = - 2 * 1j * self.eta * tau3 * self.thermal_dist[-2:-1, :] @ ga_last_column
+        term6_diag = - 2 * 1j * self.eta * tau3 * self.thermal_dist[-1:, :] @ ga_last_column * self.delta_t
 
-        term7_diag = + 2 * 1j * self.eta  * gr_last_row @ self.thermal_dist[:,-2:-1] * tau3
+        term7_diag = + 2 * 1j * self.eta  * gr_last_row @ self.thermal_dist[:,-1:] * tau3 * self.delta_t
 
         gk_diagonal_new = gk_i_ip1 - 1j * tau3 * self.delta_t * (term1_diag + term2_diag + term3_diag + term4_diag + term5_diag + term6_diag + term7_diag)
 
+        gk_diagonal_new = gk_last_row
+        
         return gk_new, gk_diagonal_new[-1,-1]
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):

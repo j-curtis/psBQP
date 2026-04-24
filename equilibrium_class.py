@@ -141,17 +141,23 @@ class EquilibriumSolver:
         FT is done on the full time grid [-T_max, T_max] inferred from omega grid.
         Returns only the part where t < 0 and t' < 0.
 
+        For g^R, applies causality constraint: g^R(t,t') = g^R(t,t') * θ(t-t')
+
         Args:
             gr_eq: Equilibrium retarded Green's function in frequency domain (NambuTensor)
             gk_eq: Optional equilibrium Keldysh Green's function in frequency domain (NambuTensor)
 
         Returns:
             gr_two_time: Retarded Green's function as NambuKeldyshTensor (2, 2, N_t, N_t)
-                        where N_t corresponds to times t < 0
+                        where N_t corresponds to times t < 0, with causality enforced
             gk_two_time: Keldysh Green's function as NambuKeldyshTensor (if gk_eq provided)
         """
         # Transform g^R
         gr_two_time = self._omega_to_two_time(gr_eq)
+
+        # Apply causality constraint: g^R(t,t') = 0 for t < t'
+        # This is θ(t-t') which zeros the upper triangle
+        self._apply_causality(gr_two_time)
 
         if gk_eq is None:
             return gr_two_time
@@ -160,6 +166,29 @@ class EquilibriumSolver:
         gk_two_time = self._omega_to_two_time(gk_eq)
 
         return gr_two_time, gk_two_time
+
+    def _apply_causality(self, gr_two_time):
+        """
+        Apply causality constraint to retarded Green's function.
+
+        Enforces g^R(t,t') = g^R(t,t') * θ(t-t') by zeroing upper triangle.
+        In matrix form with indices [i,j], this means g[i,j] = 0 for i < j.
+
+        Modifies gr_two_time in-place.
+
+        Args:
+            gr_two_time: Retarded Green's function (NambuKeldyshTensor, shape (2,2,Nt,Nt))
+        """
+        # Get time grid size
+        Nt = gr_two_time.data.shape[2]
+
+        # Create theta function mask: θ(t-t') = 1 for t >= t', 0 for t < t'
+        # In matrix indices: mask[i,j] = 1 for i >= j (lower triangle + diagonal)
+        theta_mask = np.tril(np.ones((Nt, Nt)))
+
+        # Apply mask to all Nambu components
+        # Broadcast: (2,2,Nt,Nt) * (Nt,Nt) -> (2,2,Nt,Nt)
+        gr_two_time.data *= theta_mask[np.newaxis, np.newaxis, :, :]
 
     def _omega_to_two_time(self, g_omega):
         """

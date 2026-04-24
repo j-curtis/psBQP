@@ -101,7 +101,7 @@ class StateObject:
         N_t = self.gr.data.shape[2]
 
         # g^R column is zero due to causality (retarded function vanishes for t < t')
-        gr_column_data = np.zeros((2, 2, N_t), dtype=complex)
+        gr_column_data = NambuKeldyshTensor(np.zeros((N_t), dtype=complex), pauli_channel=0)
 
         # g^K column computed from row using transformation: τ₃ @ (g^K_row)^† @ τ₃
         tau3 =  NambuKeldyshTensor(1.0, pauli_channel=3)

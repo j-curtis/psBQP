@@ -5,7 +5,7 @@ Handles time evolution of retarded Green's function g^R and distribution functio
 
 import numpy as np
 from tqdm import tqdm
-from nambu_keldysh_class import NambuKeldyshTensor
+from nambu_keldysh_class import NambuKeldyshTensor, get_pauli_matrix
 from state_object_class import StateObject
 from equilibrium_class import EquilibriumSolver
 import self_energy_class
@@ -38,7 +38,7 @@ class UsadelKeldyshEvolution:
 
         # Generate omega grid from extended time domain
         self._generate_omega_grid()
-
+        print(self.omega_grid)
         # Set eta with warning if too small
         self.eta = system_parameters['eta']
         recommended_eta = 5.0 / self.tmax
@@ -206,21 +206,6 @@ class UsadelKeldyshEvolution:
 
         return initial_state
 
-    # ========== Hamiltonian Construction ==========
-
-    def _construct_hr(self, Q: float, delta, sigma_r=None):
-        """
-        Construct retarded Hamiltonian h^R.
-
-        Args:
-            Q: Supercurrent phase gradient
-            delta: Superconducting gap (complex scalar)
-            sigma_r: Retarded self-energy (NambuKeldyshTensor or None)
-
-        Returns:
-            h^R = (omega - Q)*tau_3 - Delta*tau_y - Sigma^R + i*eta
-        """
-        pass
 
     # ========== Thermal Distributions ==========
 
@@ -301,39 +286,36 @@ class UsadelKeldyshEvolution:
         # Extract gap history
         gap_history = state.get_gap_history()
 
-        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_index=1) +  NambuKeldyshTensor(np.imag(gap_history), pauli_index=2)
+        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=1) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=2)
         # Create τ_3 Pauli matrix as NambuKeldyshTensor (identity in time)
-        tau3 = NambuKeldyshTensor(np.array([[1.0]], dtype=complex), pauli_index=3)
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
-        # Create array to store new row
-        new_gr_row = []
-
-        # Loop over all j from 0 to i to compute g^R_{i+1, j}
-        
         # Extract g^R_{ij} as (2, 2) matrix and wrap as NambuKeldyshTensor
-        gr_last_column = state.gr[-1:-2]  # Shape (2, 2, 1, Nt) #TODO: append a zero at the end of this list.
-        gr_difference = state.gr.gradient(axis = 1) #TODO implement the gradient of a nambu object by differentiating w.r.t. selected axis.
+        gr_last_column = state.gr[-2:-1]  # Shape (2, 2, 1, Nt)
+        gr_difference = state.gr.gradient(axis=1)
+
         # Compute update equation terms
         # Term 1: τ_3 Δt Δ_i g^R_{ij}
-        term1 = -1j * gap_tensor[-1:-2] * gr_last_column 
+        term1 = -1j * gap_tensor[-2:-1] * gr_last_column
 
         # Term 2: (η Δt / 2) τ_3² g^R_{ij} = (η Δt / 2) g^R_{ij}
         # Since τ_3² = I
         term2 = gr_last_column * (self.eta) * 1j
 
         # Term 3: τ_3 (g^R_{ij} - g^R_{i,j-1}) τ_3
-        term3 = (gr_difference/self.delta_t) * tau3 * 1j
+        term3 = (gr_difference[-2:-1] / self.delta_t) * tau3 * 1j
 
         # Term 4: τ_3 Δt g^R_{ij} Δ_j
         term4 = gr_last_column * gap_tensor * 1j
 
         # Term 5: (η Δt / 2) τ_3 g^R_{ij} τ_3
-        term5 = - gr_ij * tau3 * (self.eta) * 1j #TODO: check the minus sign
+        term5 = -gr_last_column * tau3 * (self.eta) * 1j
 
         # Combine all terms: g^R_{i+1,j} = g^R_{ij} + sum of terms
-        gr_new = gr_ij - 1j * tau_3 * (term1 + term2 + term3 + term4 + term5) * self.delta_t
+        gr_new = gr_last_column + (term1 + term2 + term3 + term4 + term5) * self.delta_t
 
-        gr_diagonal_new = tau_3 * gr_last_column[-1] * tau_3 #* basically stays constant if tau_3 only
+        # Diagonal element: basically stays constant for tau_3 only Hamiltonian
+        gr_diagonal_new = tau3 * gr_last_column[:, :, :, -1] * tau3
 
         return gr_new, gr_diagonal_new
 
@@ -360,14 +342,14 @@ class UsadelKeldyshEvolution:
         """
         # Extract gap history and create gap tensor
         gap_history = state.get_gap_history()
-        gap_tensor = (NambuKeldyshTensor(np.real(gap_history), pauli_index=1) +
-                     NambuKeldyshTensor(np.imag(gap_history), pauli_index=2))
+        gap_tensor = (NambuKeldyshTensor(np.real(gap_history), pauli_channel=1) +
+                     NambuKeldyshTensor(np.imag(gap_history), pauli_channel=2))
 
         # Create τ_3 Pauli matrix
-        tau3 = NambuKeldyshTensor(np.array([[1.0]], dtype=complex), pauli_index=3)
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
         # Extract last row of g^K
-        gk_last_column = state.gk[-1:-2]  # Shape (2, 2, 1, Nt)
+        gk_last_column = state.gk[-2:-1]  # Shape (2, 2, 1, Nt)
 
         # Compute gradient in t' direction
         gk_difference = state.gk.gradient(axis=1)
@@ -375,40 +357,40 @@ class UsadelKeldyshEvolution:
         # Compute g^A = -involution(g^R)
         ga = -state.gr.involution()
 
-        gr_last_column = state.gr[-1:-2]
-        ga_last_row = ga[:, -1:-2]
-
+        gr_last_column = state.gr[-2:-1]
+        ga_last_column = ga[-2:-1]  # Shape (2, 2, 1, Nt)
 
         # Term 1: i Δ_i g^K_{ij}
-        term1 = -1j * gap_tensor[-1:-2] * gk_last_column
+        term1 = -1j * gap_tensor[-2:-1] * gk_last_column
 
         # Term 2: -iη τ_3 g^K_{ij}
         term2 = 1j * self.eta * tau3 * gk_last_column
 
         # Term 3: -i (g^K_{ij} - g^K_{i,j-1})/Δt τ_3
-        term3 = 1j * (gk_difference / self.delta_t) * tau3
+        term3 = 1j * (gk_difference[-2:-1] / self.delta_t) * tau3
 
         # Term 4: -i g^K_{ij} Δ_j
         term4 = 1j * gk_last_column * gap_tensor
 
         # Term 5: -iη g^K_{ij} τ_3
-        term5 = 1j * self.eta * gk_last_column @ tau3
+        term5 = 1j * self.eta * gk_last_column * tau3
 
         # Term 6: 2iη Δt Σ_k F_{i,k} τ_3 g^A_{k,j}
         # Convolution: sum over k from 0 to j of F[i,k] * g^A[k,j]
         # F is thermal_dist (Nt x Nt), extract F[i, :] and convolve with g^A[:, j]
-        F_row = self.thermal_dist[-1, :]  # F[i, k] for last time i
-        term6 = 2 * self.eta * 1j * self.delta_t * self.thermal_dist @ ga_last_row  # Placeholder
+        # TODO: Implement proper convolution with thermal distribution
+        term6 = NambuKeldyshTensor(np.zeros_like(gk_last_column.data))
 
         # Term 7: -2iη Δt Σ_k g^R_{i,k} F_{k,j} τ_3
         # Convolution: sum over k from 0 to i of g^R[i,k] * F[k,j]
-        term7 = -2 * self.eta * 1j * self.delta_t * gr_last_column @ self.thermal_dist 
+        # TODO: Implement proper convolution with thermal distribution
+        term7 = NambuKeldyshTensor(np.zeros_like(gk_last_column.data))
 
-        # Combine all terms (excluding convolutions for now - marked TODO)
-        gk_new = gk_last_column - 1j * tau3 @ (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
+        # Combine all terms
+        gk_new = gk_last_column + (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
 
         # Diagonal element
-        gk_diagonal_new = gk_last_column[-1]
+        gk_diagonal_new = gk_last_column[:, :, :, -1]
         return gk_new, gk_diagonal_new
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):

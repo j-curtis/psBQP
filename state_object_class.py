@@ -4,7 +4,7 @@ Stores retarded Green's function, Keldysh Green's function, and all system prope
 """
 
 import numpy as np
-from nambu_keldysh_class import NambuKeldyshTensor
+from nambu_keldysh_class import NambuKeldyshTensor, get_pauli_matrix
 
 
 class StateObject:
@@ -104,7 +104,7 @@ class StateObject:
         gr_column = np.zeros((2, 2, N_t), dtype=complex)
 
         # g^K column computed from row using transformation: τ₃ @ (g^K_row)^† @ τ₃
-        tau3 = np.array([[1, 0], [0, -1]], dtype=complex)
+        tau3 = get_pauli_matrix(3)
 
         # Extract row data (handle both NambuKeldyshTensor and array inputs)
         if isinstance(new_gk_row, NambuKeldyshTensor):
@@ -113,10 +113,10 @@ class StateObject:
             gk_row_data = new_gk_row
 
         # Hermitian conjugate: transpose (2,2) Nambu indices and complex conjugate
-        gk_row_dag = gk_row.conj().transpose() 
+        gk_row_dag = np.conj(np.transpose(gk_row_data, axes=(1, 0) + tuple(range(2, gk_row_data.ndim))))
 
         # Apply τ₃ from left and right: τ₃ @ gk_row^† @ τ₃
-        gk_column = tau_3 * gk_row_dag * tau_3
+        gk_column = np.einsum('ij,...jk,kl->...il', tau3, gk_row_dag, tau3)
         #TODO: keep better track of rows and columns 
         # Update both Green's functions using update_entries
         self.gr.update_entries(new_gr_row, gr_column, new_gr_diag)

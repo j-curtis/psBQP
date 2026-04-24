@@ -77,7 +77,9 @@ class NambuKeldyshTensor:
         # Use letters starting from 'n' for extra dimensions
         extra_letters = string.ascii_lowercase[13:13+max_ndim]  # n, o, p, q, ...
 
-        self_indices = 'ij' + extra_letters[:max_ndim]
+        # Left operand (self) aligns from left, right operand (other) aligns from right
+        # This ensures v_{ijk} * A_{jlko} -> C_{ilko} and A_{ijko} * v_{jlo} -> C_{ilko}
+        self_indices = 'ij' + extra_letters[:self_ndim]
         other_indices = 'jm' + extra_letters[max_ndim - other_ndim:max_ndim]
         result_indices = 'im' + extra_letters[:max_ndim]
 
@@ -95,6 +97,7 @@ class NambuKeldyshTensor:
 
         Usage: scalar * A
         """
+
         if isinstance(other, (int, float, complex)):
             # Scalar multiplication is commutative
             return NambuKeldyshTensor(other * self.data)
@@ -184,6 +187,10 @@ class NambuKeldyshTensor:
         axes = (1, 0) + tuple(range(2, self.data.ndim))
         return NambuKeldyshTensor(np.transpose(self.data, axes=axes))
 
+    def dagger(self):
+        """Conjugate transpose."""
+        return self.conj().transpose()
+
     def complete_transpose(self):
         """
         Transpose both Nambu (0,1) and time (2,3) indices.
@@ -236,6 +243,46 @@ class NambuKeldyshTensor:
                 pauli_matrix[1,0]*self.data[0,1,...] +
                 pauli_matrix[1,1]*self.data[1,1,...])
 
+    # ========== Gradient Operations ==========
+
+    def gradient(self, axis=0):
+        """
+        Compute discrete gradient along specified axis (not counting Nambu indices).
+
+        Computes finite difference: data[..., i, ...] - data[..., i-1, ...]
+        The first entry along the differentiated axis is set to zero (no previous value).
+
+        Args:
+            axis: Which axis to differentiate along (0 or 1), referring to axes after Nambu (2,2)
+                  axis=0 -> differentiate along 3rd dimension (array index 2)
+                  axis=1 -> differentiate along 4th dimension (array index 3)
+
+        Returns:
+            NambuKeldyshTensor: Gradient with same shape as input
+
+        Example:
+            For shape (2, 2, Nt, Nt'):
+            - gradient(axis=0) computes ∂g/∂t
+            - gradient(axis=1) computes ∂g/∂t'
+        """
+        # Map user axis (0 or 1) to actual array axis (2 or 3)
+        actual_axis = axis + 2
+
+        # Compute difference: data[i] - data[i-1]
+        # Roll the array by 1 along the axis to get shifted version
+        shifted = np.roll(self.data, shift=1, axis=actual_axis)
+
+        # Compute gradient
+        gradient_data = self.data - shifted
+
+        # The first entry along this axis is invalid (wraps around from roll)
+        # Set it to zero since there's no previous value
+        slices = [slice(None)] * self.data.ndim
+        slices[actual_axis] = 0
+        gradient_data[tuple(slices)] = 0
+
+        return NambuKeldyshTensor(gradient_data)
+
     # ========== Sliding Window Update ==========
 
     def update_entries(self, new_upper_row, new_lower_column, new_diagonal):
@@ -280,10 +327,10 @@ class NambuKeldyshTensor:
         self.data = np.roll(self.data, shift=-1, axis=3)  # Shift along second time axis
 
         # Now overwrite last row (index Nt-1) with new data
-        self.data[:, :, Nt-1, :Nt-1] = upper_row_data[:, :, :Nt-1]
+        self.data[:, :, Nt-1, :Nt-1] = upper_row_data[:, :, 1:]
 
         # Overwrite last column (index Nt-1) with new data
-        self.data[:, :, :Nt-1, Nt-1] = lower_col_data[:, :, :Nt-1]
+        self.data[:, :, :Nt-1, Nt-1] = lower_col_data[:, :, 1:]
 
         # Overwrite diagonal (Nt-1, Nt-1) with new diagonal
         self.data[:, :, Nt-1, Nt-1] = diag_data

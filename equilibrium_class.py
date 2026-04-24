@@ -194,10 +194,10 @@ class EquilibriumSolver:
         tmax = dt * (n_omega - 1) / 2.0
         time_grid_full = np.linspace(-tmax, tmax, n_omega)
 
-        # Extract Pauli components from NambuTensor
+        # Extract Pauli components from NambuTensor using trace
         g_pauli = []
         for pauli_idx in range(4):
-            g_pauli.append(np.array(g_omega._get_pauli(pauli_idx)))
+            g_pauli.append(np.array(g_omega._trace(pauli_idx)))
 
         # Inverse Fourier transform for each Pauli component
         # Convention: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
@@ -252,7 +252,7 @@ class EquilibriumSolver:
         # Convert from Pauli components to NambuKeldyshTensor
         g_two_time = None
         for pauli_idx in range(4):
-            g_component = NambuKeldyshTensor(g_two_time_pauli[pauli_idx], pauli_index=pauli_idx)
+            g_component = NambuKeldyshTensor(g_two_time_pauli[pauli_idx], pauli_channel=pauli_idx)
             if g_two_time is None:
                 g_two_time = g_component
             else:

@@ -263,7 +263,7 @@ class UsadelKeldyshEvolution:
         f_tt[valid_mask] = f_tau[tau_idx_matrix[valid_mask]]
 
         # Store in self.thermal_dist
-        self.thermal_dist = f_tt
+        self.thermal_dist = NambuKeldyshTensor(f_tt, pauli_channel=0)
 
     # ========== Real-Time Evolution ==========
 
@@ -318,7 +318,7 @@ class UsadelKeldyshEvolution:
         gr_new = gr_last_row - 1j * tau3 * (term1 + term2 + term3 + term4 + term5) * self.delta_t
 
         # Diagonal element: basically stays constant for tau_3 only Hamiltonian
-        gr_diagonal_new = tau3 * gr_last_row[:, :, :, -1] * tau3
+        gr_diagonal_new = tau3 * gr_last_row[-1, -1] * tau3
 
         return gr_new, gr_diagonal_new
 
@@ -384,7 +384,7 @@ class UsadelKeldyshEvolution:
 
         gk_new_column = tau3 * gk_last_row.complete_transpose().conj() * tau3
 
-        gk_i_ip1 = gk_new_column[:, :, :, -1]
+        gk_i_ip1 = gk_new_column[-2:-1]
 
         # Diagonal element
         gk_diagonal_new = 1
@@ -399,13 +399,13 @@ class UsadelKeldyshEvolution:
 
         term5_diag = 1j * self.eta * gk_i_ip1 * tau3
 
-        term6_diag = - 2 * 1j * self.eta * tau3 * self.thermal_dist @ ga_last_column
+        term6_diag = - 2 * 1j * self.eta * tau3 * self.thermal_dist[-2:-1, :] @ ga_last_column
 
-        term7_diag = + 2 * 1j * self.eta  * gr_last_row @ self.thermal_dist * tau3
+        term7_diag = + 2 * 1j * self.eta  * gr_last_row @ self.thermal_dist[:,-2:-1] * tau3
 
         gk_diagonal_new = gk_i_ip1 - 1j * tau3 * self.delta_t * (term1_diag + term2_diag + term3_diag + term4_diag + term5_diag + term6_diag + term7_diag)
 
-        return gk_new, gk_diagonal_new
+        return gk_new, gk_diagonal_new[-1,-1]
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):
         """

@@ -164,8 +164,31 @@ class NambuKeldyshTensor:
         return NambuKeldyshTensor(np.negative(self.data))
 
     def __getitem__(self, index):
-        """Index into Nambu tensor along non-Nambu dimensions."""
-        return NambuKeldyshTensor(self.data[:, :, index])
+        """
+        Index into Nambu tensor along time dimensions.
+
+        Always preserves the first two Nambu dimensions by prepending [:, :].
+
+        Examples:
+            obj[i] - returns self.data[:, :, i]
+            obj[i, j] - returns self.data[:, :, i, j]
+            obj[:, i] - returns self.data[:, :, :, i]
+            obj[i, :] - returns self.data[:, :, i, :]
+        """
+        # Ensure index is a tuple
+        if not isinstance(index, tuple):
+            index = (index,)
+
+        # Always prepend [:, :] to preserve Nambu dimensions
+        full_index = (slice(None), slice(None)) + index
+        result = self.data[full_index]
+
+        # Wrap in NambuKeldyshTensor if result has (2,2) structure
+        if result.ndim >= 2 and result.shape[:2] == (2, 2):
+            return NambuKeldyshTensor(result)
+        else:
+            # Result doesn't have Nambu structure, return raw array
+            return result
 
     def __str__(self):
         """String representation showing Pauli decomposition."""

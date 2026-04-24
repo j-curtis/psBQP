@@ -101,7 +101,7 @@ class StateObject:
         N_t = self.gr.data.shape[2]
 
         # g^R column is zero due to causality (retarded function vanishes for t < t')
-        gr_column = np.zeros((2, 2, N_t), dtype=complex)
+        gr_column_data = np.zeros((2, 2, N_t), dtype=complex)
 
         # g^K column computed from row using transformation: τ₃ @ (g^K_row)^† @ τ₃
         tau3 =  NambuKeldyshTensor(1.0, pauli_channel=3)
@@ -112,8 +112,8 @@ class StateObject:
 
         gk_column_data  = tau3 * gk_row_data.conj().complete_transpose() * tau3
 
-        self.gr.update_entries(new_gr_row, gr_column, new_gr_diag)
-        self.gk.update_entries(new_gk_row, gk_column, new_gk_diag)
+        self.gr.update_entries(new_gr_row, gr_column_data, new_gr_diag)
+        self.gk.update_entries(new_gk_row, gk_column_data, new_gk_diag)
         
     # ========== Consistency Checks ==========
 

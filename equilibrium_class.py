@@ -51,7 +51,6 @@ class EquilibriumSolver:
             sigma_scatterings
         )
 
-
     def compute_equilibrium_gr(self, temperature, Q=0.0, gr0=None, compute_gk=False):
         """
         Compute equilibrium retarded Green's function.
@@ -72,10 +71,12 @@ class EquilibriumSolver:
                 gr_eq: Equilibrium retarded Green's function (old NambuTensor)
                 gk_eq: Equilibrium Keldysh Green's function (old NambuTensor)
         """
-        #TODO: later we can load the solution, no need to find it self-consistently
+        #TODO: later we can load the solution, no need to find it self-consistently, and we can just let the system thermalize given a self-energy term
         # Call the old equilibrium solver
         gr_eq, gap, current = self.usadel_solver._run_temperature_computation(Q=Q, T=temperature, gr0=gr0)
-
+        
+        print('Equilibrium gap is:', gap)
+        
         if not compute_gk:
             return gr_eq
 
@@ -165,7 +166,7 @@ class EquilibriumSolver:
         Transform single Green's function from frequency to two-time.
 
         Steps:
-        1. Infer full time grid [-T_max, T_max] from omega grid
+        1. Use time grid from grid_parameters and extend to [-T_max, T_max]
         2. Extract Pauli components from NambuTensor
         3. Inverse FFT from ω to τ with proper normalization on full grid
         4. Reshape from g(τ) to g(t,t') where g(t,t') = g(t-t')
@@ -179,46 +180,64 @@ class EquilibriumSolver:
             g_two_time: Green's function in two-time representation (NambuKeldyshTensor, shape (2, 2, N_t, N_t))
                        where N_t corresponds to times t < 0
         """
-        # Get omega grid from usadel solver
+        # Get time grid parameters from grid_parameters
+        if 'time_sampling' in self.grid_parameters:
+            ntpoints = self.grid_parameters['time_sampling']
+        elif 'n_tpoints' in self.grid_parameters:
+            ntpoints = self.grid_parameters['n_tpoints']
+        else:
+            raise ValueError("grid_parameters must contain 'time_sampling' or 'n_tpoints'")
+
+        if 'time_duration' in self.grid_parameters:
+            tmax = self.grid_parameters['time_duration']
+        elif 't_max' in self.grid_parameters:
+            tmax = self.grid_parameters['t_max']
+        else:
+            raise ValueError("grid_parameters must contain 'time_duration' or 't_max'")
+
+        # Compute time step (from UsadelKeldyshEvolution convention)
+        dt = tmax / (ntpoints - 1)
+
+        # Extend time grid from [-T_max, 0] to [-T_max, +T_max]
+        n_extended = 2 * ntpoints - 1
+        time_grid_full = np.linspace(-tmax, tmax, n_extended)
+
+        # Get omega grid from old usadel solver and verify consistency
         omega_grid = self.usadel_solver.w_arr
         n_omega = len(omega_grid)
-
-        # Infer full time grid from omega grid
-        # The omega grid corresponds to FFT of time grid from -T_max to T_max
-        d_omega = omega_grid[1] - omega_grid[0]
-
-        # From FFT relation: d_omega = 2π / (n_omega * dt)
-        dt = 2.0 * np.pi / (n_omega * d_omega)
-
-        # Full time grid spans from -T_max to T_max with n_omega points
-        tmax = dt * (n_omega - 1) / 2.0
-        time_grid_full = np.linspace(-tmax, tmax, n_omega)
 
         # Extract Pauli components from NambuTensor using trace
         g_pauli = []
         for pauli_idx in range(4):
-            g_pauli.append(np.array(g_omega._trace(pauli_idx)))
+            # factor of 2 because of Nambu convention and traces
+            g_pauli.append(np.array(g_omega._trace(pauli_idx))/2) 
+
+        # Compute d_omega for normalization
+        d_omega = omega_grid[1] - omega_grid[0]
 
         # Inverse Fourier transform for each Pauli component
         # Convention: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
         g_tau_pauli = []
 
         for pauli_component in g_pauli:
-            # Undo the fftshift to prepare for ifft
+            # Undo the fftshift to prepare for fft
             g_omega_unshifted = np.fft.ifftshift(pauli_component)
 
-            # Perform inverse FFT
-            g_tau_raw = np.fft.ifft(g_omega_unshifted)
+            # Physics: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
+            # Discretized: g(τ_k) ≈ Σ_n g(ω_n) e^{-iω_n τ_k} * Δω/(2π)
+            # numpy.fft.fft gives: Σ_n g(ω_n) e^{-2πi n k/N} (no 1/N factor)
+            g_tau_raw = np.fft.fft(g_omega_unshifted)
 
-            # Apply normalization: multiply by N * d_omega / (2π)
-            g_tau = g_tau_raw * n_omega * d_omega / (2.0 * np.pi)
+            # Apply normalization from the integral measure: Δω/(2π)
+            # Note: fft already gives the full sum, so just multiply by Δω/(2π)
+            g_tau = g_tau_raw * d_omega / (2.0 * np.pi)
 
             # Shift to get correct tau ordering
             g_tau_shifted = np.fft.fftshift(g_tau)
 
             g_tau_pauli.append(g_tau_shifted)
 
-        # Build g(t,t') on the full time grid, then truncate to t < 0, t' < 0
+        # Build g(t,t') on the full extended time grid, then truncate to t < 0, t' < 0
         # Create meshgrid of time values for all (t_i, t_j) pairs on FULL grid
         t_i, t_j = np.meshgrid(time_grid_full, time_grid_full, indexing='ij')
 
@@ -229,23 +248,21 @@ class EquilibriumSolver:
         # tau = 0 should be at the center of g_tau (index n_omega // 2)
         tau_idx_matrix = np.round(tau_matrix / dt).astype(int) + n_omega // 2
 
-        # Create mask for valid indices
+        # Create mask for valid indices (g_tau has n_omega points from FFT)
+        #TODO Understand this in detail
         valid_mask = (tau_idx_matrix >= 0) & (tau_idx_matrix < n_omega)
 
         g_two_time_pauli = []
         for g_tau in g_tau_pauli:
-            # Initialize g(t,t') array on FULL grid
-            g_tt_full = np.zeros((n_omega, n_omega), dtype=complex)
+            # Initialize g(t,t') array on FULL extended grid
+            g_tt_full = np.zeros((n_extended, n_extended), dtype=complex)
 
             # Fill g(t,t') using advanced indexing (vectorized)
             g_tt_full[valid_mask] = g_tau[tau_idx_matrix[valid_mask]]
 
             # Extract only the part where t < 0 and t' < 0
             # The full grid is [-T_max, T_max], we want only [-T_max, 0)
-            # This corresponds to indices [0, n_omega//2] (excluding the midpoint which is t=0)
-            # For n_omega points spanning [-T_max, T_max], the first n_omega//2 points are t < 0
-            n_negative = n_omega // 2  # Number of points with t < 0
-            g_tt_negative = g_tt_full[:n_negative, :n_negative]
+            g_tt_negative = g_tt_full[:ntpoints, :ntpoints]
 
             g_two_time_pauli.append(g_tt_negative)
 

@@ -84,7 +84,7 @@ class UsadelEvolution:
             float: Bcs coupling constant lambda
         """
         ### This is a useful function which gives the relation between BCS lambda and Tc for a fixed cutoff in the case of clean s-wave BCS equation 
-        return 1./jnp.log(UsadelEvolution.get_bcs_gap_constant()*self.cutoff/self.critical_temperature) 
+        return 1./jnp.log(UsadelEvolution.get_bcs_gap_constant()*self.cutoff/self.critical_temperature)* (2 *jnp.pi)
 
     def _integrate_over_omega(self,vals, axis):
         jitted_omega = jax.jit(copt.custom_jax_trapz, static_argnums = (2))
@@ -118,7 +118,7 @@ class UsadelEvolution:
     def _calc_gap(self, g_r, f):
         gk = g_r @ f + f @ g_r._involution()
         integrand = (gk)._trace('-') 
-        return -0.25*self.bcs_coupling * (self._integrate_over_omega((integrand),axis = 0)).real
+        return -0.25*self.bcs_coupling * (self._integrate_over_omega((integrand),axis = 0)).real/(2 *jnp.pi)
 
     def _hr2gr(self, hr, indicies = None):
         return -1.j* hr/jnp.sqrt( hr._determinant()) 

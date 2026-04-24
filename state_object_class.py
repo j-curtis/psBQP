@@ -104,21 +104,14 @@ class StateObject:
         gr_column = np.zeros((2, 2, N_t), dtype=complex)
 
         # g^K column computed from row using transformation: τ₃ @ (g^K_row)^† @ τ₃
-        tau3 = get_pauli_matrix(3)
+        tau3 =  NambuKeldyshTensor(1.0, pauli_channel=3)
 
         # Extract row data (handle both NambuKeldyshTensor and array inputs)
-        if isinstance(new_gk_row, NambuKeldyshTensor):
-            gk_row_data = new_gk_row.data[:, :, 0, :N_t] if new_gk_row.data.ndim == 4 else new_gk_row.data
-        else:
-            gk_row_data = new_gk_row
 
-        # Hermitian conjugate: transpose (2,2) Nambu indices and complex conjugate
-        gk_row_dag = np.conj(np.transpose(gk_row_data, axes=(1, 0) + tuple(range(2, gk_row_data.ndim))))
+        gk_row_data = new_gk_row
 
-        # Apply τ₃ from left and right: τ₃ @ gk_row^† @ τ₃
-        gk_column = np.einsum('ij,...jk,kl->...il', tau3, gk_row_dag, tau3)
-        #TODO: keep better track of rows and columns 
-        # Update both Green's functions using update_entries
+        gk_column_data  = tau3 * gk_row_data.conj().complete_transpose() * tau3
+
         self.gr.update_entries(new_gr_row, gr_column, new_gr_diag)
         self.gk.update_entries(new_gk_row, gk_column, new_gk_diag)
         

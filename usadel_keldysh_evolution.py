@@ -80,7 +80,7 @@ class UsadelKeldyshEvolution:
         Returns:
             float: BCS coupling constant λ
         """
-        return 1.0 / np.log(UsadelKeldyshEvolution.get_bcs_gap_constant() * self.energy_cutoff / self.critical_temperature)
+        return 1.0 / np.log(UsadelKeldyshEvolution.get_bcs_gap_constant() * self.energy_cutoff / self.critical_temperature) * (2.0 * np.pi)
 
     def _generate_time_grid(self):
         """
@@ -118,10 +118,10 @@ class UsadelKeldyshEvolution:
         Generate angular frequency (omega) grid from Fourier transform of extended time grid.
 
         Extends current time grid [-T_max, 0] to [-T_max, +T_max], then computes
-        angular frequency grid using FFT convention e^{i omega t}.
+        angular frequency grid consistent with FFT frequency bins.
 
         Stores:
-            self.omega_grid: Angular frequency array
+            self.omega_grid: Angular frequency array (centered, sorted)
             self.energy_cutoff: Maximum omega value
         """
         # Extend time grid from [-T_max, 0] to [-T_max, +T_max]
@@ -132,11 +132,10 @@ class UsadelKeldyshEvolution:
 
         # Get frequency bins from FFT
         # np.fft.fftfreq gives frequencies f in cycles per unit time
-        # Convention: F(f) = Σ f(t) * e^{-2πi f t}
+        # These are the frequency bins that correspond to fft/ifft operations
         freq = np.fft.fftfreq(n_extended, d=dt_extended)
 
         # Convert to angular frequency: ω = 2π*f
-        # This gives us the correct convention e^{i ω t}
         omega = 2 * np.pi * freq
 
         # Shift to center around 0 (zero frequency in middle)
@@ -229,10 +228,20 @@ class UsadelKeldyshEvolution:
         dtau = tau_grid[1] - tau_grid[0]
 
         # Compute f(τ) = 2πi T / sinh(π τ T) for all tau values
-        # Add small regularization to avoid division by zero at tau=0
-        eps = 1e-12
-        f_tau = 2.0 * np.pi * 1j * temperature / np.sinh(np.pi * (tau_grid + eps) * temperature) #! This will create numerical problems, should find a way to deal with it.
+        # The function has a singularity at τ=0, which we handle explicitly
+        f_tau = np.zeros(n_tau, dtype=complex)
 
+        # Find the index corresponding to τ=0
+        tau_zero_idx = n_tau // 2  # Center of the grid
+
+        # Compute f(τ) for all τ ≠ 0
+        mask = np.ones(n_tau, dtype=bool)
+        mask[tau_zero_idx] = False
+        f_tau[mask] = 2.0 * np.pi * 1j * temperature / np.sinh(np.pi * tau_grid[mask] * temperature)
+
+        # Set f(τ=0) = 0 explicitly (avoids singularity)
+        f_tau[tau_zero_idx] = 0.0
+        
         # Convert from f(τ) to f(t,t') for times t,t' < 0
         # Create meshgrid of time values (only for negative times)
         t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
@@ -258,7 +267,7 @@ class UsadelKeldyshEvolution:
 
     # ========== Real-Time Evolution ==========
 
-    def _compute_new_gr_column(self, state, external_field=None):
+    def _compute_new_gr_row(self, state, external_field=None):
         """
         Evolve retarded Green's function gr by one timestep.
 
@@ -291,35 +300,29 @@ class UsadelKeldyshEvolution:
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
         # Extract g^R_{ij} as (2, 2) matrix and wrap as NambuKeldyshTensor
-        gr_last_column = state.gr[-2:-1]  # Shape (2, 2, 1, Nt)
+        gr_last_row = state.gr[-2:-1]  # Shape (2, 2, 1, Nt)
         gr_difference = state.gr.gradient(axis=1)
 
         # Compute update equation terms
-        # Term 1: τ_3 Δt Δ_i g^R_{ij}
-        term1 = -1j * gap_tensor[-2:-1] * gr_last_column
 
-        # Term 2: (η Δt / 2) τ_3² g^R_{ij} = (η Δt / 2) g^R_{ij}
-        # Since τ_3² = I
-        term2 = gr_last_column * (self.eta) * 1j
+        term1 = -1j * gap_tensor[-2:-1] * gr_last_row
 
-        # Term 3: τ_3 (g^R_{ij} - g^R_{i,j-1}) τ_3
+        term2 = tau3 *gr_last_row * (self.eta) * 1j
+
         term3 = (gr_difference[-2:-1] / self.delta_t) * tau3 * 1j
 
-        # Term 4: τ_3 Δt g^R_{ij} Δ_j
-        term4 = gr_last_column * gap_tensor * 1j
+        term4 = gr_last_row * gap_tensor * 1j
 
-        # Term 5: (η Δt / 2) τ_3 g^R_{ij} τ_3
-        term5 = -gr_last_column * tau3 * (self.eta) * 1j
+        term5 = -gr_last_row * tau3 * (self.eta) * 1j
 
-        # Combine all terms: g^R_{i+1,j} = g^R_{ij} + sum of terms
-        gr_new = gr_last_column + (term1 + term2 + term3 + term4 + term5) * self.delta_t
+        gr_new = gr_last_row - 1j * tau3 * (term1 + term2 + term3 + term4 + term5) * self.delta_t
 
         # Diagonal element: basically stays constant for tau_3 only Hamiltonian
-        gr_diagonal_new = tau3 * gr_last_column[:, :, :, -1] * tau3
+        gr_diagonal_new = tau3 * gr_last_row[:, :, :, -1] * tau3
 
         return gr_new, gr_diagonal_new
 
-    def _compute_new_gk_column(self, state, external_field=None):
+    def _compute_new_gk_row(self, state, external_field=None):
         """
         Evolve Keldysh Green's function gk by one timestep.
 
@@ -340,57 +343,68 @@ class UsadelKeldyshEvolution:
         Called by:
             - _evolve_state_by_one_timestep()
         """
+
         # Extract gap history and create gap tensor
         gap_history = state.get_gap_history()
-        gap_tensor = (NambuKeldyshTensor(np.real(gap_history), pauli_channel=1) +
-                     NambuKeldyshTensor(np.imag(gap_history), pauli_channel=2))
+        gap_tensor = (NambuKeldyshTensor(np.real(gap_history), pauli_channel=1) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=2))
+
+        #TODO: in future implementation we should just call sigma_K directly for the convolution and sigma_K might have additional terms! 
 
         # Create τ_3 Pauli matrix
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
         # Extract last row of g^K
-        gk_last_column = state.gk[-2:-1]  # Shape (2, 2, 1, Nt)
+        gk_last_row = state.gk[-2:-1]  # Shape (2, 2, 1, Nt)
 
         # Compute gradient in t' direction
         gk_difference = state.gk.gradient(axis=1)
 
         # Compute g^A = -involution(g^R)
-        ga = -state.gr.involution()
+        ga = state._r2a()
 
-        gr_last_column = state.gr[-2:-1]
-        ga_last_column = ga[-2:-1]  # Shape (2, 2, 1, Nt)
+        gr_last_row = state.gr[-2:-1]
+        ga_last_column = ga[:,-2:-1]  # Shape (2, 2, 1, Nt)
 
-        # Term 1: i Δ_i g^K_{ij}
-        term1 = -1j * gap_tensor[-2:-1] * gk_last_column
+        term1 = -1j * gap_tensor[-2:-1] * gk_last_row
 
-        # Term 2: -iη τ_3 g^K_{ij}
-        term2 = 1j * self.eta * tau3 * gk_last_column
+        term2 = 1j * self.eta * tau3 * gk_last_row
 
-        # Term 3: -i (g^K_{ij} - g^K_{i,j-1})/Δt τ_3
         term3 = 1j * (gk_difference[-2:-1] / self.delta_t) * tau3
 
-        # Term 4: -i g^K_{ij} Δ_j
-        term4 = 1j * gk_last_column * gap_tensor
+        term4 = 1j * gk_last_row * gap_tensor
 
-        # Term 5: -iη g^K_{ij} τ_3
-        term5 = 1j * self.eta * gk_last_column * tau3
+        term5 = 1j * self.eta * gk_last_row * tau3
 
-        # Term 6: 2iη Δt Σ_k F_{i,k} τ_3 g^A_{k,j}
-        # Convolution: sum over k from 0 to j of F[i,k] * g^A[k,j]
-        # F is thermal_dist (Nt x Nt), extract F[i, :] and convolve with g^A[:, j]
-        # TODO: Implement proper convolution with thermal distribution
-        term6 = NambuKeldyshTensor(np.zeros_like(gk_last_column.data))
+        term6 = + 2 * 1j * self.eta * tau3 * self.thermal_dist @ ga_last_column
 
-        # Term 7: -2iη Δt Σ_k g^R_{i,k} F_{k,j} τ_3
-        # Convolution: sum over k from 0 to i of g^R[i,k] * F[k,j]
-        # TODO: Implement proper convolution with thermal distribution
-        term7 = NambuKeldyshTensor(np.zeros_like(gk_last_column.data))
+        term7 = - 2 * 1j * self.eta * gr_last_row @ self.thermal_dist * tau3
 
         # Combine all terms
-        gk_new = gk_last_column + (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
+        gk_new = gk_last_row - 1j * tau3 * (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
+
+        gk_new_column = tau3 * gk_last_row.complete_transpose().conj() * tau3
+
+        gk_i_ip1 = gk_new_column[:, :, :, -1]
 
         # Diagonal element
-        gk_diagonal_new = gk_last_column[:, :, :, -1]
+        gk_diagonal_new = 1
+
+        term1_diag = -1j * gap_tensor[-2:-1] * gk_i_ip1
+
+        term2_diag = 1j * self.eta * tau3 * gk_i_ip1
+
+        term3_diag = 1j * ((gk_i_ip1 - gk_last_row[:,-1]) / self.delta_t) * tau3
+
+        term4_diag = 1j * gk_i_ip1 * gap_tensor[-1]
+
+        term5_diag = 1j * self.eta * gk_i_ip1 * tau3
+
+        term6_diag = - 2 * 1j * self.eta * tau3 * self.thermal_dist @ ga_last_column
+
+        term7_diag = + 2 * 1j * self.eta  * gr_last_row @ self.thermal_dist * tau3
+
+        gk_diagonal_new = gk_i_ip1 - 1j * tau3 * self.delta_t * (term1_diag + term2_diag + term3_diag + term4_diag + term5_diag + term6_diag + term7_diag)
+
         return gk_new, gk_diagonal_new
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):
@@ -399,8 +413,8 @@ class UsadelKeldyshEvolution:
 
         Steps:
         1. Initialize thermal distribution if needed
-        2. Call _compute_new_gr_column() to get new gr row and diagonal
-        3. Call _compute_new_gk_column() to get new gk row and diagonal
+        2. Call _compute_new_gr_row() to get new gr row and diagonal
+        3. Call _compute_new_gk_row() to get new gk row and diagonal
         4. Compute gap from new gk diagonal element
         5. Update state using state.update_state_object()
         6. Return gap and current at new time
@@ -415,8 +429,8 @@ class UsadelKeldyshEvolution:
             current_new: Current at new time t (zero for now)
 
         Calls:
-            - _compute_new_gr_column(state, external_field)
-            - _compute_new_gk_column(state, external_field)
+            - _compute_new_gr_row(state, external_field)
+            - _compute_new_gk_row(state, external_field)
             - state.update_state_object(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)
         """
         # Initialize thermal distribution if not already done
@@ -424,8 +438,8 @@ class UsadelKeldyshEvolution:
             self.get_thermal_occupation(self.temperature)
 
         # Compute new gr and gk rows and diagonals
-        new_gr_row, new_gr_diag = self._compute_new_gr_column(state, external_field)
-        new_gk_row, new_gk_diag = self._compute_new_gk_column(state, external_field)
+        new_gr_row, new_gr_diag = self._compute_new_gr_row(state, external_field)
+        new_gk_row, new_gk_diag = self._compute_new_gk_row(state, external_field)
 
         # Update state with new row, column, diagonal
         state.update_state_object(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)

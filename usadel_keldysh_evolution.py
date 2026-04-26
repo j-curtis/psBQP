@@ -295,7 +295,6 @@ class UsadelKeldyshEvolution:
         # Extract gap history
         gap_history = state.get_gap_history()
 
-
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
         # Create τ_3 Pauli matrix as NambuKeldyshTensor (identity in time)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
@@ -304,21 +303,23 @@ class UsadelKeldyshEvolution:
         gr_last_row = state.gr[-1:,:]  # Shape (2, 2, 1, Nt)
         gr_difference = state.gr[-1:].gradient(axis=1)
 
-        term1 = -1j * gap_tensor[-1] * gr_last_row
+        term1 = -1j * gap_tensor[-1] * gr_last_row 
 
-        term2 = tau3 * (self.eta) * 1j * gr_last_row 
+        term2 =  tau3 * (self.eta) * 1j * gr_last_row 
 
         term3 = (gr_difference / self.delta_t) * tau3 * 1j
 
-        term4 = gr_last_row * gap_tensor * 1j
+        term4 =  gr_last_row * gap_tensor * 1j 
 
-        term5 = -gr_last_row * tau3 * (self.eta) * 1j
+        term5 =  -gr_last_row * tau3 * (self.eta) * 1j
 
-        gr_new = gr_last_row + 1j * tau3 * self.delta_t * (term1 + term2 + term3 + term4 + term5) 
+        gr_new = gr_last_row - 1j * tau3 * self.delta_t * (term1 + term2 + term3 + term4 + term5) 
         #print(np.max(np.abs((gr_new - gr_last_row).data)))
 
+        #print(np.max(np.abs(gr_new.data)))
+
         # Diagonal element: basically stays constant for tau_3 only Hamiltonian
-        gr_diagonal_new = tau3 * gr_last_row[-1, -1] * tau3
+        gr_diagonal_new =   tau3 * gr_last_row[-1, -1] * tau3
 
         return gr_new, gr_diagonal_new
 

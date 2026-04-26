@@ -168,7 +168,6 @@ class UsadelEvolution:
         else:
             gap_0 = self._calc_gap(gr0, f) #+ 0.2 # added this to see gap revival actually
             
-
         solver_function = lambda gr: self._self_consistent_gr(NambuTensor._unflatten_nambu_object(gr, self.w_arr.shape, (2,3)), Q, f = f)
         
         gr = copt._iterative_solver(solver_function, gr0._flatten_nambu_object((2,3)), optimization_parameters = self.optimization_parameters)

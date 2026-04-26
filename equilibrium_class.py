@@ -71,10 +71,10 @@ class EquilibriumSolver:
                 gr_eq: Equilibrium retarded Green's function (old NambuTensor)
                 gk_eq: Equilibrium Keldysh Green's function (old NambuTensor)
         """
-        #TODO: later we can load the solution, no need to find it self-consistently, and we can just let the system thermalize given a self-energy term
+
         # Call the old equilibrium solver
         gr_eq, gap, current = self.usadel_solver._run_temperature_computation(Q=Q, T=temperature, gr0=gr0)
-        
+        self.gap_0 = gap
         print('Equilibrium gap is:', gap)
         
         if not compute_gk:
@@ -153,19 +153,22 @@ class EquilibriumSolver:
             gk_two_time: Keldysh Green's function as NambuKeldyshTensor (if gk_eq provided)
         """
         # Transform g^R
-        gr_two_time = self._omega_to_two_time(gr_eq)
+        gr_two_time = self._omega_to_two_time(gr_eq, g_type= 'r')
 
         # Apply causality constraint: g^R(t,t') = 0 for t < t'
         # This is θ(t-t') which zeros the upper triangle
         self._apply_causality(gr_two_time)
 
+        gr_one_time = self.omega_to_one_time(gr_eq, g_type= 'r')
+        gk_one_time = self.omega_to_one_time(gk_eq, g_type= 'k')
+
         if gk_eq is None:
             return gr_two_time
 
         # Transform g^K
-        gk_two_time = self._omega_to_two_time(gk_eq)
+        gk_two_time = self._omega_to_two_time(gk_eq, g_type= 'k')
 
-        return gr_two_time, gk_two_time
+        return gr_two_time, gk_two_time, gr_one_time, gk_one_time
 
     def _apply_causality(self, gr_two_time):
         """
@@ -173,6 +176,9 @@ class EquilibriumSolver:
 
         Enforces g^R(t,t') = g^R(t,t') * θ(t-t') by zeroing upper triangle.
         In matrix form with indices [i,j], this means g[i,j] = 0 for i < j.
+
+        Additionally enforces that τ₁ (X) and τ₂ (Y) Pauli components are zero
+        on the diagonal (equal-time) by zeroing g^R[0,1,i,i] and g^R[1,0,i,i].
 
         Modifies gr_two_time in-place.
 
@@ -190,17 +196,164 @@ class EquilibriumSolver:
         # Broadcast: (2,2,Nt,Nt) * (Nt,Nt) -> (2,2,Nt,Nt)
         gr_two_time.data *= theta_mask[np.newaxis, np.newaxis, :, :]
 
-    def _omega_to_two_time(self, g_omega):
+        # Zero out off-diagonal Nambu elements on the diagonal (equal-time only)
+        #diagonal_indices = np.arange(Nt)
+        #gr_two_time.data[1, 0, diagonal_indices, diagonal_indices] = 0.0
+        #gr_two_time.data[0, 1, diagonal_indices, diagonal_indices] = 0.0
+
+    def omega_to_one_time(self, g_omega, g_type):
+        """
+        Transform Green's function from frequency to one-time (relative time τ).
+
+        Performs inverse Fourier transform: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
+
+        For g^R, subtracts asymptotic τ₃ component before FFT to regularize the transform
+        and avoid sinc oscillations near τ=0.
+
+        Args:
+            g_omega: Green's function in frequency domain (NambuTensor, shape (N_omega,))
+
+        Returns:
+            g_tau: Green's function in relative time (NambuKeldyshTensor, shape (2, 2, N_tau))
+                  where τ ranges from -T_max to +T_max
+        """
+        # Get omega grid from old usadel solver
+        omega_grid = self.usadel_solver.w_arr
+        n_omega = len(omega_grid)
+
+        # Extract Pauli components from NambuTensor using trace
+        # Store asymptotic coefficients to add back after FFT
+        g_pauli = []
+        asymptotic_coeffs = []  # Will store (type, C) for each component
+
+        for pauli_idx in range(4):
+            # factor of 2 because of Nambu convention and traces
+            pauli_component = np.array(g_omega._trace(pauli_idx))/2
+
+            # Regularization: Subtract asymptotic behavior to avoid sinc oscillations
+            # Physical behavior at large |ω|:
+            #   - τ₃ component: → C (constant)
+            #   - τ₁, τ₂ components: → C/ω (off-diagonal BCS terms decay as Δ/ω)
+
+            if g_type == 'r':
+                if pauli_idx == 3:  # tau_3: constant asymptotic
+                    C_constant = pauli_component[-1]
+                    pauli_component = pauli_component - C_constant
+                    asymptotic_coeffs.append(('constant', C_constant, None))
+                elif pauli_idx == 2: # tau_1, tau_2: 1/ω asymptotic #! has to be generalized properly
+                    # Estimate coefficients: g(ω) ≈ C/ω + C'/ω² at large ω
+                    # Use least-squares fit over tail region
+                    tail_start = int(0.8 * n_omega)  # Last 20% of points
+                    omega_tail = omega_grid[tail_start:]
+                    g_tail = pauli_component[tail_start:]
+
+                    # Fit ω²·g(ω) = C·ω + C' (linear regression)
+                    # This gives both C/ω and C'/ω² terms
+                    y = omega_tail**2 * g_tail
+                    X = np.column_stack([omega_tail, np.ones_like(omega_tail)])
+
+                    # Least squares: [C, C'] = (X^T X)^{-1} X^T y
+                    coeffs = np.linalg.lstsq(X, y, rcond=None)[0]
+                    C_decay = coeffs[0]
+                    C_prime = coeffs[1]
+
+                    # Choose regularization scale ω₀
+                    # Use a characteristic energy (e.g., twice the gap or broadening)
+                    omega_10percent = np.max(omega_grid) * 0.005
+                    omega_0 = np.abs(omega_10percent) / 2.0  # Regularization scale
+                    C_decay = -1j*self.gap_0
+                    C_prime = -1j*self.gap_0 * (-1j * self.system_parameters['eta'])
+                    # Subtract regularization: L(ω) = C·ω/(ω² + ω₀²) + C'/(ω² + ω₀²)
+                    # First term → C/ω, second term → C'/ω² at large ω
+                    regularization = (C_decay * omega_grid / (omega_grid**2 + omega_0**2) +
+                                    C_prime / (omega_grid**2 + omega_0**2))
+                    pauli_component = pauli_component - regularization
+                    asymptotic_coeffs.append(('lorentzian_extended', C_decay, C_prime, omega_0))
+                else:  # pauli_idx 0 or 1: no regularization
+                    asymptotic_coeffs.append(None)
+            else:  # Not retarded GF (g_type != 'r')
+                asymptotic_coeffs.append(None)
+
+            g_pauli.append(pauli_component)
+
+        # Compute d_omega for normalization
+        d_omega = omega_grid[1] - omega_grid[0]
+
+        # Inverse Fourier transform for each Pauli component
+        # Convention: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
+        g_tau_pauli = []
+
+        for pauli_idx, pauli_component in enumerate(g_pauli):
+            # Undo the fftshift to prepare for fft
+            g_omega_unshifted = np.fft.ifftshift(pauli_component)
+
+            # Physics: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
+            # Discretized: g(τ_k) ≈ Σ_n g(ω_n) e^{-iω_n τ_k} * Δω/(2π)
+            # numpy.fft.fft gives: Σ_n g(ω_n) e^{-2πi n k/N} (no 1/N factor)
+            g_tau_raw = np.fft.fft(g_omega_unshifted)
+
+            # Apply normalization from the integral measure: Δω/(2π)
+            # Note: fft already gives the full sum, so just multiply by Δω/(2π)
+            g_tau = g_tau_raw * d_omega / (2.0 * np.pi)
+
+            # Shift to get correct tau ordering
+            g_tau_shifted = np.fft.fftshift(g_tau)
+
+            # Add back the asymptotic contribution in time domain
+            # Reconstruct tau grid for the FFT output
+            tau_grid_fft = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
+
+            # Only add back for indices that had regularization (skip None entries)
+            if asymptotic_coeffs[pauli_idx] is not None:
+                asym_type = asymptotic_coeffs[pauli_idx][0]
+                C = asymptotic_coeffs[pauli_idx][1]
+
+                if asym_type == 'lorentzian':  # Lorentzian: C·ω/(ω² + ω₀²)
+                    omega_0 = asymptotic_coeffs[pauli_idx][2]
+                    # FT[C·ω/(ω² + ω₀²)] = -(iC/2)·sign(τ)·exp(-ω₀|τ|)  [CORRECTED SIGN]
+                    asymptotic_contribution = -(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-10) * np.exp(-omega_0 * np.abs(tau_grid_fft))
+                    g_tau_shifted = g_tau_shifted + asymptotic_contribution
+
+                elif asym_type == 'lorentzian_extended':  # Extended: C·ω/(ω²+ω₀²) + C'/(ω²+ω₀²)
+                    C_prime = asymptotic_coeffs[pauli_idx][2]
+                    omega_0 = asymptotic_coeffs[pauli_idx][3]
+                    # FT[C·ω/(ω²+ω₀²)] = -(iC/2)·sign(τ)·exp(-ω₀|τ|)  [CORRECTED SIGN]
+                    # FT[C'/(ω²+ω₀²)] = (C'/2ω₀)·exp(-ω₀|τ|)
+                    asymptotic_contribution = (-(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-10) +
+                                            (C_prime / (2.0 * omega_0))) * \
+                                            np.exp(-omega_0 * np.abs(tau_grid_fft))
+                    g_tau_shifted = g_tau_shifted + asymptotic_contribution
+
+            # For constant asymptotic (tau_3), we don't add anything back
+            # The constant in frequency → delta function at τ=0, which we ignore
+
+            g_tau_pauli.append(g_tau_shifted)
+
+        # Convert from Pauli components to NambuKeldyshTensor
+        g_one_time = None
+        for pauli_idx in range(4):
+            g_component = NambuKeldyshTensor(g_tau_pauli[pauli_idx], pauli_channel=pauli_idx)
+            if g_one_time is None:
+                g_one_time = g_component
+            else:
+                g_one_time = g_one_time + g_component
+
+        # Apply causality constraint: θ(τ) enforces g^R(τ) = 0 for τ < 0
+        d_omega = omega_grid[1] - omega_grid[0]
+        tau_grid_fft = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
+        theta_mask = (tau_grid_fft >= 0).astype(float)
+        g_one_time.data *= theta_mask[np.newaxis, np.newaxis, :]
+
+        return g_one_time
+
+    def _omega_to_two_time(self, g_omega, g_type):
         """
         Transform single Green's function from frequency to two-time.
 
         Steps:
-        1. Use time grid from grid_parameters and extend to [-T_max, T_max]
-        2. Extract Pauli components from NambuTensor
-        3. Inverse FFT from ω to τ with proper normalization on full grid
-        4. Reshape from g(τ) to g(t,t') where g(t,t') = g(t-t')
-        5. Return only the part where t < 0 and t' < 0
-        6. Convert to NambuKeldyshTensor
+        1. Call omega_to_one_time() to get g(τ) with all regularizations
+        2. Reshape from g(τ) to g(t,t') where g(t,t') = g(t-t')
+        3. Return only the part where t < 0 and t' < 0
 
         Args:
             g_omega: Green's function in frequency domain (NambuTensor, shape (N_omega,))
@@ -231,40 +384,18 @@ class EquilibriumSolver:
         n_extended = 2 * ntpoints - 1
         time_grid_full = np.linspace(-tmax, tmax, n_extended)
 
-        # Get omega grid from old usadel solver and verify consistency
+        # Get omega grid from old usadel solver
         omega_grid = self.usadel_solver.w_arr
         n_omega = len(omega_grid)
 
-        # Extract Pauli components from NambuTensor using trace
-        g_pauli = []
-        for pauli_idx in range(4):
-            # factor of 2 because of Nambu convention and traces
-            g_pauli.append(np.array(g_omega._trace(pauli_idx))/2) 
+        # Call omega_to_one_time to get g(τ) with all regularizations
+        g_one_time = self.omega_to_one_time(g_omega, g_type = g_type)
 
-        # Compute d_omega for normalization
-        d_omega = omega_grid[1] - omega_grid[0]
-
-        # Inverse Fourier transform for each Pauli component
-        # Convention: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
+        # Extract Pauli components from the NambuKeldyshTensor
         g_tau_pauli = []
-
-        for pauli_component in g_pauli:
-            # Undo the fftshift to prepare for fft
-            g_omega_unshifted = np.fft.ifftshift(pauli_component)
-
-            # Physics: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
-            # Discretized: g(τ_k) ≈ Σ_n g(ω_n) e^{-iω_n τ_k} * Δω/(2π)
-            # numpy.fft.fft gives: Σ_n g(ω_n) e^{-2πi n k/N} (no 1/N factor)
-            g_tau_raw = np.fft.fft(g_omega_unshifted)
-
-            # Apply normalization from the integral measure: Δω/(2π)
-            # Note: fft already gives the full sum, so just multiply by Δω/(2π)
-            g_tau = g_tau_raw * d_omega / (2.0 * np.pi)
-
-            # Shift to get correct tau ordering
-            g_tau_shifted = np.fft.fftshift(g_tau)
-
-            g_tau_pauli.append(g_tau_shifted)
+        for pauli_idx in range(4):
+            # Extract component using trace and normalization
+            g_tau_pauli.append(np.array(g_one_time.trace(pauli_idx))/2)
 
         # Build g(t,t') on the full extended time grid, then truncate to t < 0, t' < 0
         # Create meshgrid of time values for all (t_i, t_j) pairs on FULL grid
@@ -275,8 +406,8 @@ class EquilibriumSolver:
 
         # Compute tau indices for all pairs
         # tau = 0 should be at the center of g_tau (index n_omega // 2)
-        tau_idx_matrix = np.round(tau_matrix / dt).astype(int) + n_omega // 2
-
+        tau_idx_matrix = np.round(tau_matrix / dt).astype(int) + n_omega // 2 
+        
         # Create mask for valid indices (g_tau has n_omega points from FFT)
         #TODO Understand this in detail
         valid_mask = (tau_idx_matrix >= 0) & (tau_idx_matrix < n_omega)

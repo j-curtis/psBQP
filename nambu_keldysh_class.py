@@ -270,7 +270,7 @@ class NambuKeldyshTensor:
 
     def gradient(self, axis=0):
         """
-        Compute discrete gradient along specified axis (not counting Nambu indices).
+        Compute discrete gradient along specified axis (1st-order backward difference).
 
         Computes finite difference: data[..., i, ...] - data[..., i-1, ...]
         The first entry along the differentiated axis is set to zero (no previous value).
@@ -303,6 +303,51 @@ class NambuKeldyshTensor:
         slices = [slice(None)] * self.data.ndim
         slices[actual_axis] = 0
         gradient_data[tuple(slices)] = 0
+
+        return NambuKeldyshTensor(gradient_data)
+
+    def gradient_second_order(self, axis=0):
+        """
+        Compute discrete gradient along specified axis using 2nd-order backward difference.
+
+        Uses formula: dg/dx ≈ (3*g[i] - 4*g[i-1] + g[i-2]) / 2  (with dx=1)
+        First two entries use lower-order schemes (no sufficient history).
+
+        Args:
+            axis: Which axis to differentiate along (0 or 1), referring to axes after Nambu (2,2)
+                  axis=0 -> differentiate along 3rd dimension (array index 2)
+                  axis=1 -> differentiate along 4th dimension (array index 3)
+
+        Returns:
+            NambuKeldyshTensor: Gradient with same shape as input
+
+        Example:
+            For shape (2, 2, Nt, Nt'):
+            - gradient_second_order(axis=0) computes ∂g/∂t
+            - gradient_second_order(axis=1) computes ∂g/∂t'
+        """
+        # Map user axis (0 or 1) to actual array axis (2 or 3)
+        actual_axis = axis + 2
+
+        # Get shifted versions for backward difference
+        shifted_1 = np.roll(self.data, shift=1, axis=actual_axis)  # g[i-1]
+        shifted_2 = np.roll(self.data, shift=2, axis=actual_axis)  # g[i-2]
+
+        # 2nd-order backward difference: (3*g[i] - 4*g[i-1] + g[i-2]) / 2
+        gradient_data = (3.0 * self.data - 4.0 * shifted_1 + shifted_2) / 2.0
+
+        # Handle first two entries (insufficient past history)
+        slices_0 = [slice(None)] * self.data.ndim
+        slices_1 = [slice(None)] * self.data.ndim
+
+        slices_0[actual_axis] = 0
+        slices_1[actual_axis] = 1
+
+        # First entry: no past, set to zero
+        gradient_data[tuple(slices_0)] = 0
+
+        # Second entry: use 1st-order backward (g[1] - g[0])
+        gradient_data[tuple(slices_1)] = self.data[tuple(slices_1)] - shifted_1[tuple(slices_1)]
 
         return NambuKeldyshTensor(gradient_data)
 

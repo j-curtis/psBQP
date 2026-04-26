@@ -190,7 +190,7 @@ class UsadelKeldyshEvolution:
         )
 
         # Transform to two-time representation (returns only t,t' < 0)
-        gr_two_time, gk_two_time = equilibrium_solver.fourier_transform_to_two_time(gr_eq, gk_eq)
+        gr_two_time, gk_two_time, gr_tau, gk_tau = equilibrium_solver.fourier_transform_to_two_time(gr_eq, gk_eq)
 
         # Get BCS coupling constant for StateObject
         bcs_coupling = self._get_BCS_coupling()
@@ -203,8 +203,7 @@ class UsadelKeldyshEvolution:
             grid_params=self.grid_parameters
         )
 
-        return initial_state
-
+        return initial_state, gr_tau, gk_tau
 
     # ========== Thermal Distributions ==========
 
@@ -274,11 +273,6 @@ class UsadelKeldyshEvolution:
         Computes g^R(t_{time_index}, t_j) for all j < time_index using the
         discretized Usadel equation (without A(t) terms).
 
-        Update equation:
-        g^R_{i+1,j} = g^R_{ij} + τ_3 Δt Δ_i g^R_{ij} + (η Δt / 2) τ_3² g^R_{ij}
-                      + τ_3 (g^R_{ij} - g^R_{i,j-1}) τ_3
-                      + τ_3 Δt g^R_{ij} Δ_j + (η Δt / 2) τ_3 g^R_{ij} τ_3
-
         Args:
             state: StateObject with current gr data
             time_index: New time index to compute (i+1 in equations)
@@ -313,13 +307,10 @@ class UsadelKeldyshEvolution:
 
         term5 =  -gr_last_row * tau3 * (self.eta) * 1j
 
-        gr_new = gr_last_row - 1j * tau3 * self.delta_t * (term1 + term2 + term3 + term4 + term5) 
-        #print(np.max(np.abs((gr_new - gr_last_row).data)))
-
-        #print(np.max(np.abs(gr_new.data)))
+        gr_new = gr_last_row + 1j * tau3 * self.delta_t * (term1 + term2 + term3 + term4 + term5) 
 
         # Diagonal element: basically stays constant for tau_3 only Hamiltonian
-        gr_diagonal_new =   tau3 * gr_last_row[-1, -1] * tau3
+        gr_diagonal_new =  gr_last_row[-1, -1] #- tau3 * gr_last_row[-1, -1] * tau3
 
         return gr_new, gr_diagonal_new
 

@@ -44,7 +44,7 @@ class UsadelKeldyshEvolution:
         recommended_eta = 5.0 / self.tmax
         if self.eta < recommended_eta:
             print(f"WARNING: eta = {self.eta:.4f} is smaller than recommended value {recommended_eta:.4f}")
-            print(f"         Recommended: eta >= 10/T_max = 10/{self.tmax:.2f}")
+            print(f"         Recommended: eta >= 5/T_max = 10/{self.tmax:.2f}")
             print(f"         Consider using larger T_max or increasing eta to avoid numerical issues.")
 
         self.critical_temperature = system_parameters['critical_temperature']
@@ -291,8 +291,9 @@ class UsadelKeldyshEvolution:
 
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
         # Create τ_3 Pauli matrix as NambuKeldyshTensor (identity in time)
+        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
+        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-
         # Extract g^R_{ij} as (2, 2) matrix and wrap as NambuKeldyshTensor
         gr_last_row = state.gr[-1:,:]  # Shape (2, 2, 1, Nt)
         gr_difference = state.gr[-1:].gradient(axis=1)
@@ -308,10 +309,15 @@ class UsadelKeldyshEvolution:
         term5 =  -gr_last_row * tau3 * (self.eta) * 1j
 
         gr_new = gr_last_row + 1j * tau3 * self.delta_t * (term1 + term2 + term3 + term4 + term5) 
+        
+
+        unitary_propagator = np.cos(gap_history[-1] * self.delta_t) * np.exp(-self.eta * self.delta_t) * tau0 - 1j * np.sin(gap_history[-1] * self.delta_t) * tau1 * np.exp(-self.eta * self.delta_t)
+        #unitary_evolve = ((np.cos(gap * delta_t) * np.exp(-eta * delta_t)) * tau_0 - 1j * np.sin(gap * delta_t) * tau_1 * np.exp(-eta * delta_t)) 
 
         # Diagonal element: basically stays constant for tau_3 only Hamiltonian
-        gr_diagonal_new =  gr_last_row[-1, -1] #- tau3 * gr_last_row[-1, -1] * tau3
-
+        #TODO: Update this to read-off the new value of delta and then use that as the diagonal (fixed by jump condition)
+        gr_diagonal_new =  gr_last_row[-1, -1] #- tau3 * gr_last_row[-1, -1] * tau3 
+        gr_new = unitary_propagator * gr_last_row
         return gr_new, gr_diagonal_new
 
     def _compute_new_gk_row(self, state, external_field=None):

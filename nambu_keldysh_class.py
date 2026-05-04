@@ -266,6 +266,31 @@ class NambuKeldyshTensor:
                 pauli_matrix[1,0]*self.data[0,1,...] +
                 pauli_matrix[1,1]*self.data[1,1,...])
 
+    # ========== Shift Operations ==========
+
+    def shift(self, shift=1, axis=0):
+        """
+        Shift data along specified axis using np.roll.
+
+        Args:
+            shift: Number of positions to shift (default 1)
+                   Positive values shift forward, negative shift backward
+            axis: Which axis to shift along (0 or 1), referring to axes after Nambu (2,2)
+                  axis=0 -> shift along 3rd dimension (array index 2)
+                  axis=1 -> shift along 4th dimension (array index 3)
+
+        Returns:
+            NambuKeldyshTensor: Shifted tensor with same shape as input
+
+        Example:
+            For shape (2, 2, Nt, Nt'):
+            - shift(shift=1, axis=0) shifts data forward by 1 along time dimension
+            - shift(shift=-1, axis=1) shifts data backward by 1 along time' dimension
+        """
+        actual_axis = axis + 2
+        shifted_data = np.roll(self.data, shift=shift, axis=actual_axis)
+        return NambuKeldyshTensor(shifted_data)
+
     # ========== Gradient Operations ==========
 
     def gradient(self, axis=0):

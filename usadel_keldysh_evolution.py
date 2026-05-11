@@ -295,49 +295,33 @@ class UsadelKeldyshEvolution:
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-        
+
+        expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
+
         #* Compute individual terms in the commutator
         
-        # Extract g^R_{ij} as (2, 2) matrix and wrap as NambuKeldyshTensor
         gr_last_row = state.gr[-1:,:]  # Shape (2, 2, 1, Nt)
-        gr_difference = state.gr[-1:].gradient(axis=1)
 
-        term1 = -1j * gap_tensor[-1] * gr_last_row 
-
-        term2 =  tau3 * (self.eta) * 1j * gr_last_row 
-
-        term3 = (gr_difference / self.delta_t) * tau3 * 1j
-
-        term4 =  gr_last_row * gap_tensor * 1j 
-
-        term5 =  -gr_last_row * tau3 * (self.eta) * 1j
-        
         gr_diagonal_new =  -gap_tensor[-1] #- tau3 * gr_last_row[-1, -1] * tau3
-        
-        #delta_tt_tensor = NambuKeldyshTensor(np.outer([1],np.append(np.zeros(self.ntpoints-1),[1])), pauli_channel=0) 
-        #shift_mask = NambuKeldyshTensor(np.outer([1],np.append([1],np.append(np.ones(self.ntpoints-2),[0]))), pauli_channel=0)
-        
-        #TODO: generalize to complex delta(t)
-        crt_gap_magnitude = np.abs(gap_history[-1]) 
-        #unitary_propagator_L = np.cos(crt_gap_magnitude * self.delta_t) * np.exp(-self.eta * self.delta_t) * tau0 - 1j * np.sin(crt_gap_magnitude * self.delta_t) * tau1 * np.exp(-self.eta * self.delta_t)
-        #unitary_propagator_L_inv = np.cos(crt_gap_magnitude * self.delta_t) * np.exp(self.eta * self.delta_t) * tau0 + 1j * np.sin(crt_gap_magnitude * self.delta_t) * tau1 * np.exp(self.eta * self.delta_t)
-        #unitary_propagator_R_inv = np.cos(crt_gap_magnitude * self.delta_t) * np.exp(-self.eta * self.delta_t) * tau0 + 1j * np.sin(crt_gap_magnitude * self.delta_t) * tau1 * np.exp(-self.eta * self.delta_t)
+
+        # evaluated at t
+        left_matrix_evolution = (1j * tau3 - 1j *self.delta_t * gap_tensor[-1] + 1j * self.eta * self.delta_t * tau3) * expansion_tensor
+        # evaluated at t' which will be varied anyway
+        right_matrix_evolution = (-1j * tau3 - 1j * self.eta * self.delta_t * tau3) * expansion_tensor + 1j * self.delta_t * gap_tensor 
+
+        rhs_vector_evolution = 1j * tau3 * gr_last_row #* missing the new updated term, but that will easily be added! 
+
+        left_matrix_normalization = (tau3 + self.delta_t * gr_diagonal_new) * expansion_tensor
+        right_matrix_normalization = tau3 * expansion_tensor
+ 
+        rhs_vector_normalization = 0 * rhs_vector_evolution #* needs to be recomputed every timestep
+
+        gr_new = self.g_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution, rhs_vector_normalization, gr_diagonal_new, state.gr)
+
+        return gr_new, gr_diagonal_new 
 
 
-        #TODO: Update this to read-off the new value of delta and then use that as the diagonal (fixed by jump condition)
-        #last_row_evolved = (gr_last_row.shift(-1, axis = 1) * shift_mask * unitary_propagator_R_inv - gr_last_row)
-        
-        #gr_new = unitary_propagator_L * ( (gr_last_row -  tau3 * (last_row_evolved) * tau3  * (shift_mask) ) -  0 * delta_tt_tensor * gap_tensor[-1]) 
-        #gr_new = NambuKeldyshTensor(gr_new.trace(2), pauli_channel=2)/2 +  NambuKeldyshTensor(gr_last_row.trace(3), pauli_channel=3).shift(1, axis = 1)/2
-        #gr_new = NambuKeldyshTensor(gr_last_row.trace(2), pauli_channel=2).shift(1, axis = 1)/2 +  NambuKeldyshTensor(gr_new.trace(3), pauli_channel=3)/2
-        #gr_new = 0 * gr_last_row +  - delta_tt_tensor * gap_tensor[-1] # initialize the gap
-        #TODO add item assigment to elements of a data matrix
-
-
-        return gr_new, gr_diagonal_new
-
-
-    def g_equation(left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2):
+    def g_update_rule(self,left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, diagonal_entry, full_g_matrix):
         # matrices represent the things multiplying g_r in the two equations, that will need to be solved. The whole thing needs to be posed as a vector equation
 
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
@@ -345,25 +329,32 @@ class UsadelKeldyshEvolution:
         tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
+        matrix_row_1 = (tau1 * left_matrix_1 + right_matrix_1 * tau1).matrix_to_vector()
+        matrix_row_2 = (tau2 * left_matrix_1 + right_matrix_1 * tau2).matrix_to_vector()
+        matrix_row_3 = (tau3 * left_matrix_2 + right_matrix_2 * tau3).matrix_to_vector()
+        matrix_row_4 = (tau0 * left_matrix_2 + right_matrix_2 * tau0).matrix_to_vector()
 
-        id_contrib_1 = left_matrix_1 + right_matrix_1
-        id_contrib_2 = left_matrix_2 + right_matrix_2
+        vector_row_1 = (rhs_matrix_1.trace(1)/2)[0]
+        vector_row_2 = (rhs_matrix_1.trace(2)/2)[0]
+        vector_row_3 = (rhs_matrix_2.trace(3)/2)[0]
+        vector_row_4 = (rhs_matrix_2.trace(0)/2)[0]
 
-        tau_contrib_1 = left_matrix_1 - right_matrix_1
-        tau_contrib_2 = left_matrix_2 - right_matrix_2
+        vector_output = np.array([diagonal_entry.matrix_to_vector()])
+        for time in range(self.ntpoints-1, -1, -1):
+            if time == self.ntpoints - 1:
+                norm_convolution = np.array([0,0,0,0])
+            else:
+                #print((NambuKeldyshTensor.vector_to_matrix(vector_output[:-1].T) @ full_g_matrix[ time +1: ,time]).data.shape)
+                norm_convolution = -(NambuKeldyshTensor.vector_to_matrix(vector_output[:-1].T) @ full_g_matrix[ time +1: ,time]).matrix_to_vector() * self.delta_t
+            #print(norm_convolution)
+            total_matrix = np.array([matrix_row_1[:,time], matrix_row_2[:,time], matrix_row_3[:,time], matrix_row_4[:,time]])
+            total_vector = np.array([vector_row_1[time], vector_row_2[time], vector_row_3[time], vector_row_4[time]]) + np.array([vector_output[0][2],-vector_output[0][1],norm_convolution[3],norm_convolution[0]]) #* leftover derivative term!
 
-        matrix_row_1 = (tau_1 * left_matrix_1 + right_matrix_1 * tau_1).matrix_to_vector()
-        matrix_row_2 = (tau_2 * left_matrix_1 + right_matrix_1 * tau_2).matrix_to_vector()
-        matrix_row_3 = (tau_3 * left_matrix_2 + right_matrix_2 * tau_3).matrix_to_vector()
-        matrix_row_4 = (tau_0 * left_matrix_2 + right_matrix_2 * tau_0).matrix_to_vector()
+            g_components = np.linalg.solve(total_matrix, total_vector)
+            vector_output = np.vstack([g_components,vector_output])
 
-        total_matrix = np.array([matrix_row_1, matrix_row_2, matrix_row_3, matrix_row_4])
 
-        vector = np.array([rhs_matrix_1.trace(1), rhs_matrix_1.trace(2), rhs_matrix_2.trace(3), rhs_matrix_2.trace(0)])
-
-        g_components = np.linalg.solve(total_matrix, vector)
-
-        return NambuKeldyshTensor.vector_to_matrix(g_components)
+        return NambuKeldyshTensor.vector_to_matrix(vector_output[:-1].T)
 
 
     def _compute_new_gk_row(self, state, external_field=None):

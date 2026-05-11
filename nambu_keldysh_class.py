@@ -109,8 +109,12 @@ class NambuKeldyshTensor:
         """
         Convolution for time-domain Green's functions.
 
-        Only defined for (2,2,Nt,Nt') @ (2,2,Nt',Nt'') -> (2,2,Nt,Nt'')
-        Contracts over Nambu index j and shared time index.
+        Contracts over Nambu index j and shared inner dimension.
+        Supports various shapes:
+        - (2,2,a,b) @ (2,2,b,c) -> (2,2,a,c)
+        - (2,2,a) @ (2,2,a,b) -> (2,2,b)
+        - (2,2,a,b) @ (2,2,b) -> (2,2,a)
+        - (2,2,a) @ (2,2,a) -> (2,2)
 
         Usage: A @ B
         """
@@ -120,21 +124,53 @@ class NambuKeldyshTensor:
         else:
             return NotImplemented
 
-        # Check both are (2,2,a,b) shaped
-        if self.data.ndim != 4 or other_data.ndim != 4:
-            raise ValueError(f"matmul only defined for (2,2,a,b) shapes, got {self.data.shape} @ {other_data.shape}")
-
+        # Check first two dimensions are (2,2) for both
         if self.data.shape[:2] != (2, 2) or other_data.shape[:2] != (2, 2):
-            raise ValueError(f"First two dimensions must be (2,2)")
+            raise ValueError(f"First two dimensions must be (2,2), got {self.data.shape} @ {other_data.shape}")
 
-        # Check contraction dimension matches
+        # Get number of extra dimensions beyond Nambu (2,2)
+        self_ndim = self.data.ndim - 2  # e.g., 2 for (2,2,a,b)
+        other_ndim = other_data.ndim - 2  # e.g., 2 for (2,2,b,c)
+
+        # Check contraction dimension matches (last of left = first extra of right)
+        if self_ndim == 0 or other_ndim == 0:
+            raise ValueError(f"matmul requires at least one extra dimension beyond (2,2), got {self.data.shape} @ {other_data.shape}")
+
         if self.data.shape[-1] != other_data.shape[2]:
             raise ValueError(
                 f"Contraction dimension mismatch: {self.data.shape[-1]} != {other_data.shape[2]}"
             )
 
-        # Perform convolution: (2,2,a,b) @ (2,2,b,c) -> (2,2,a,c)
-        result_data = np.einsum('ijab,jkbc->ikac', self.data, other_data)
+        # Build einsum string dynamically
+        # Left: ij + remaining indices
+        # Right: jk + remaining indices (first one shared with left's last)
+        # Result: ik + non-contracted indices
+
+        # Use letters for extra dimensions
+        letters = string.ascii_lowercase[13:]  # n, o, p, q, ...
+
+        # Left operand indices
+        if self_ndim == 1:
+            left_extra = 'a'
+        else:
+            left_extra = ''.join(letters[:self_ndim])
+
+        # Right operand indices (first matches left's last)
+        if other_ndim == 1:
+            right_extra = left_extra[-1]  # Just the shared index
+        else:
+            right_extra = left_extra[-1] + ''.join(letters[self_ndim:self_ndim+other_ndim-1])
+
+        # Result indices (all except the contracted one)
+        if self_ndim > 1 and other_ndim > 1:
+            result_extra = left_extra[:-1] + right_extra[1:]
+        elif self_ndim > 1:  # other_ndim == 1
+            result_extra = left_extra[:-1]
+        else:  # self_ndim == 1, other_ndim > 1
+            result_extra = right_extra[1:]
+
+        einsum_str = f'ij{left_extra},jk{right_extra}->ik{result_extra}'
+        result_data = np.einsum(einsum_str, self.data, other_data)
 
         return NambuKeldyshTensor(result_data)
 
@@ -297,19 +333,32 @@ class NambuKeldyshTensor:
         Args:
             components: Array of shape (4, ...) or list of 4 arrays [g₀, g₁, g₂, g₃]
                        Each component can have arbitrary shape (Nt, Nt'), etc.
+                       For 1D input (4 scalars), output will be (2, 2, 1)
 
         Returns:
-            NambuKeldyshTensor: Tensor of shape (2, 2, ...)
+            NambuKeldyshTensor: Tensor of shape (2, 2, ...) or (2, 2, 1) for scalar input
 
         Example:
             components = np.array([g0, g1, g2, g3])  # shape (4, Nt, Nt')
             g_matrix = NambuKeldyshTensor.vector_to_matrix(components)  # shape (2, 2, Nt, Nt')
+
+            components = np.array([1, 0, 0, 0])  # shape (4,)
+            g_matrix = NambuKeldyshTensor.vector_to_matrix(components)  # shape (2, 2, 1)
         """
         # Extract individual components
         if isinstance(components, np.ndarray):
             g0, g1, g2, g3 = components[0], components[1], components[2], components[3]
         else:
             g0, g1, g2, g3 = components
+
+        # Check if components are scalars (0D arrays or Python numbers)
+        # If so, add an extra dimension to ensure output is (2, 2, 1)
+        g0 = np.asarray(g0)
+        if g0.ndim == 0:
+            g0 = g0[np.newaxis]  # Add dimension: scalar -> shape (1,)
+            g1 = np.asarray(g1)[np.newaxis]
+            g2 = np.asarray(g2)[np.newaxis]
+            g3 = np.asarray(g3)[np.newaxis]
 
         # Construct Nambu matrix as sum of Pauli components
         result = (NambuKeldyshTensor(g0, pauli_channel=0) +

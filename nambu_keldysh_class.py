@@ -266,6 +266,59 @@ class NambuKeldyshTensor:
                 pauli_matrix[1,0]*self.data[0,1,...] +
                 pauli_matrix[1,1]*self.data[1,1,...])
 
+    def matrix_to_vector(self):
+        """
+        Convert Nambu matrix to vector of Pauli components.
+
+        Decomposes ĝ = g₀·𝟙 + g₁·τ₁ + g₂·τ₂ + g₃·τ₃ and extracts [g₀, g₁, g₂, g₃].
+        Uses Tr[τᵢ·ĝ] = 2gᵢ, so gᵢ = Tr[τᵢ·ĝ]/2.
+
+        Returns:
+            np.ndarray: Array of shape (4, ...) containing [g₀, g₁, g₂, g₃]
+                       where ... represents any extra dimensions beyond Nambu (2,2)
+
+        Example:
+            For shape (2, 2, Nt, Nt'), returns (4, Nt, Nt')
+        """
+        g0 = self.trace(pauli_index=0) / 2.0
+        g1 = self.trace(pauli_index=1) / 2.0
+        g2 = self.trace(pauli_index=2) / 2.0
+        g3 = self.trace(pauli_index=3) / 2.0
+
+        return np.array([g0, g1, g2, g3])
+
+    @staticmethod
+    def vector_to_matrix(components):
+        """
+        Construct Nambu matrix from vector of Pauli components.
+
+        Builds ĝ = g₀·𝟙 + g₁·τ₁ + g₂·τ₂ + g₃·τ₃ from [g₀, g₁, g₂, g₃].
+
+        Args:
+            components: Array of shape (4, ...) or list of 4 arrays [g₀, g₁, g₂, g₃]
+                       Each component can have arbitrary shape (Nt, Nt'), etc.
+
+        Returns:
+            NambuKeldyshTensor: Tensor of shape (2, 2, ...)
+
+        Example:
+            components = np.array([g0, g1, g2, g3])  # shape (4, Nt, Nt')
+            g_matrix = NambuKeldyshTensor.vector_to_matrix(components)  # shape (2, 2, Nt, Nt')
+        """
+        # Extract individual components
+        if isinstance(components, np.ndarray):
+            g0, g1, g2, g3 = components[0], components[1], components[2], components[3]
+        else:
+            g0, g1, g2, g3 = components
+
+        # Construct Nambu matrix as sum of Pauli components
+        result = (NambuKeldyshTensor(g0, pauli_channel=0) +
+                  NambuKeldyshTensor(g1, pauli_channel=1) +
+                  NambuKeldyshTensor(g2, pauli_channel=2) +
+                  NambuKeldyshTensor(g3, pauli_channel=3))
+
+        return result
+
     # ========== Shift Operations ==========
 
     def shift(self, shift=1, axis=0):

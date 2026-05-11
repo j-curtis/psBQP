@@ -34,7 +34,7 @@ class UsadelEvolution:
         #self.eta =  25 * (omega_array[self.omega_size//2 + 1] - omega_array[self.omega_size//2])
         self.eta = 1 * self.cutoff/self.omega_size 
         if 'eta' in system_parameters:
-            self.eta += system_parameters['eta']
+            self.eta = system_parameters['eta']
 
         # if fine grid is specified generate it 
         fine_omega_array = None    

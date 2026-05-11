@@ -10,7 +10,6 @@ from state_object_class import StateObject
 from equilibrium_class import EquilibriumSolver
 import self_energy_class
 
-
 class UsadelKeldyshEvolution:
     """
     Main evolution class for Usadel equation in Keldysh formalism.
@@ -266,6 +265,8 @@ class UsadelKeldyshEvolution:
 
     # ========== Real-Time Evolution ==========
 
+
+
     def _compute_new_gr_row(self, state, external_field=None):
         """
         Evolve retarded Green's function gr by one timestep.
@@ -294,6 +295,9 @@ class UsadelKeldyshEvolution:
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+        
+        #* Compute individual terms in the commutator
+        
         # Extract g^R_{ij} as (2, 2) matrix and wrap as NambuKeldyshTensor
         gr_last_row = state.gr[-1:,:]  # Shape (2, 2, 1, Nt)
         gr_difference = state.gr[-1:].gradient(axis=1)
@@ -307,20 +311,63 @@ class UsadelKeldyshEvolution:
         term4 =  gr_last_row * gap_tensor * 1j 
 
         term5 =  -gr_last_row * tau3 * (self.eta) * 1j
-
-        gr_new = gr_last_row + 1j * tau3 * self.delta_t * (term1 + term2 + term3 + term4 + term5) 
         
+        gr_diagonal_new =  -gap_tensor[-1] #- tau3 * gr_last_row[-1, -1] * tau3
+        
+        #delta_tt_tensor = NambuKeldyshTensor(np.outer([1],np.append(np.zeros(self.ntpoints-1),[1])), pauli_channel=0) 
+        #shift_mask = NambuKeldyshTensor(np.outer([1],np.append([1],np.append(np.ones(self.ntpoints-2),[0]))), pauli_channel=0)
+        
+        #TODO: generalize to complex delta(t)
+        crt_gap_magnitude = np.abs(gap_history[-1]) 
+        #unitary_propagator_L = np.cos(crt_gap_magnitude * self.delta_t) * np.exp(-self.eta * self.delta_t) * tau0 - 1j * np.sin(crt_gap_magnitude * self.delta_t) * tau1 * np.exp(-self.eta * self.delta_t)
+        #unitary_propagator_L_inv = np.cos(crt_gap_magnitude * self.delta_t) * np.exp(self.eta * self.delta_t) * tau0 + 1j * np.sin(crt_gap_magnitude * self.delta_t) * tau1 * np.exp(self.eta * self.delta_t)
+        #unitary_propagator_R_inv = np.cos(crt_gap_magnitude * self.delta_t) * np.exp(-self.eta * self.delta_t) * tau0 + 1j * np.sin(crt_gap_magnitude * self.delta_t) * tau1 * np.exp(-self.eta * self.delta_t)
 
-        unitary_propagator = np.cos(gap_history[-1] * self.delta_t) * np.exp(-self.eta * self.delta_t) * tau0 - 1j * np.sin(gap_history[-1] * self.delta_t) * tau1 * np.exp(-self.eta * self.delta_t)
-        #unitary_evolve = ((np.cos(gap * delta_t) * np.exp(-eta * delta_t)) * tau_0 - 1j * np.sin(gap * delta_t) * tau_1 * np.exp(-eta * delta_t)) 
 
-        # Diagonal element: basically stays constant for tau_3 only Hamiltonian
         #TODO: Update this to read-off the new value of delta and then use that as the diagonal (fixed by jump condition)
-        gr_diagonal_new =  gr_last_row[-1, -1] #- tau3 * gr_last_row[-1, -1] * tau3 
-        gr_new = unitary_propagator * gr_last_row
+        #last_row_evolved = (gr_last_row.shift(-1, axis = 1) * shift_mask * unitary_propagator_R_inv - gr_last_row)
+        
+        #gr_new = unitary_propagator_L * ( (gr_last_row -  tau3 * (last_row_evolved) * tau3  * (shift_mask) ) -  0 * delta_tt_tensor * gap_tensor[-1]) 
+        #gr_new = NambuKeldyshTensor(gr_new.trace(2), pauli_channel=2)/2 +  NambuKeldyshTensor(gr_last_row.trace(3), pauli_channel=3).shift(1, axis = 1)/2
+        #gr_new = NambuKeldyshTensor(gr_last_row.trace(2), pauli_channel=2).shift(1, axis = 1)/2 +  NambuKeldyshTensor(gr_new.trace(3), pauli_channel=3)/2
+        #gr_new = 0 * gr_last_row +  - delta_tt_tensor * gap_tensor[-1] # initialize the gap
+        #TODO add item assigment to elements of a data matrix
+
+
         return gr_new, gr_diagonal_new
 
+
+    def g_equation(left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2):
+        # matrices represent the things multiplying g_r in the two equations, that will need to be solved. The whole thing needs to be posed as a vector equation
+
+        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
+        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
+        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+
+        id_contrib_1 = left_matrix_1 + right_matrix_1
+        id_contrib_2 = left_matrix_2 + right_matrix_2
+
+        tau_contrib_1 = left_matrix_1 - right_matrix_1
+        tau_contrib_2 = left_matrix_2 - right_matrix_2
+
+        matrix_row_1 = (tau_1 * left_matrix_1 + right_matrix_1 * tau_1).matrix_to_vector()
+        matrix_row_2 = (tau_2 * left_matrix_1 + right_matrix_1 * tau_2).matrix_to_vector()
+        matrix_row_3 = (tau_3 * left_matrix_2 + right_matrix_2 * tau_3).matrix_to_vector()
+        matrix_row_4 = (tau_0 * left_matrix_2 + right_matrix_2 * tau_0).matrix_to_vector()
+
+        total_matrix = np.array([matrix_row_1, matrix_row_2, matrix_row_3, matrix_row_4])
+
+        vector = np.array([rhs_matrix_1.trace(1), rhs_matrix_1.trace(2), rhs_matrix_2.trace(3), rhs_matrix_2.trace(0)])
+
+        g_components = np.linalg.solve(total_matrix, vector)
+
+        return NambuKeldyshTensor.vector_to_matrix(g_components)
+
+
     def _compute_new_gk_row(self, state, external_field=None):
+        
         """
         Evolve Keldysh Green's function gk by one timestep.
 
@@ -353,7 +400,7 @@ class UsadelKeldyshEvolution:
 
         # Extract last row of g^K
         gk_last_row = state.gk[-1:]  # Shape (2, 2, 1, Nt)
-
+        """
         # Compute gradient in t' direction
         gk_difference = state.gk.gradient(axis=1)
 
@@ -402,8 +449,12 @@ class UsadelKeldyshEvolution:
 
         gk_diagonal_new = gk_i_ip1 - 1j * tau3 * self.delta_t * (term1_diag + term2_diag + term3_diag + term4_diag + term5_diag + term6_diag + term7_diag)
 
-        gk_diagonal_new = gk_last_row
+        """
         
+        gk_diagonal_new = gk_last_row
+        gk_new = gk_last_row #- 1j * tau3 * (term1 + term2 + term3 + term4 + term5 + term6 + term7) * self.delta_t
+
+
         return gk_new, gk_diagonal_new[-1,-1]
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):

@@ -197,9 +197,9 @@ class EquilibriumSolver:
         gr_two_time.data *= theta_mask[np.newaxis, np.newaxis, :, :]
 
         # Zero out off-diagonal Nambu elements on the diagonal (equal-time only)
-        #diagonal_indices = np.arange(Nt)
-        #gr_two_time.data[1, 0, diagonal_indices, diagonal_indices] = 0.0
-        #gr_two_time.data[0, 1, diagonal_indices, diagonal_indices] = 0.0
+        diagonal_indices = np.arange(Nt)
+        gr_two_time.data[1, 1, diagonal_indices, diagonal_indices] = 0.0
+        gr_two_time.data[0, 0, diagonal_indices, diagonal_indices] = 0.0
 
     def omega_to_one_time(self, g_omega, g_type):
         """
@@ -259,7 +259,7 @@ class EquilibriumSolver:
 
                     # Choose regularization scale ω₀
                     # Use a characteristic energy (e.g., twice the gap or broadening)
-                    omega_10percent = np.max(omega_grid) * 0.005
+                    omega_10percent = np.max(omega_grid) * 1e-2
                     omega_0 = np.abs(omega_10percent) / 2.0  # Regularization scale
                     C_decay = -1j*self.gap_0
                     C_prime = -1j*self.gap_0 * (-1j * self.system_parameters['eta'])
@@ -311,7 +311,7 @@ class EquilibriumSolver:
                 if asym_type == 'lorentzian':  # Lorentzian: C·ω/(ω² + ω₀²)
                     omega_0 = asymptotic_coeffs[pauli_idx][2]
                     # FT[C·ω/(ω² + ω₀²)] = -(iC/2)·sign(τ)·exp(-ω₀|τ|)  [CORRECTED SIGN]
-                    asymptotic_contribution = -(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-10) * np.exp(-omega_0 * np.abs(tau_grid_fft))
+                    asymptotic_contribution = -(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-5) * np.exp(-omega_0 * np.abs(tau_grid_fft))
                     g_tau_shifted = g_tau_shifted + asymptotic_contribution
 
                 elif asym_type == 'lorentzian_extended':  # Extended: C·ω/(ω²+ω₀²) + C'/(ω²+ω₀²)
@@ -406,8 +406,28 @@ class EquilibriumSolver:
 
         # Compute tau indices for all pairs
         # tau = 0 should be at the center of g_tau (index n_omega // 2)
-        tau_idx_matrix = np.round(tau_matrix / dt).astype(int) + n_omega // 2 
+        #? Old code
+        #tau_idx_matrix = np.round(tau_matrix / dt).astype(int) + n_omega // 2 
         
+        #* New code
+        # Compute actual tau spacing from FFT grid
+        d_omega = omega_grid[1] - omega_grid[0]
+        tau_grid_actual = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
+        dtau_fft = tau_grid_actual[1] - tau_grid_actual[0]
+
+
+        # Compute tau indices by finding nearest neighbor in tau_grid_actual
+        tau_indices = np.searchsorted(tau_grid_actual, tau_matrix.flatten())
+        tau_idx_matrix = tau_indices.reshape(tau_matrix.shape)
+
+
+        d_omega = omega_grid[1] - omega_grid[0]
+        dtau_fft = 2*np.pi / (d_omega * n_omega)
+        dt_evolution = tmax / (ntpoints - 1)
+        print(f"FFT tau spacing: {dtau_fft}")
+        print(f"Evolution dt: {dt_evolution}")
+        print(f"Ratio: {dtau_fft / dt_evolution}")
+
         # Create mask for valid indices (g_tau has n_omega points from FFT)
         #TODO Understand this in detail
         valid_mask = (tau_idx_matrix >= 0) & (tau_idx_matrix < n_omega)

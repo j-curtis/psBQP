@@ -1,0 +1,345 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{physics}
+
+\title{Crank-Nicolson Method for Usadel Evolution}
+\author{Numerical Stability Analysis}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+The current explicit time-stepping scheme for the Usadel equation exhibits exponential instability, amplifying $\tau_3$ errors by a factor of $\sim 2$ per timestep. This document explains the Crank-Nicolson method and its application to structure-preserving evolution of Green's functions.
+
+\section{Crank-Nicolson Method: Simple Example}
+
+\subsection{Standard Heat Equation}
+
+Consider the one-dimensional heat equation:
+\begin{equation}
+\frac{\partial u}{\partial t} = \alpha \frac{\partial^2 u}{\partial x^2}.
+\end{equation}
+
+\paragraph{Forward Euler (Explicit, Unstable).}
+Discretize time derivative using forward difference:
+\begin{equation}
+\frac{u_j^{n+1} - u_j^n}{\Delta t} = \alpha \frac{u_{j+1}^n - 2u_j^n + u_{j-1}^n}{(\Delta x)^2}.
+\end{equation}
+
+Rearranging:
+\begin{equation}
+u_j^{n+1} = u_j^n + r(u_{j+1}^n - 2u_j^n + u_{j-1}^n),
+\end{equation}
+where $r = \alpha \Delta t / (\Delta x)^2$.
+
+\textbf{Stability:} Requires $r \leq 1/2$ (conditional stability). For $r > 1/2$, exponential growth occurs.
+
+\paragraph{Crank-Nicolson (Implicit, Unconditionally Stable).}
+Average the spatial derivative at times $n$ and $n+1$:
+\begin{equation}
+\frac{u_j^{n+1} - u_j^n}{\Delta t} = \frac{\alpha}{2} \left[ \frac{\partial^2 u}{\partial x^2}\bigg|_n + \frac{\partial^2 u}{\partial x^2}\bigg|_{n+1} \right].
+\end{equation}
+
+Explicitly:
+\begin{equation}
+\frac{u_j^{n+1} - u_j^n}{\Delta t} = \frac{\alpha}{2(\Delta x)^2} \left[ (u_{j+1}^n - 2u_j^n + u_{j-1}^n) + (u_{j+1}^{n+1} - 2u_j^{n+1} + u_{j-1}^{n+1}) \right].
+\end{equation}
+
+Rearranging to collect $n+1$ terms on left, $n$ terms on right:
+\begin{equation}
+-r u_{j-1}^{n+1} + 2(1+r) u_j^{n+1} - r u_{j+1}^{n+1} = r u_{j-1}^n + 2(1-r) u_j^n + r u_{j+1}^n.
+\end{equation}
+
+This is a **tridiagonal linear system** $A \mathbf{u}^{n+1} = B \mathbf{u}^n$, solved at each timestep.
+
+\textbf{Stability:} Unconditionally stable for all $r > 0$ (no timestep restriction from stability, only accuracy).
+
+\textbf{Accuracy:} Second-order in both space and time: error $\sim O(\Delta x^2, \Delta t^2)$.
+
+\subsection{Simple ODE Example}
+
+For ordinary differential equation:
+\begin{equation}
+\frac{dy}{dt} = f(t, y), \quad y(t_0) = y_0,
+\end{equation}
+
+\paragraph{Forward Euler:}
+\begin{equation}
+y^{n+1} = y^n + \Delta t \, f(t_n, y^n).
+\end{equation}
+
+\paragraph{Crank-Nicolson:}
+Evaluate $f$ at the midpoint by averaging:
+\begin{equation}
+y^{n+1} = y^n + \frac{\Delta t}{2} \left[ f(t_n, y^n) + f(t_{n+1}, y^{n+1}) \right].
+\end{equation}
+
+This is **implicit**: $y^{n+1}$ appears on both sides. Requires solving (typically via Newton iteration):
+\begin{equation}
+y^{n+1} - y^n - \frac{\Delta t}{2} f(t_{n+1}, y^{n+1}) = \frac{\Delta t}{2} f(t_n, y^n).
+\end{equation}
+
+\subsection{Unitary Evolution Example}
+
+Consider evolution under time-dependent Hamiltonian:
+\begin{equation}
+\frac{d}{dt} \psi(t) = -iH(t) \psi(t).
+\end{equation}
+
+\paragraph{Forward Euler:}
+\begin{equation}
+\psi^{n+1} = \psi^n - i\Delta t \, H(t_n) \psi^n = [1 - i\Delta t H(t_n)] \psi^n.
+\end{equation}
+
+\textbf{Problem:} Operator $[1 - i\Delta t H]$ is NOT unitary, even if $H$ is Hermitian. Norm $\|\psi\|$ can grow or shrink.
+
+\paragraph{Crank-Nicolson:}
+\begin{equation}
+\psi^{n+1} = \psi^n - \frac{i\Delta t}{2} \left[ H(t_n) \psi^n + H(t_{n+1}) \psi^{n+1} \right].
+\end{equation}
+
+Rearranging:
+\begin{equation}
+\left[1 + \frac{i\Delta t}{2} H(t_{n+1})\right] \psi^{n+1} = \left[1 - \frac{i\Delta t}{2} H(t_n)\right] \psi^n.
+\end{equation}
+
+\textbf{Unitarity preservation:} The propagator is:
+\begin{equation}
+U_{\text{CN}} = \left[1 + \frac{i\Delta t}{2} H\right]^{-1} \left[1 - \frac{i\Delta t}{2} H\right].
+\end{equation}
+
+For Hermitian $H$, this is a Cayley transform: $U_{\text{CN}}^\dagger U_{\text{CN}} = 1$ (exactly unitary, even for finite $\Delta t$).
+
+\textbf{Key advantage:} Preserves geometric structure (unitarity, norm conservation) at discrete level.
+
+\section{Crank-Nicolson for Usadel Equation}
+
+\subsection{Current Scheme (Explicit, Unstable)}
+
+Your discrete evolution for $\hat{g}'^R(t,t')$ is:
+\begin{equation}
+\label{eq:current_explicit}
+\begin{split}
+\hat{g}'^R(t+\Delta t, t') &= \hat{U}_L(\Delta t; t) \Bigg[-\hat{\tau}_3 \left(\hat{g}'^R(t, t'+\Delta t) \hat{U}_R^{-1}(\Delta t; t') - \hat{g}'^R(t, t')\right) \hat{\tau}_3 \\
+&\quad + \hat{g}'^R(t, t') + \delta_{tt'} \hat{g}'^R(t,t)\Bigg].
+\end{split}
+\end{equation}
+
+This uses:
+\begin{itemize}
+\item \textbf{Forward derivative in $t$:} $\partial_t \hat{g} \approx [\hat{g}(t+\Delta t, t') - \hat{g}(t,t')]/\Delta t$
+\item \textbf{Backward derivative in $t'$:} $\partial_{t'} \hat{g} \approx [\hat{g}(t, t'+\Delta t) - \hat{g}(t,t')]/\Delta t$ (via shift)
+\end{itemize}
+
+\textbf{Problem:} This asymmetric stencil breaks time-translation invariance. The term $\hat{g} + \hat{\tau}_3 \hat{g} \hat{\tau}_3$ amplifies $\tau_0, \tau_3$ components by factor 2 (see Pauli algebra: $\hat{\tau}_3 (\tau_3) \hat{\tau}_3 = +\tau_3$, doubling instead of canceling).
+
+\subsection{Crank-Nicolson Formulation}
+
+\paragraph{Strategy.}
+Average the evolution operator between times $t$ and $t+\Delta t$:
+\begin{equation}
+\frac{\partial \hat{g}'^R}{\partial t}(t,t') \approx \frac{1}{2} \left[ \mathcal{L}_t[\hat{g}'^R](t,t') + \mathcal{L}_t[\hat{g}'^R](t+\Delta t,t') \right],
+\end{equation}
+where $\mathcal{L}_t$ is the Usadel evolution operator (derived from continuous equation).
+
+\paragraph{Detailed construction.}
+The continuous Usadel equation (after renormalization) gives:
+\begin{equation}
+\partial_t \hat{g}'^R(t,t') = i\hat{\tau}_3 [\hat{\Delta}(t) - \hat{g}'^R(t,t) \delta(t-t')] - i[\hat{\Delta}(t) - \hat{g}'^R(t,t) \delta(t-t')] \hat{\tau}_3 + \mathcal{D}_{t'} \hat{g}'^R,
+\end{equation}
+where $\mathcal{D}_{t'}$ represents the derivative term in $t'$.
+
+For Crank-Nicolson, discretize as:
+\begin{equation}
+\frac{\hat{g}'^R(t+\Delta t, t') - \hat{g}'^R(t,t')}{\Delta t} = \frac{1}{2} \left[ \mathcal{L}_t[\hat{g}'^R](t,t') + \mathcal{L}_t[\hat{g}'^R](t+\Delta t,t') \right].
+\end{equation}
+
+\paragraph{Off-diagonal evolution ($t' \neq t$, $\delta_{tt'} = 0$).}
+
+Using the transformation $\hat{g}'^R = \hat{U}_L \hat{h}^R \hat{U}_R$ and integrating over $[t, t+\Delta t]$, the Crank-Nicolson version becomes:
+\begin{equation}
+\begin{split}
+&\hat{g}'^R(t+\Delta t, t') - \hat{U}_L(\Delta t; t) \hat{g}'^R(t, t') \\
+&= -\frac{1}{2} \Bigg[ \hat{U}_L(\Delta t; t) \hat{\tau}_3 \left(\hat{g}'^R(t, t'+\Delta t) \hat{U}_R^{-1}(\Delta t; t') - \hat{g}'^R(t, t')\right) \hat{\tau}_3 \\
+&\quad\quad\quad + \hat{\tau}_3 \left(\hat{g}'^R(t+\Delta t, t'+\Delta t) \hat{U}_R^{-1}(\Delta t; t') - \hat{g}'^R(t+\Delta t, t')\right) \hat{\tau}_3 \Bigg].
+\end{split}
+\end{equation}
+
+Rearranging to separate known (time $t$) from unknown (time $t+\Delta t$) terms:
+\begin{equation}
+\begin{split}
+&\left[1 + \frac{1}{2} \hat{\tau}_3 \cdot \hat{U}_R^{-1}(\Delta t; t') \hat{\tau}_3 \right] \hat{g}'^R(t+\Delta t, t') \\
+&= \hat{U}_L(\Delta t; t) \left[1 - \frac{1}{2} \hat{\tau}_3 \hat{U}_R^{-1}(\Delta t; t') \hat{\tau}_3 \right] \hat{g}'^R(t, t') \\
+&\quad + \frac{1}{2} \hat{\tau}_3 \left[\hat{g}'^R(t, t'+\Delta t) + \hat{g}'^R(t+\Delta t, t'+\Delta t) \hat{U}_R^{-1}(\Delta t; t') \right] \hat{\tau}_3.
+\end{split}
+\end{equation}
+
+\textbf{Structure:} This is a linear system:
+\begin{equation}
+\mathcal{A} \, \mathbf{g}^{n+1} = \mathcal{B} \, \mathbf{g}^n,
+\end{equation}
+where $\mathcal{A}$ and $\mathcal{B}$ are operators involving $\hat{\tau}_3$ and unitary propagators.
+
+\subsection{Advantages of Crank-Nicolson for Usadel}
+
+\begin{enumerate}
+\item \textbf{Time-translation invariance preservation.} The symmetric averaging ensures that in equilibrium, $\hat{g}(t+\Delta t, t) = \hat{g}(t, t-\Delta t)$ holds to $O(\Delta t^2)$.
+
+\item \textbf{Algebraic stability.} The term $\hat{g} + \hat{\tau}_3 \hat{g} \hat{\tau}_3$ appears symmetrically on both sides, preventing amplification:
+\begin{equation}
+\text{LHS: } (1 + \text{operator}) \hat{g}^{n+1}, \quad \text{RHS: } (1 - \text{operator}) \hat{g}^n.
+\end{equation}
+This Cayley-type structure bounds the propagator.
+
+\item \textbf{Second-order accuracy.} Errors scale as $O(\Delta t^2)$ instead of $O(\Delta t)$.
+
+\item \textbf{Unconditional stability.} No timestep restriction from stability (unlike explicit Euler which requires $\Delta t < \Delta t_{\text{crit}}$).
+\end{enumerate}
+
+\subsection{Computational Cost}
+
+\textbf{Explicit scheme:}
+\begin{itemize}
+\item Direct update: $\hat{g}^{n+1} = f(\hat{g}^n)$
+\item Cost per timestep: $O(N_t^2 \times N_{\text{Pauli}})$ (matrix operations)
+\item No linear solve required
+\end{itemize}
+
+\textbf{Crank-Nicolson:}
+\begin{itemize}
+\item Implicit solve: $\mathcal{A} \hat{g}^{n+1} = \mathcal{B} \hat{g}^n$
+\item Cost per timestep: $O(N_t^3)$ (direct solve) or $O(N_t^2 \log N_t)$ (iterative)
+\item For Nambu-Keldysh structure: $4 \times$ cost (4 Pauli components)
+\end{itemize}
+
+\textbf{Tradeoff:} Crank-Nicolson is $\sim 2$-$5\times$ more expensive per step, but allows larger timesteps (factor 5-10) due to unconditional stability. Net speedup possible.
+
+\subsection{Implementation Strategy}
+
+\paragraph{Diagonal elements ($t' = t$).}
+For equal-time Green's function, use the simplified form from paper Eq.~2318:
+\begin{equation}
+\hat{g}'^R(t+\Delta t, t) = \hat{U}_L(\Delta t; t) \hat{g}'^R(t,t).
+\end{equation}
+
+This is already exact (no discretization error in derivative), so keep as-is.
+
+\paragraph{Off-diagonal elements ($t' < t$).}
+Implement Crank-Nicolson as described above. For each new time slice $t_{n+1}$:
+
+\begin{enumerate}
+\item \textbf{Form RHS:} Compute known terms involving $\hat{g}^n$ at time $t_n$
+\item \textbf{Solve linear system:} Invert operator $\mathcal{A}$ to obtain $\hat{g}^{n+1}$
+\item \textbf{Update grid:} Store new row $\hat{g}'^R(t_{n+1}, t_j)$ for all $j \leq n+1$
+\end{enumerate}
+
+\paragraph{Linear solver options.}
+
+\textbf{Option 1: Direct solve (small grids, $N_t < 500$)}
+\begin{itemize}
+\item Use \texttt{numpy.linalg.solve} or \texttt{scipy.linalg.solve}
+\item Exploit sparsity if operator $\mathcal{A}$ is banded
+\end{itemize}
+
+\textbf{Option 2: Iterative solve (large grids, $N_t > 500$)}
+\begin{itemize}
+\item Use \texttt{scipy.sparse.linalg.gmres} or \texttt{bicgstab}
+\item Precondition with approximate inverse $\mathcal{A}^{-1} \approx [1 + \text{operator}]^{-1}$
+\item Typically converges in $\sim 5$-$10$ iterations
+\end{itemize}
+
+\textbf{Option 3: Predictor-corrector (hybrid)}
+\begin{itemize}
+\item \textbf{Predictor:} Explicit step to estimate $\hat{g}^{n+1}_{\text{guess}}$
+\item \textbf{Corrector:} Crank-Nicolson iteration starting from guess:
+\begin{equation}
+\hat{g}^{n+1}_{k+1} = \mathcal{A}^{-1} \left[ \mathcal{B} \hat{g}^n + \text{coupling terms}(\hat{g}^{n+1}_k) \right].
+\end{equation}
+\item Usually converges in 1-2 iterations
+\end{itemize}
+
+\section{Practical Modifications for Your Code}
+
+\subsection{Minimal Change (Projection Method)}
+
+As a quick fix without rewriting the solver, add a projection step after each explicit update:
+
+\begin{equation}
+\hat{g}'^R_{\text{corrected}} = \hat{g}'^R_{\text{explicit}} - \frac{1}{2} (\hat{\tau}_0 \hat{g} \hat{\tau}_0 + \hat{\tau}_3 \hat{g} \hat{\tau}_3),
+\end{equation}
+
+where the factor $1/2$ cancels the factor-2 amplification. This is not Crank-Nicolson, but stabilizes the scheme.
+
+\subsection{Full Crank-Nicolson Implementation}
+
+Replace \texttt{\_compute\_new\_gr\_row} function:
+
+\begin{verbatim}
+def _compute_new_gr_row_CN(self, state, external_field=None):
+    """
+    Crank-Nicolson evolution for g'^R(t,t').
+    Solves implicit linear system at each timestep.
+    """
+    # Extract current state
+    gr_grid = state['gr']
+    gap_history = state['gap_history']
+
+    # Build coefficient matrices
+    A_operator = self._build_CN_LHS_operator(gap_history[-1])
+    B_operator = self._build_CN_RHS_operator(gap_history[-1])
+
+    # Form RHS: B * g^n + coupling terms
+    rhs = B_operator @ gr_last_row + coupling_terms(...)
+
+    # Solve linear system: A * g^{n+1} = rhs
+    gr_new = scipy.sparse.linalg.gmres(A_operator, rhs)[0]
+
+    return gr_new, gr_diagonal_new
+\end{verbatim}
+
+\subsection{Testing and Validation}
+
+After implementing Crank-Nicolson, verify:
+
+\begin{enumerate}
+\item \textbf{Equilibrium stability:} Evolve equilibrium initial condition for many timesteps. Check:
+\begin{equation}
+\max_{ij} |\hat{g}'^R(t_i, t_j) - \hat{g}'^R_{\text{eq}}(t_i - t_j)| < 10^{-8}.
+\end{equation}
+
+\item \textbf{Time-translation invariance:} For all $i, j$:
+\begin{equation}
+\|\hat{g}'^R(t_{i+1}, t_j) - \hat{g}'^R(t_i, t_{j-1})\| < C \Delta t^2,
+\end{equation}
+where $C$ is a constant (2nd-order convergence).
+
+\item \textbf{$\tau_3$ component stability:} Monitor $\max|\tau_3|$ over time. Should remain bounded (not grow exponentially).
+
+\item \textbf{Normalization:} Check $\{\hat{g}'^R(t,t), \hat{\tau}_3\} = 0$ at all times.
+
+\item \textbf{Convergence test:} Run with $\Delta t$, $\Delta t/2$, $\Delta t/4$ and verify:
+\begin{equation}
+\text{Error}(\Delta t/2) \approx \text{Error}(\Delta t) / 4 \quad \text{(2nd order)}.
+\end{equation}
+\end{enumerate}
+
+\section{Conclusion}
+
+The current explicit scheme has a fundamental instability that amplifies $\tau_3$ errors by factor $\sim 2$ per timestep, independent of $\Delta t$. This is due to the asymmetric time-differencing which breaks time-translation invariance.
+
+Crank-Nicolson fixes this by:
+\begin{itemize}
+\item Using symmetric (midpoint) averaging of evolution operator
+\item Preserving geometric structure (unitarity, time-translation symmetry)
+\item Providing unconditional stability and 2nd-order accuracy
+\end{itemize}
+
+The cost is an implicit solve at each timestep, but this is offset by the ability to use larger timesteps and guaranteed stability.
+
+For immediate results, use the projection method as a temporary fix. For publication-quality numerics, implement full Crank-Nicolson.
+
+\end{document}

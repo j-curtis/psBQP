@@ -480,6 +480,36 @@ class NambuKeldyshTensor:
 
     # ========== Sliding Window Update ==========
 
+    def append(self, vector):
+        """
+        Append vector to Nambu tensor from the left (prepend).
+
+        Takes a vector of Pauli components [g₀, g₁, g₂, g₃] and prepends it
+        as a new entry at the beginning of the extra dimensions.
+
+        Args:
+            vector: Array of shape (4,) or (4, ...) containing [g₀, g₁, g₂, g₃]
+
+        Updates:
+            self.data: Modified in-place from (2, 2, N, ...) to (2, 2, N+1, ...)
+                      New entry added at index 0 of dimension 2
+
+        Example:
+            obj has shape (2, 2, N)
+            vector has shape (4,)
+            After obj.append(vector), obj has shape (2, 2, N+1)
+            New data is at obj.data[:, :, 0]
+        """
+        # Convert vector to Nambu matrix
+        # This will have shape (2, 2, 1) for 1D vector or (2, 2, 1, ...) for higher-dim vector
+        new_entry = NambuKeldyshTensor.vector_to_matrix(vector)
+
+        # Prepend along axis 2 (first dimension after Nambu (2,2))
+        self.data = np.concatenate([new_entry.data, self.data], axis=2)
+
+        # Update shape
+        self.data_shape = self.data.shape
+
     def update_entries(self, new_upper_row, new_lower_column, new_diagonal):
         """
         Update matrix using sliding window: add new timestep, remove oldest.

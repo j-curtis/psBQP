@@ -321,9 +321,7 @@ class UsadelKeldyshEvolution:
         return gr_new, gr_diagonal_new 
 
 
-    def g_update_rule(self,left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, diagonal_entry, full_g_matrix):
-        # matrices represent the things multiplying g_r in the two equations, that will need to be solved. The whole thing needs to be posed as a vector equation
-
+    def g_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, diagonal_entry, full_g_matrix):
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
         tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
@@ -339,23 +337,29 @@ class UsadelKeldyshEvolution:
         vector_row_3 = (rhs_matrix_2.trace(3)/2)[0]
         vector_row_4 = (rhs_matrix_2.trace(0)/2)[0]
 
-        vector_output = np.array([diagonal_entry.matrix_to_vector()])
+        solution_tensor = diagonal_entry * NambuKeldyshTensor([1.0], pauli_channel=0)
+
+        # Backward sweep in time
         for time in range(self.ntpoints-1, -1, -1):
+            # Compute normalization convolution term
             if time == self.ntpoints - 1:
-                norm_convolution = np.array([0,0,0,0])
+                norm_convolution = np.array([0, 0, 0, 0])
             else:
-                #print((NambuKeldyshTensor.vector_to_matrix(vector_output[:-1].T) @ full_g_matrix[ time +1: ,time]).data.shape)
-                norm_convolution = -(NambuKeldyshTensor.vector_to_matrix(vector_output[:-1].T) @ full_g_matrix[ time +1: ,time]).matrix_to_vector() * self.delta_t
-            #print(norm_convolution)
-            total_matrix = np.array([matrix_row_1[:,time], matrix_row_2[:,time], matrix_row_3[:,time], matrix_row_4[:,time]])
-            total_vector = np.array([vector_row_1[time], vector_row_2[time], vector_row_3[time], vector_row_4[time]]) + np.array([vector_output[0][2],-vector_output[0][1],norm_convolution[3],norm_convolution[0]]) #* leftover derivative term!
+                # Convolution: solution_tensor (excluding diagonal) @ full_g_matrix[time+1:, time]
+                norm_convolution = -(solution_tensor[:-1] @ full_g_matrix[time+1:, time]).matrix_to_vector() * self.delta_t
+            total_matrix = np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]])
 
+            diagonal_components = solution_tensor[0].matrix_to_vector()
+
+            total_vector = np.array([vector_row_1[time], vector_row_2[time],vector_row_3[time],vector_row_4[time]]) + np.array([diagonal_components[2], -diagonal_components[1], norm_convolution[3], norm_convolution[0] ])
+
+            # Solve linear system for [g1, g2, g3, g0]
             g_components = np.linalg.solve(total_matrix, total_vector)
-            vector_output = np.vstack([g_components,vector_output])
 
+            # Append to solution (prepends to data)
+            solution_tensor.append(g_components)
 
-        return NambuKeldyshTensor.vector_to_matrix(vector_output[:-1].T)
-
+        return solution_tensor[:-1]
 
     def _compute_new_gk_row(self, state, external_field=None):
         

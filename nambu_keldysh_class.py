@@ -510,6 +510,36 @@ class NambuKeldyshTensor:
         # Update shape
         self.data_shape = self.data.shape
 
+    def append_right(self, vector):
+        """
+        Append vector to Nambu tensor from the right.
+
+        Takes a vector of Pauli components [g₀, g₁, g₂, g₃] and appends it
+        as a new entry at the end of the extra dimensions.
+
+        Args:
+            vector: Array of shape (4,) or (4, ...) containing [g₀, g₁, g₂, g₃]
+
+        Updates:
+            self.data: Modified in-place from (2, 2, N, ...) to (2, 2, N+1, ...)
+                      New entry added at index N (last position) of dimension 2
+
+        Example:
+            obj has shape (2, 2, N)
+            vector has shape (4,)
+            After obj.append_right(vector), obj has shape (2, 2, N+1)
+            New data is at obj.data[:, :, N] (now the last entry)
+        """
+        # Convert vector to Nambu matrix
+        # This will have shape (2, 2, 1) for 1D vector or (2, 2, 1, ...) for higher-dim vector
+        new_entry = NambuKeldyshTensor.vector_to_matrix(vector)
+
+        # Append along axis 2 (first dimension after Nambu (2,2))
+        self.data = np.concatenate([self.data, new_entry.data], axis=2)
+
+        # Update shape
+        self.data_shape = self.data.shape
+
     def update_entries(self, new_upper_row, new_lower_column, new_diagonal):
         """
         Update matrix using sliding window: add new timestep, remove oldest.

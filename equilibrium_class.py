@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'equilibrium_python')
 from Usadel_methods import UsadelEvolution
 from nambu_class import NambuTensor
 from system_state import SupercondctingState
-
+from matplotlib import pyplot as plt
 
 class EquilibriumSolver:
     """
@@ -221,6 +221,7 @@ class EquilibriumSolver:
         omega_grid = self.usadel_solver.w_arr
         n_omega = len(omega_grid)
 
+        temperature = 0.3 #! This may need to be changed for general T? 
         # Extract Pauli components from NambuTensor using trace
         # Store asymptotic coefficients to add back after FFT
         g_pauli = []
@@ -271,7 +272,18 @@ class EquilibriumSolver:
                     asymptotic_coeffs.append(('lorentzian_extended', C_decay, C_prime, omega_0))
                 else:  # pauli_idx 0 or 1: no regularization
                     asymptotic_coeffs.append(None)
-            else:  # Not retarded GF (g_type != 'r')
+            elif g_type == 'k':  # Keldysh Green's function
+                if pauli_idx == 3:  # tau_3: tanh(ω/2T) asymptotic for g^K
+                    # At equilibrium, g^K_3(ω) = 2·tanh(ω/2T) at equilibrium
+                    # Subtract this before FFT for better convergence
+                    C_tanh = 2.0
+                    tanh_omega = np.tanh(omega_grid / (2.0 * temperature))
+                    pauli_component = pauli_component - C_tanh * tanh_omega
+
+                    asymptotic_coeffs.append(('tanh', C_tanh, temperature))
+                else:  # pauli_idx 0, 1, 2: no regularization for now
+                    asymptotic_coeffs.append(None)
+            else:  # Unknown g_type
                 asymptotic_coeffs.append(None)
 
             g_pauli.append(pauli_component)
@@ -324,7 +336,28 @@ class EquilibriumSolver:
                                             np.exp(-omega_0 * np.abs(tau_grid_fft))
                     g_tau_shifted = g_tau_shifted + asymptotic_contribution
 
-            # For constant asymptotic (tau_3), we don't add anything back
+                elif asym_type == 'tanh':  # tanh(ω/2T) asymptotic for Keldysh tau_3
+                    # FT[tanh(ω/2T)] = -iT / sinh(πτT)
+                    # This decays exponentially as |τ| → ∞, unlike sign(ω)
+                    T = asymptotic_coeffs[pauli_idx][2]  # Temperature
+
+                    # Create mask to avoid division by zero at τ=0
+                    mask = (np.abs(tau_grid_fft) > 1e-10)
+
+                    # Initialize with zeros
+                    asymptotic_contribution = np.zeros_like(tau_grid_fft, dtype=complex)
+
+                    # Fill in -iT / sinh(πτT) for τ ≠ 0
+                    asymptotic_contribution[mask] = (-1j * C * T /
+                                                    np.sinh(np.pi * tau_grid_fft[mask] * T))
+
+                    # At τ=0, use L'Hôpital's limit: lim_{τ→0} -iT/sinh(πτT) = -i/π
+                    tau_zero_mask = (np.abs(tau_grid_fft) <= 1e-10)
+                    asymptotic_contribution[tau_zero_mask] = -1j * C / np.pi
+
+                    g_tau_shifted = g_tau_shifted + asymptotic_contribution
+
+            # For constant asymptotic (tau_3 in retarded case), we don't add anything back
             # The constant in frequency → delta function at τ=0, which we ignore
 
             g_tau_pauli.append(g_tau_shifted)
@@ -338,11 +371,14 @@ class EquilibriumSolver:
             else:
                 g_one_time = g_one_time + g_component
 
-        # Apply causality constraint: θ(τ) enforces g^R(τ) = 0 for τ < 0
-        d_omega = omega_grid[1] - omega_grid[0]
-        tau_grid_fft = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
-        theta_mask = (tau_grid_fft >= 0).astype(float)
-        g_one_time.data *= theta_mask[np.newaxis, np.newaxis, :]
+        # Apply causality constraint only for retarded Green's function
+        # θ(τ) enforces g^R(τ) = 0 for τ < 0
+        # g^K should NOT have causality constraint to preserve symmetry
+        if g_type == 'r':
+            d_omega = omega_grid[1] - omega_grid[0]
+            tau_grid_fft = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
+            theta_mask = (tau_grid_fft >= 0).astype(float)
+            g_one_time.data *= theta_mask[np.newaxis, np.newaxis, :]
 
         return g_one_time
 
@@ -406,9 +442,7 @@ class EquilibriumSolver:
 
         # Compute tau indices for all pairs
         # tau = 0 should be at the center of g_tau (index n_omega // 2)
-        #? Old code
-        #tau_idx_matrix = np.round(tau_matrix / dt).astype(int) + n_omega // 2 
-        
+
         #* New code
         # Compute actual tau spacing from FFT grid
         d_omega = omega_grid[1] - omega_grid[0]
@@ -417,19 +451,29 @@ class EquilibriumSolver:
 
 
         # Compute tau indices by finding nearest neighbor in tau_grid_actual
-        tau_indices = np.searchsorted(tau_grid_actual, tau_matrix.flatten())
+        # Use searchsorted to find insertion points, then check which neighbor is closer
+        tau_flat = tau_matrix.flatten()
+        tau_indices_right = np.searchsorted(tau_grid_actual, tau_flat)
+
+        # Clip to valid range
+        tau_indices_right = np.clip(tau_indices_right, 0, n_omega - 1)
+        tau_indices_left = np.clip(tau_indices_right - 1, 0, n_omega - 1)
+
+        # Find which neighbor is closer
+        dist_left = np.abs(tau_flat - tau_grid_actual[tau_indices_left])
+        dist_right = np.abs(tau_flat - tau_grid_actual[tau_indices_right])
+
+        # Choose the closer index
+        tau_indices = np.where(dist_left < dist_right, tau_indices_left, tau_indices_right)
         tau_idx_matrix = tau_indices.reshape(tau_matrix.shape)
 
 
         d_omega = omega_grid[1] - omega_grid[0]
         dtau_fft = 2*np.pi / (d_omega * n_omega)
         dt_evolution = tmax / (ntpoints - 1)
-        print(f"FFT tau spacing: {dtau_fft}")
-        print(f"Evolution dt: {dt_evolution}")
-        print(f"Ratio: {dtau_fft / dt_evolution}")
+
 
         # Create mask for valid indices (g_tau has n_omega points from FFT)
-        #TODO Understand this in detail
         valid_mask = (tau_idx_matrix >= 0) & (tau_idx_matrix < n_omega)
 
         g_two_time_pauli = []

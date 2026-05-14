@@ -86,6 +86,48 @@ class StateObject:
 
     # ========== Utilities ==========
 
+    def update_state_gr(self, new_gr_row, new_gr_diag):
+        """
+        Update g^R with new time step using sliding window.
+
+        Updates only g^R by adding new row/column/diagonal and removing oldest.
+
+        Args:
+            new_gr_row: New row for g^R(t_new, t_j) - shape (2,2,N_t) or NambuKeldyshTensor
+            new_gr_diag: New diagonal element g^R(t_new, t_new) - shape (2,2) or NambuKeldyshTensor
+            new_gk_row: Not used (kept for signature compatibility)
+            new_gk_diag: Not used (kept for signature compatibility)
+        """
+        N_t = self.gr.data.shape[2]
+
+        # g^R column is zero due to causality (retarded function vanishes for t < t')
+        gr_column_data = NambuKeldyshTensor(np.zeros((N_t), dtype=complex), pauli_channel=0)
+
+        self.gr.update_entries(new_gr_row, gr_column_data, new_gr_diag)
+
+    def update_state_gk(self, new_gk_row, new_gk_diag):
+        """
+        Update g^K with new time step using sliding window.
+
+        Updates only g^K by adding new row/column/diagonal and removing oldest.
+
+        Args:
+            new_gr_row: Not used (kept for signature compatibility)
+            new_gr_diag: Not used (kept for signature compatibility)
+            new_gk_row: New row for g^K(t_new, t_j) - shape (2,2,N_t) or NambuKeldyshTensor
+            new_gk_diag: New diagonal element g^K(t_new, t_new) - shape (2,2) or NambuKeldyshTensor
+        """
+        N_t = self.gk.data.shape[2]
+
+        # g^K column computed from row using transformation: τ₃ @ (g^K_row)^† @ τ₃
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+        gk_row_data = new_gk_row
+
+        gk_column_data = tau3 * gk_row_data.conj().complete_transpose() * tau3
+
+        self.gk.update_entries(new_gk_row, gk_column_data, new_gk_diag)
+
     def update_state_object(self, new_gr_row, new_gr_diag, new_gk_row, new_gk_diag):
         """
         Update state object with new time step using sliding window.
@@ -98,22 +140,8 @@ class StateObject:
             new_gk_row: New row for g^K(t_new, t_j) - shape (2,2,N_t) or NambuKeldyshTensor
             new_gk_diag: New diagonal element g^K(t_new, t_new) - shape (2,2) or NambuKeldyshTensor
         """
-        N_t = self.gr.data.shape[2]
-
-        # g^R column is zero due to causality (retarded function vanishes for t < t')
-        gr_column_data = NambuKeldyshTensor(np.zeros((N_t), dtype=complex), pauli_channel=0)
-
-        # g^K column computed from row using transformation: τ₃ @ (g^K_row)^† @ τ₃
-        tau3 =  NambuKeldyshTensor(1.0, pauli_channel=3)
-
-        # Extract row data (handle both NambuKeldyshTensor and array inputs)
-
-        gk_row_data = new_gk_row
-
-        gk_column_data  = tau3 * gk_row_data.conj().complete_transpose() * tau3
-
-        self.gr.update_entries(new_gr_row, gr_column_data, new_gr_diag)
-        self.gk.update_entries(new_gk_row, gk_column_data, new_gk_diag)
+        self.update_state_gr(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)
+        self.update_state_gk(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)
         
     # ========== Consistency Checks ==========
 

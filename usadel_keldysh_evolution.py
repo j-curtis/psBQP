@@ -39,7 +39,6 @@ class UsadelKeldyshEvolution:
 
         # Generate omega grid from extended time domain
         self._generate_omega_grid()
-        print(self.omega_grid)
         # Set eta with warning if too small
         self.eta = system_parameters['eta']
         recommended_eta = 5.0 / self.tmax
@@ -112,7 +111,6 @@ class UsadelKeldyshEvolution:
 
         # Generate time grid
         self.time_grid = np.linspace(-self.tmax, 0, self.ntpoints)
-
 
     def _generate_omega_grid(self):
         """
@@ -212,7 +210,7 @@ class UsadelKeldyshEvolution:
         """
         Generate thermal occupation function as a two-time object.
 
-        Uses analytic form: f(τ) = 2πi T / sinh(π τ T)
+        Uses analytic form: f(τ) = -i T / sinh(π τ T)
         Returns f(t,t') = f(t-t') as a NambuKeldyshTensor with two time axes.
 
         Args:
@@ -236,13 +234,65 @@ class UsadelKeldyshEvolution:
         # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
         mask = (np.abs(tau_matrix) > 1e-10)
 
-        # Compute f(τ) = 2πi T / sinh(π τ T) for all non-zero tau values
-        f_two_time[mask] = 2.0 * np.pi * 1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
+        # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
+        f_two_time[mask] = -1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
 
         # Diagonal (τ=0) remains zero (already initialized to zero)
 
         # Store as NambuKeldyshTensor with two time axes (identity in Nambu space)
         self.thermal_dist = NambuKeldyshTensor(f_two_time, pauli_channel=0)
+
+    def get_thermal_integral(self, temperature):
+        """
+        Compute cumulative integral of thermal distribution on finite time grid.
+
+        For convolutions on finite grid [-T_max, 0], computes:
+        F(t, t') = ∫_{-T_max - t'}^{t - t'} f(τ') dτ'
+                 = F_full(t - t') - F_full(-T_max - t')
+
+        where F_full(τ) = -i/π · ln(tanh(πτT/2)) is the infinite-domain integral
+        and f(τ) = -i T / sinh(π τ T) is the thermal distribution.
+
+        Args:
+            temperature: Temperature in energy units
+
+        Stores:
+            self.thermal_integral: NambuKeldyshTensor of shape (2, 2, ntpoints, ntpoints)
+                                  Identity in Nambu space
+        """
+        # Create meshgrid for all time pairs (t_i, t_j)
+        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
+
+        # Compute upper bound: tau = t_i - t_j
+        tau_upper = t_i - t_j
+
+        # Compute lower bound: -T_max - t_j
+        tau_lower = -self.tmax - t_j
+
+        # Helper function to compute F(τ) = -i/π · ln(tanh(πτT/2))
+        def compute_F_full(tau_vals):
+            """Compute analytical thermal integral from -∞ to τ (no constant)."""
+            result = np.zeros_like(tau_vals, dtype=complex)
+
+            # Mask to avoid singularity at τ = 0
+            mask = (np.abs(tau_vals) > 1e-10)
+
+            # Compute where τ ≠ 0
+            x = np.pi * tau_vals[mask] * temperature / 2.0
+            tanh_x = np.tanh(x)
+            ln_tanh = np.log(tanh_x + 0j)
+            result[mask] = -1j / np.pi * ln_tanh  # No +1 constant
+
+            # At τ = 0, set to 0 (principal value)
+            return result
+
+        # Compute finite-domain integral: F(upper) - F(lower) + 1
+        F_upper = compute_F_full(tau_upper)
+        F_lower = compute_F_full(tau_lower)
+        F_two_time = F_upper - F_lower #+ 1.0
+
+        # Store as NambuKeldyshTensor (identity in Nambu space)
+        self.thermal_integral = NambuKeldyshTensor(F_two_time, pauli_channel=0)
 
 
     # ========== Real-Time Evolution ==========
@@ -371,7 +421,7 @@ class UsadelKeldyshEvolution:
         #* Compute individual terms in the commutator
         gk_last_row = state.gk[-1:,:]  # Shape (2, 2, 1, Nt)
 
-        gk_diagonal_new =  gk_last_row[-1,-1] #- tau3 * gr_last_row[-1, -1] * tau3
+        gk_diagonal_new =  gk_last_row[-1,-1] 
 
         gr_diagonal_new = gr[-1,-1]
         ga_diagonal_new = ga[-1,-1]
@@ -380,17 +430,18 @@ class UsadelKeldyshEvolution:
 
         left_matrix_evolution = (1j * tau3 - 1j *self.delta_t * gap_tensor[-1] + 1j * self.eta * self.delta_t * tau3) * expansion_tensor
         right_matrix_evolution = (1j * tau3 + 1j * self.eta * self.delta_t * tau3) * expansion_tensor + 1j * self.delta_t * gap_tensor 
-        #* replaced by new and updated matrices -- as it should be 
-        #? check thermal distribution is used correctly -- basically thermal_dist at largest argument should be maximal 
-        #! Check thermal distribution entry for g^r, g^a seems ok 
-        #! Its actuallz 1j tau3 gk_last row thats causing issues! should it be calc
-        rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1,:] @ ga) - gr[-1,:] @ self.thermal_dist * tau3) + 4j * self.eta * tau3 * self.thermal_dist[-1,:] * self.delta_t
+        #print(np.max(self.thermal_dist.trace(0)))
+        #! Check if this one needs to be shifted actually in t direction? 
+        rhs_vector_evolution = 1j * tau3 * gk_last_row - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1)) - gr[-1:,:].shift(1,axis = 1) @ self.thermal_dist * tau3)) + 4j * self.eta * self.thermal_dist[-1:,:] * self.delta_t  
+
         left_matrix_normalization = (tau3 + self.delta_t * gr_diagonal_new) * expansion_tensor 
         right_matrix_normalization = (-tau3 + self.delta_t * ga_diagonal_new) * expansion_tensor 
         rhs_vector_normalization = 0 * rhs_vector_evolution #* needs to be recomputed every timestep
 
-        plt.imshow(np.abs(self.thermal_dist.trace(0)),origin='lower',cmap='Reds',extent=[0,1,0,1],aspect=2.)
         gk_new = self.gk_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution, rhs_vector_normalization, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk)
+        rhs_vector_evolution_diagonal =  1j * gk_new.dagger() * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1,:] @ (ga) - gr[-1,:] @ self.thermal_dist[:] * tau3)) + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
+        #gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, right_matrix_evolution, left_matrix_normalization, right_matrix_normalization,rhs_vector_evolution_diagonal, rhs_vector_evolution_diagonal * 0, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
+        
         return gk_new, gk_diagonal_new
 
     def gk_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, last_gr_row, full_ga_matrix, old_gk_matrix):
@@ -409,15 +460,9 @@ class UsadelKeldyshEvolution:
         vector_row_3 = (rhs_matrix_2.trace(1)/2)[0]
         vector_row_4 = (rhs_matrix_2.trace(2)/2)[0]
 
-        solution_tensor = NambuKeldyshTensor([0.0], pauli_channel=0)
-
-        # Backward sweep in time
+        solution_tensor = NambuKeldyshTensor([0.0j], pauli_channel=0)
 
         for time in range(1, self.ntpoints):
-            # Compute normalization convolution term
-            #print(last_gr_row.data.shape)
-            #print(old_gk_matrix.data.shape)
-            #! OLD: Shifted the gk matrix by 1 index since it should techincally be the new g^K matrix that we are summing over. gr is the new gr passed in!
             #* the start of the sum doesn't matter since its -infty somehow, so it should be zero anyway -- 1/2 may be important? 
             #* \sum_{t''} gr(t,t'') gk(t'',t') 0 --> t - dy since removed diagonals
             #* this means gr is new matrix evaluated at (t,t'') t'' sums all the elements except the last one there
@@ -428,24 +473,47 @@ class UsadelKeldyshEvolution:
             #* 2. the overall sum must go from 1 to self.ntpoints to generate a mesh of n entries with the first element fixed by boundary
             #* 3. the sum is present instantly since we have the first element alread, i.e. t > 0 always 
             #* 4. the convolution should go from -infty and should contain time-1 terms as expected 
-            
-            norm_convolution = -(last_gr_row[0,:-1] @ old_gk_matrix[1:,time]).matrix_to_vector() * self.delta_t * 0 #+ (last_gr_row[1:] @ full_gk_matrix[1:,0]).matrix_to_vector() * self.delta_t
-            #! OLD: Shifted the ga matrix by 1 index since it should techincally be the new g^a matrix that we are summing over.
-            norm_convolution += -(solution_tensor @ full_ga_matrix[0:time, time]).matrix_to_vector() * self.delta_t #+ (solution_tensor[1:] @ full_ga_matrix[:time, 0]).matrix_to_vector() * self.delta_t 
+
+            norm_convolution = -(last_gr_row[0,:-1] @ old_gk_matrix[1:,time]).matrix_to_vector() * self.delta_t #+ (last_gr_row[1:] @ full_gk_matrix[1:,0]).matrix_to_vector() * self.delta_t
+            if time > 1:
+                norm_convolution += -(solution_tensor[1:] @ full_ga_matrix[0:time-1, time-1]).matrix_to_vector() * self.delta_t #+ (solution_tensor[1:] @ full_ga_matrix[:time, 0]).matrix_to_vector() * self.delta_t 
 
             total_matrix = np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]])
-
             diagonal_components = solution_tensor[-1].matrix_to_vector()
-            total_vector = np.array([vector_row_1[time], vector_row_2[time],vector_row_3[time],vector_row_4[time]] ) + np.array([1j * diagonal_components[3], 1j * diagonal_components[0], norm_convolution[1], norm_convolution[2]])
+            total_vector = np.array([vector_row_1[time], vector_row_2[time],vector_row_3[time],vector_row_4[time]] ) +  np.array([1j * diagonal_components[3], 1j * diagonal_components[0], norm_convolution[1], norm_convolution[2]])
 
             g_components = np.linalg.solve(total_matrix, total_vector )
 
             # Append to solution (prepends to data)
             solution_tensor.append_right(g_components)
 
-
         return solution_tensor
 
+    def gk_diagonal_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2,  last_gr_row, full_ga_matrix, old_gk_matrix, solution_tensor):
+        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
+        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
+        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+        matrix_row_1 = (tau0 * left_matrix_1 + right_matrix_1 * tau0).matrix_to_vector()
+        matrix_row_2 = (tau3 * left_matrix_1 + right_matrix_1 * tau3).matrix_to_vector()
+        matrix_row_3 = (tau1 * left_matrix_2 + right_matrix_2 * tau1).matrix_to_vector()
+        matrix_row_4 = (tau2 * left_matrix_2 + right_matrix_2 * tau2).matrix_to_vector()
+
+        vector_row_1 = (rhs_matrix_1.trace(0)/2)[0]
+        vector_row_2 = (rhs_matrix_1.trace(3)/2)[0]
+        vector_row_3 = (rhs_matrix_2.trace(1)/2)[0]
+        vector_row_4 = (rhs_matrix_2.trace(2)/2)[0]
+
+        norm_convolution = -(last_gr_row[0,:-1] @ (tau3 * solution_tensor[1:].dagger() * tau3)).matrix_to_vector() * self.delta_t -(solution_tensor[1:] @ full_ga_matrix[0:-1, -1]).matrix_to_vector() * self.delta_t
+
+        total_matrix = np.array([matrix_row_1[:, -1],matrix_row_2[:, -1],matrix_row_3[:, -1],matrix_row_4[:, -1]])
+        diagonal_components = solution_tensor[-1].matrix_to_vector()
+        total_vector = np.array([vector_row_1, vector_row_2,vector_row_3,vector_row_4] ) +  np.array([1j * diagonal_components[3], 1j * diagonal_components[0], norm_convolution[1], norm_convolution[2]])
+
+        g_components = np.linalg.solve(total_matrix, total_vector)
+
+        return NambuKeldyshTensor.vector_to_matrix(g_components)[-1]
 
     def _evolve_state_by_one_timestep(self, state, time_index, external_field=None):
         """

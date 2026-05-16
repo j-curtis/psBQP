@@ -76,7 +76,6 @@ class StateObject:
 
         # Gap equation: Δ = -λ/4 * Tr[τ₋ g^K(t,t)]
         gap_history = -0.25 * self.bcs_coupling_constant * gk_diag
-        #TODO: check factor of 4!
 
         return gap_history
 
@@ -140,8 +139,8 @@ class StateObject:
             new_gk_row: New row for g^K(t_new, t_j) - shape (2,2,N_t) or NambuKeldyshTensor
             new_gk_diag: New diagonal element g^K(t_new, t_new) - shape (2,2) or NambuKeldyshTensor
         """
-        self.update_state_gr(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)
-        self.update_state_gk(new_gr_row, new_gr_diag, new_gk_row, new_gk_diag)
+        self.update_state_gr(new_gr_row, new_gr_diag)
+        self.update_state_gk(new_gr_row, new_gr_diag)
         
     # ========== Consistency Checks ==========
 

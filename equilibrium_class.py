@@ -281,7 +281,7 @@ class EquilibriumSolver:
                     pauli_component = pauli_component - C_tanh * tanh_omega
 
                     asymptotic_coeffs.append(('tanh', C_tanh, temperature))
-                else:  # pauli_idx 0, 1, 2: no regularization for now
+                else:  # pauli_idx 0, 1, 2: no regularization for these
                     asymptotic_coeffs.append(None)
             else:  # Unknown g_type
                 asymptotic_coeffs.append(None)
@@ -323,7 +323,7 @@ class EquilibriumSolver:
                 if asym_type == 'lorentzian':  # Lorentzian: C·ω/(ω² + ω₀²)
                     omega_0 = asymptotic_coeffs[pauli_idx][2]
                     # FT[C·ω/(ω² + ω₀²)] = -(iC/2)·sign(τ)·exp(-ω₀|τ|)  [CORRECTED SIGN]
-                    asymptotic_contribution = -(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-5) * np.exp(-omega_0 * np.abs(tau_grid_fft))
+                    asymptotic_contribution = -(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-10) * np.exp(-omega_0 * np.abs(tau_grid_fft))
                     g_tau_shifted = g_tau_shifted + asymptotic_contribution
 
                 elif asym_type == 'lorentzian_extended':  # Extended: C·ω/(ω²+ω₀²) + C'/(ω²+ω₀²)

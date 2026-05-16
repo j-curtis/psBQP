@@ -144,13 +144,110 @@ class StateObject:
         
     # ========== Consistency Checks ==========
 
-    def check_normalization(self):
-        """Verify normalization: g^R @ g^R = 1. -- stage 1.5"""
-        pass
+    def check_gr_normalization_at_point(self, t1_idx, t2_idx):
+        """
+        Verify g^R normalization at specific (t₁, t₂).
 
-    def check_keldysh_relation(self):
-        """Verify g^K = g^R @ f - f @ g^A. -- stage 1.5"""
-        pass
+        Checks: ∫_{t₂}^{t₁} dt' g'^R(t₁,t') g'^R(t',t₂) + g'^R(t₁,t₂)τ₃ + τ₃ g'^R(t₁,t₂) = 0
+
+        Args:
+            t1_idx: Index for t₁ time
+            t2_idx: Index for t₂ time (must have t1_idx >= t2_idx for causality)
+
+        Returns:
+            error: Norm of deviation from zero (scalar)
+            components: Dict with 'convolution', 'right_term', 'left_term' for analysis
+        """
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+        # Convert negative indices to positive
+        N_t = self.gr.data.shape[2]
+        t1_pos = t1_idx if t1_idx >= 0 else N_t + t1_idx
+        t2_pos = t2_idx if t2_idx >= 0 else N_t + t2_idx
+
+        # Extract g'^R(t₁, t₂)
+        gr_t1_t2 = self.gr[t1_pos, t2_pos]
+
+        # Left term: τ₃ g'^R(t₁, t₂)
+        left_term = tau3 * gr_t1_t2
+
+        # Right term: g'^R(t₁, t₂) τ₃
+        right_term = gr_t1_t2 * tau3
+
+        # Convolution: ∫_{t₂+δt}^{t₁-δt} dt' g'^R(t₁, t') g'^R(t', t₂)
+        # Discrete: δt Σ_{t'=t₂+δt}^{t₁-δt} g'^R(t₁, t') g'^R(t', t₂)
+        # Excludes both boundaries (t₂ and t₁)
+        if t1_pos - t2_pos <= 1:
+            # No interior points: convolution is zero
+            convolution = NambuKeldyshTensor(np.zeros(4, dtype=complex))
+        else:
+            gr_row = self.gr[t1_pos:t1_pos+1, t2_pos+1:t1_pos]  # g'^R(t₁, t₂+δt:t₁-δt)
+            gr_col = self.gr[t2_pos+1:t1_pos, t2_pos:t2_pos+1]  # g'^R(t₂+δt:t₁-δt, t₂)
+            convolution = (gr_row @ gr_col)[0, 0] * self.dt
+
+        # Total should be zero
+        total = left_term + right_term + convolution
+
+        # Compute error norm
+        error = np.sqrt(np.sum(np.abs(total.data)**2))
+
+        return error, {
+            'left_term': left_term,
+            'right_term': right_term,
+            'convolution': convolution,
+            'total': total
+        }
+
+    def check_keldysh_normalization_at_point(self, t1_idx, t2_idx):
+        """
+        Verify FDT normalization constraint at specific (t₁, t₂).
+
+        Checks: ∫_{-∞}^{t₁} g'^R g'^K + ∫_{-∞}^{t₂} g'^K g'^A + [τ₃, g'^K] = 0
+
+        Args:
+            t1_idx: Index for t₁ time
+            t2_idx: Index for t₂ time
+
+        Returns:
+            error: Norm of deviation from zero (scalar)
+            components: Dict with all terms for analysis
+        """
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+        ga = self._r2a()  # Compute g^A
+
+        # Convert negative indices to positive
+        N_t = self.gr.data.shape[2]
+        t1_pos = t1_idx if t1_idx >= 0 else N_t + t1_idx
+        t2_pos = t2_idx if t2_idx >= 0 else N_t + t2_idx
+
+        # Extract g'^K(t₁, t₂)
+        gk_t1_t2 = self.gk[t1_pos, t2_pos]
+
+        # Commutator term: [τ₃, g'^K(t₁, t₂)]
+        commutator = tau3 * gk_t1_t2 - gk_t1_t2 * tau3
+
+        # First convolution: ∫_{-∞}^{t₁} dt' g'^R(t₁, t') g'^K(t', t₂)
+        gr_row = self.gr[t1_pos:t1_pos+1, :t1_pos+1]  # g'^R(t₁, -∞:t₁)
+        gk_col = self.gk[:t1_pos+1, t2_pos:t2_pos+1]  # g'^K(-∞:t₁, t₂)
+        conv1 = (gr_row @ gk_col)[0, 0] * self.dt
+
+        # Second convolution: ∫_{-∞}^{t₂} dt' g'^K(t₁, t') g'^A(t', t₂)
+        gk_row = self.gk[t1_pos:t1_pos+1, :t2_pos+1]  # g'^K(t₁, -∞:t₂)
+        ga_col = ga[:t2_pos+1, t2_pos:t2_pos+1]       # g'^A(-∞:t₂, t₂)
+        conv2 = (gk_row @ ga_col)[0, 0] * self.dt
+
+        # Total should be zero
+        total = commutator + conv1 + conv2
+
+        # Compute error norm
+        error = np.sqrt(np.sum(np.abs(total.data)**2))
+
+        return error, {
+            'commutator': commutator,
+            'gr_gk_conv': conv1,
+            'gk_ga_conv': conv2,
+            'total': total
+        }
 
     # ========== String Representation ==========
 

@@ -43,6 +43,8 @@ class EquilibriumSolver:
         self.optimization_parameters = optimization_parameters
         self.sigma_scatterings = sigma_scatterings
 
+        # Initialize gap_0 to None (will be set during equilibrium computation)
+
         # Create the old Usadel solver object
         self.usadel_solver = UsadelEvolution(
             grid_parameters,
@@ -75,7 +77,7 @@ class EquilibriumSolver:
         # Call the old equilibrium solver
         gr_eq, gap, current = self.usadel_solver._run_temperature_computation(Q=Q, T=temperature, gr0=gr0)
         self.gap_0 = gap
-        print('Equilibrium gap is:', gap)
+        print(f'Equilibrium gap set: gap_0 = {self.gap_0}')
         
         if not compute_gk:
             return gr_eq
@@ -221,7 +223,7 @@ class EquilibriumSolver:
         omega_grid = self.usadel_solver.w_arr
         n_omega = len(omega_grid)
 
-        temperature = 0.3 #! This may need to be changed for general T? 
+        temperature = self.system_parameters['temperature'] 
         # Extract Pauli components from NambuTensor using trace
         # Store asymptotic coefficients to add back after FFT
         g_pauli = []
@@ -241,23 +243,7 @@ class EquilibriumSolver:
                     C_constant = pauli_component[-1]
                     pauli_component = pauli_component - C_constant
                     asymptotic_coeffs.append(('constant', C_constant, None))
-                elif pauli_idx == 2: # tau_1, tau_2: 1/ω asymptotic #! has to be generalized properly
-                    # Estimate coefficients: g(ω) ≈ C/ω + C'/ω² at large ω
-                    # Use least-squares fit over tail region
-                    tail_start = int(0.8 * n_omega)  # Last 20% of points
-                    omega_tail = omega_grid[tail_start:]
-                    g_tail = pauli_component[tail_start:]
-
-                    # Fit ω²·g(ω) = C·ω + C' (linear regression)
-                    # This gives both C/ω and C'/ω² terms
-                    y = omega_tail**2 * g_tail
-                    X = np.column_stack([omega_tail, np.ones_like(omega_tail)])
-
-                    # Least squares: [C, C'] = (X^T X)^{-1} X^T y
-                    coeffs = np.linalg.lstsq(X, y, rcond=None)[0]
-                    C_decay = coeffs[0]
-                    C_prime = coeffs[1]
-
+                elif pauli_idx == 2: # tau_1, tau_2: 1/ω asymptotic     
                     # Choose regularization scale ω₀
                     # Use a characteristic energy (e.g., twice the gap or broadening)
                     omega_10percent = np.max(omega_grid) * 1e-2
@@ -281,6 +267,8 @@ class EquilibriumSolver:
                     pauli_component = pauli_component - C_tanh * tanh_omega
 
                     asymptotic_coeffs.append(('tanh', C_tanh, temperature))
+                # pauli_idx == 2: NO regularization for g^K_2
+                # Direct FFT without asymptotic subtraction/addition
                 else:  # pauli_idx 0, 1, 2: no regularization for these
                     asymptotic_coeffs.append(None)
             else:  # Unknown g_type
@@ -342,7 +330,7 @@ class EquilibriumSolver:
                     T = asymptotic_coeffs[pauli_idx][2]  # Temperature
 
                     # Create mask to avoid division by zero at τ=0
-                    mask = (np.abs(tau_grid_fft) > 1e-10)
+                    mask = (np.abs(tau_grid_fft) > 1e-6)
 
                     # Initialize with zeros
                     asymptotic_contribution = np.zeros_like(tau_grid_fft, dtype=complex)
@@ -351,11 +339,16 @@ class EquilibriumSolver:
                     asymptotic_contribution[mask] = (-1j * C * T /
                                                     np.sinh(np.pi * tau_grid_fft[mask] * T))
 
-                    # At τ=0, use L'Hôpital's limit: lim_{τ→0} -iT/sinh(πτT) = -i/π
-                    tau_zero_mask = (np.abs(tau_grid_fft) <= 1e-10)
-                    asymptotic_contribution[tau_zero_mask] = -1j * C / np.pi
+                    # At τ=0, DON'T add asymptotic contribution
+                    # Full g^K_3(ω) is odd → g^K_3(τ=0) = ∫dω/(2π) g^K_3(ω) = 0
+                    # The analytical tanh FT integral includes contributions beyond computational grid
+                    # Adding it would over-count. Let FFT handle τ=0 naturally.
+                    tau_zero_mask = (np.abs(tau_grid_fft) <= 1e-6)
+                    asymptotic_contribution[tau_zero_mask] = 0.0
 
                     g_tau_shifted = g_tau_shifted + asymptotic_contribution
+
+                # bessel_K0 case removed - no regularization for g^K_2
 
             # For constant asymptotic (tau_3 in retarded case), we don't add anything back
             # The constant in frequency → delta function at τ=0, which we ignore
@@ -449,6 +442,12 @@ class EquilibriumSolver:
         tau_grid_actual = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
         dtau_fft = tau_grid_actual[1] - tau_grid_actual[0]
 
+        # Verify using formula (for debugging)
+        # Note: linspace with n_omega points uses n_omega-1 intervals
+        dtau_formula = 2*np.pi / (d_omega * (n_omega - 1))
+        if not np.allclose(dtau_fft, dtau_formula, rtol=1e-10):
+            print(f"WARNING: Tau spacing mismatch!")
+            print(f"  From grid: {dtau_fft:.10e}, From formula: {dtau_formula:.10e}")
 
         # Compute tau indices by finding nearest neighbor in tau_grid_actual
         # Use searchsorted to find insertion points, then check which neighbor is closer
@@ -467,9 +466,7 @@ class EquilibriumSolver:
         tau_indices = np.where(dist_left < dist_right, tau_indices_left, tau_indices_right)
         tau_idx_matrix = tau_indices.reshape(tau_matrix.shape)
 
-
-        d_omega = omega_grid[1] - omega_grid[0]
-        dtau_fft = 2*np.pi / (d_omega * n_omega)
+        # Grid spacings for reference (dtau_fft already computed above)
         dt_evolution = tmax / (ntpoints - 1)
 
 

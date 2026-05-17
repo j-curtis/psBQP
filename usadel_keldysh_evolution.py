@@ -448,16 +448,27 @@ class UsadelKeldyshEvolution:
 
         left_matrix_evolution = (1j * tau3 - 1j *self.delta_t * gap_tensor[-1] + 1j * self.eta * self.delta_t * tau3) * expansion_tensor
         right_matrix_evolution = (1j * tau3 + 1j * self.eta * self.delta_t * tau3) * expansion_tensor + 1j * self.delta_t * gap_tensor 
-
-        rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) + 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
+        
+        #* removed last term since we now consider the shifted g^k equation
+        rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
+        rhs_vector_evolution += -2 * (-1j * self.delta_t * gap_tensor[-1] * tau3 * self.thermal_dist[-1:,:].shift(1, axis = 1) + 1j * self.delta_t * tau3 * self.thermal_dist[-1:,:].shift(1, axis = 1) * gap_tensor)
+        
         #print('f is', self.thermal_dist[-1:,:].shift(1, axis = 1).trace(0))
         left_matrix_normalization = (tau3 + self.delta_t * gr_diagonal_new) * expansion_tensor 
         right_matrix_normalization = (-tau3 + self.delta_t * ga_diagonal_new) * expansion_tensor 
-        rhs_vector_normalization = 0 * rhs_vector_evolution #* needs to be recomputed every timestep
+        
+        rhs_vector_normalization = -2 *self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) + (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3)
 
         gk_new = self.gk_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution, rhs_vector_normalization, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk)
-        rhs_vector_evolution_diagonal =  1j * gk_new.dagger() * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1,:] @ (ga)) - (gr[-1,:] @ self.thermal_dist[:]) * tau3) + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
-        #gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization,rhs_vector_evolution_diagonal, rhs_vector_evolution_diagonal * 0, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
+        #print(gk_new.data.shape)
+        #gk_new += 2 * tau3 * self.thermal_dist[-1,:].shift(1, axis = 0)
+        #* removed last term since we now consider the  shifted g^k equation
+        rhs_vector_evolution_diagonal =  1j * (gk_new.dagger())[-1:] * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga[:,-1])) - (gr[-1:,:] @ self.thermal_dist[:,-1]) * tau3)# + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
+        rhs_vector_evolution_diagonal += -2 * (-1j * self.delta_t * gap_tensor[-1] * tau3 * self.thermal_dist[-1:,-1] + 1j * self.delta_t * tau3 * self.thermal_dist[-1:,-1] * gap_tensor[-1])
+        
+        rhs_vector_normalization_diagonal = -2 * self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga[:,-1])) + (gr[-1:,:] @ self.thermal_dist[:,-1]) * tau3)
+
+        gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization,rhs_vector_evolution_diagonal, rhs_vector_normalization_diagonal, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
         
         return gk_new, gk_diagonal_new
 
@@ -620,7 +631,7 @@ class UsadelKeldyshEvolution:
 
         # Start with initial state
         state = initial_state
-
+        
         # Evolve over time with progress bar
         for time_index in tqdm(range(num_timesteps), desc="Real-time evolution"):
             # Evolve by one timestep and get observables

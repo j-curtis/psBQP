@@ -346,7 +346,8 @@ class EquilibriumSolver:
                     tau_zero_mask = (np.abs(tau_grid_fft) <= 1e-6)
                     asymptotic_contribution[tau_zero_mask] = 0.0
 
-                    g_tau_shifted = g_tau_shifted + asymptotic_contribution
+                    #* this part is only called for gk_3 so it should be fine
+                    g_tau_shifted = g_tau_shifted# + asymptotic_contribution
 
                 # bessel_K0 case removed - no regularization for g^K_2
 

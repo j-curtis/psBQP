@@ -193,7 +193,7 @@ def main():
 
     # Evolve from initial state for 200 steps
     simulated_state, gaps, currents = evolution.real_time_evolution(
-        initial_state, num_timesteps= 250)
+        initial_state, num_timesteps= 300)
     print("Evolution complete!")
     print(f"  Final gap after 200 steps: {gaps[-1]:.6f}")
 

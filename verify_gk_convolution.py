@@ -1218,6 +1218,28 @@ def main():
         print(f"  τ_2: max|g^K_sim - g^K_eq| = {np.max(np.abs(gk_sim_last_row_tau2 - gk_eq_last_row_tau2)):.6e}")
         print(f"  τ_3: max|g^K_sim - g^K_eq| = {np.max(np.abs(gk_sim_last_row_tau3 - gk_eq_last_row_tau3)):.6e}")
 
+        # ========== Gap vs Time ==========
+        print(f"\nComputing gap vs time...")
+
+        gap_eq = initial_state.get_gap_history()
+        gap_sim = simulated_state.get_gap_history()
+
+        print(f"  Equilibrium gap: {np.mean(np.real(gap_eq)):.6f} (mean over window)")
+        print(f"  Simulated gap at t_max: {np.real(gap_sim[-1]):.6f}")
+
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(time_grid_sim, np.real(gap_eq), linewidth=2, color='green',
+                label='equilibrium', linestyle='--')
+        ax.plot(time_grid_sim, np.real(gap_sim), linewidth=2, color='purple',
+                label='simulated')
+        ax.set_xlabel('t', fontsize=12)
+        ax.set_ylabel('Δ(t)', fontsize=12)
+        ax.set_title('Gap vs Time', fontsize=13, fontweight='bold')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
         print("\nSimulated state analysis complete!")
 
     except FileNotFoundError:
@@ -1234,50 +1256,26 @@ def main():
     # Check initial state
     print("\nChecking initial state normalization constraints...")
     n_t_init = initial_state.gr.data.shape[-1]
-    t1_idx = -1  # Last time index
 
-    gr_errors_init = []
-    gk_errors_init = []
+    gr_errors_init, gr_totals_init = initial_state.check_gr_normalization(-1)
+    gk_errors_init, gk_totals_init, gk_components_init = initial_state.check_keldysh_normalization(-1)
 
-    print(f"  Running checks for t1={t1_idx} ({n_t_init + t1_idx}) across all t2 indices...")
-    for t2_idx in range(n_t_init):
-        # g^R normalization check
-        gr_error, gr_components = initial_state.check_gr_normalization_at_point(t1_idx, t2_idx)
-        gr_errors_init.append((t2_idx, gr_error, gr_components))
-
-        # g^K FDT check
-        gk_error, gk_components = initial_state.check_keldysh_normalization_at_point(t1_idx, t2_idx)
-        gk_errors_init.append((t2_idx, gk_error, gk_components))
-
-    print(f"  Completed checks for {len(gr_errors_init)} points")
-    print(f"  g^R max error: {max(err[1] for err in gr_errors_init):.6e}")
-    print(f"  g^R mean error: {np.mean([err[1] for err in gr_errors_init]):.6e}")
-    print(f"  g^K FDT max error: {max(err[1] for err in gk_errors_init):.6e}")
-    print(f"  g^K FDT mean error: {np.mean([err[1] for err in gk_errors_init]):.6e}")
+    print(f"  g^R max error: {np.max(gr_errors_init):.6e}")
+    print(f"  g^R mean error: {np.mean(gr_errors_init[gr_errors_init > 0]):.6e}")
+    print(f"  g^K FDT max error: {np.max(gk_errors_init):.6e}")
+    print(f"  g^K FDT mean error: {np.mean(gk_errors_init):.6e}")
 
     # Check simulated state if available
     if 'simulated_state' in locals():
         print("\nChecking simulated state normalization constraints...")
-        n_t_sim = simulated_state.gr.data.shape[-1]
 
-        gr_errors_sim = []
-        gk_errors_sim = []
+        gr_errors_sim, gr_totals_sim = simulated_state.check_gr_normalization(-1)
+        gk_errors_sim, gk_totals_sim, gk_components_sim = simulated_state.check_keldysh_normalization(-1)
 
-        print(f"  Running checks for t1={t1_idx} ({n_t_sim + t1_idx}) across all t2 indices...")
-        for t2_idx in range(n_t_sim):
-            # g^R normalization check
-            gr_error, gr_components = simulated_state.check_gr_normalization_at_point(t1_idx, t2_idx)
-            gr_errors_sim.append((t2_idx, gr_error, gr_components))
-
-            # g^K FDT check
-            gk_error, gk_components = simulated_state.check_keldysh_normalization_at_point(t1_idx, t2_idx)
-            gk_errors_sim.append((t2_idx, gk_error, gk_components))
-
-        print(f"  Completed checks for {len(gr_errors_sim)} points")
-        print(f"  g^R max error: {max(err[1] for err in gr_errors_sim):.6e}")
-        print(f"  g^R mean error: {np.mean([err[1] for err in gr_errors_sim]):.6e}")
-        print(f"  g^K FDT max error: {max(err[1] for err in gk_errors_sim):.6e}")
-        print(f"  g^K FDT mean error: {np.mean([err[1] for err in gk_errors_sim]):.6e}")
+        print(f"  g^R max error: {np.max(gr_errors_sim):.6e}")
+        print(f"  g^R mean error: {np.mean(gr_errors_sim[gr_errors_sim > 0]):.6e}")
+        print(f"  g^K FDT max error: {np.max(gk_errors_sim):.6e}")
+        print(f"  g^K FDT mean error: {np.mean(gk_errors_sim):.6e}")
 
     # Plot errors vs t2 index
     print("\nPlotting normalization errors vs t2 index...")
@@ -1286,123 +1284,124 @@ def main():
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     else:
         fig, axes = plt.subplots(2, 1, figsize=(14, 8))
-        axes = np.array([[axes[0]], [axes[1]]])
+        axes = axes.reshape(2, 1)
 
     # Initial state g^R errors
     ax = axes[0, 0] if 'simulated_state' in locals() else axes[0, 0]
-    t2_indices_init = [err[0] for err in gr_errors_init]
-    gr_error_vals_init = [err[1] for err in gr_errors_init]
-    ax.semilogy(t2_indices_init, gr_error_vals_init, linewidth=2, color='blue', marker='.', markersize=3)
+    ax.semilogy(gr_errors_init, linewidth=2, color='blue', marker='.', markersize=3)
     ax.set_xlabel('t2 index', fontsize=12)
-    ax.set_ylabel('g^R normalization error (log scale)', fontsize=12)
-    ax.set_title('Initial State: g^R Normalization at t1=-1', fontsize=13, fontweight='bold')
+    ax.set_ylabel('error (log scale)', fontsize=12)
+    ax.set_title('Initial: g^R Normalization at t1=-1', fontsize=13, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
     # Initial state g^K errors
     ax = axes[1, 0] if 'simulated_state' in locals() else axes[1, 0]
-    gk_error_vals_init = [err[1] for err in gk_errors_init]
-    ax.semilogy(t2_indices_init, gk_error_vals_init, linewidth=2, color='green', marker='.', markersize=3)
+    ax.semilogy(gk_errors_init, linewidth=2, color='green', marker='.', markersize=3)
     ax.set_xlabel('t2 index', fontsize=12)
-    ax.set_ylabel('g^K FDT error (log scale)', fontsize=12)
-    ax.set_title('Initial State: g^K FDT Constraint at t1=-1', fontsize=13, fontweight='bold')
+    ax.set_ylabel('error (log scale)', fontsize=12)
+    ax.set_title('Initial: g^K FDT Constraint at t1=-1', fontsize=13, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
-    # Simulated state errors (if available)
     if 'simulated_state' in locals():
-        # Simulated g^R errors
         ax = axes[0, 1]
-        t2_indices_sim = [err[0] for err in gr_errors_sim]
-        gr_error_vals_sim = [err[1] for err in gr_errors_sim]
-        ax.semilogy(t2_indices_sim, gr_error_vals_sim, linewidth=2, color='purple', marker='.', markersize=3)
+        ax.semilogy(gr_errors_sim, linewidth=2, color='purple', marker='.', markersize=3)
         ax.set_xlabel('t2 index', fontsize=12)
-        ax.set_ylabel('g^R normalization error (log scale)', fontsize=12)
-        ax.set_title('Simulated State: g^R Normalization at t1=-1', fontsize=13, fontweight='bold')
+        ax.set_ylabel('error (log scale)', fontsize=12)
+        ax.set_title('Simulated: g^R Normalization at t1=-1', fontsize=13, fontweight='bold')
         ax.grid(True, alpha=0.3)
 
-        # Simulated g^K errors
         ax = axes[1, 1]
-        gk_error_vals_sim = [err[1] for err in gk_errors_sim]
-        ax.semilogy(t2_indices_sim, gk_error_vals_sim, linewidth=2, color='orange', marker='.', markersize=3)
+        ax.semilogy(gk_errors_sim, linewidth=2, color='orange', marker='.', markersize=3)
         ax.set_xlabel('t2 index', fontsize=12)
-        ax.set_ylabel('g^K FDT error (log scale)', fontsize=12)
-        ax.set_title('Simulated State: g^K FDT Constraint at t1=-1', fontsize=13, fontweight='bold')
+        ax.set_ylabel('error (log scale)', fontsize=12)
+        ax.set_title('Simulated: g^K FDT Constraint at t1=-1', fontsize=13, fontweight='bold')
         ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.show()
 
-    # Analyze Pauli component contributions to g^K errors
+    # Analyze Pauli component contributions
     print("\n" + "="*70)
-    print("Analyzing Pauli Component Contributions to g^K FDT Errors")
+    print("Pauli Component Breakdown of g^K FDT Violation")
     print("="*70)
 
-    # Find point with largest error in initial state
-    max_error_idx_init = max(range(len(gk_errors_init)), key=lambda i: gk_errors_init[i][1])
-    t2_max_init = gk_errors_init[max_error_idx_init][0]
-    error_max_init = gk_errors_init[max_error_idx_init][1]
-    components_max_init = gk_errors_init[max_error_idx_init][2]
+    pauli_names = ['τ₀', 'τ₁', 'τ₂', 'τ₃']
 
-    print(f"\nInitial state - largest g^K FDT error at (t1={t1_idx}, t2={t2_max_init}):")
-    print(f"  Total error: {error_max_init:.6e}")
+    # Plot individual Pauli component errors vs t2
+    if 'simulated_state' in locals():
+        fig, axes = plt.subplots(3, 2, figsize=(14, 12))
+    else:
+        fig, axes = plt.subplots(3, 1, figsize=(8, 12))
+        axes = axes.reshape(3, 1)
 
-    print(f"\n  Commutator [τ₃, g^K] Nambu components:")
-    for i in range(2):
-        for j in range(2):
-            val = components_max_init['commutator'].data[i, j]
-            print(f"    [{i},{j}]: {val.real:+.6e} {val.imag:+.6e}j")
+    # Initial state: total Pauli components
+    ax = axes[0, 0] if 'simulated_state' in locals() else axes[0, 0]
+    for pauli_idx in range(4):
+        ax.plot(np.abs(gk_totals_init[pauli_idx, :]), label=pauli_names[pauli_idx], linewidth=1.5)
+    ax.set_xlabel('t2 index', fontsize=12)
+    ax.set_ylabel('|violation|', fontsize=12)
+    ax.set_title('Initial: g^K FDT total violation by Pauli component', fontsize=11, fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
 
-    print(f"\n  Commutator Pauli decomposition:")
-    for pauli_idx, pauli_name in enumerate(['τ₀', 'τ₁', 'τ₂', 'τ₃']):
-        val = components_max_init['commutator'].trace(pauli_idx) / 2
-        print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
+    # Initial state: g^R @ g^K contribution
+    ax = axes[1, 0] if 'simulated_state' in locals() else axes[1, 0]
+    for pauli_idx in range(4):
+        ax.plot(np.abs(gk_components_init['gr_gk_conv'][pauli_idx, :]), label=pauli_names[pauli_idx], linewidth=1.5)
+    ax.set_xlabel('t2 index', fontsize=12)
+    ax.set_ylabel('|g^R @ g^K|', fontsize=12)
+    ax.set_title('Initial: g^R @ g^K convolution by Pauli component', fontsize=11, fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
 
-    print(f"\n  g^R @ g^K convolution Pauli decomposition:")
-    for pauli_idx, pauli_name in enumerate(['τ₀', 'τ₁', 'τ₂', 'τ₃']):
-        val = components_max_init['gr_gk_conv'].trace(pauli_idx) / 2
-        print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
-
-    print(f"\n  g^K @ g^A convolution Pauli decomposition:")
-    for pauli_idx, pauli_name in enumerate(['τ₀', 'τ₁', 'τ₂', 'τ₃']):
-        val = components_max_init['gk_ga_conv'].trace(pauli_idx) / 2
-        print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
+    # Initial state: g^K @ g^A contribution
+    ax = axes[2, 0] if 'simulated_state' in locals() else axes[2, 0]
+    for pauli_idx in range(4):
+        ax.plot(np.abs(gk_components_init['gk_ga_conv'][pauli_idx, :]), label=pauli_names[pauli_idx], linewidth=1.5)
+    ax.set_xlabel('t2 index', fontsize=12)
+    ax.set_ylabel('|g^K @ g^A|', fontsize=12)
+    ax.set_title('Initial: g^K @ g^A convolution by Pauli component', fontsize=11, fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
 
     if 'simulated_state' in locals():
-        max_error_idx_sim = max(range(len(gk_errors_sim)), key=lambda i: gk_errors_sim[i][1])
-        t2_max_sim = gk_errors_sim[max_error_idx_sim][0]
-        error_max_sim = gk_errors_sim[max_error_idx_sim][1]
-        components_max_sim = gk_errors_sim[max_error_idx_sim][2]
+        # Simulated state: total Pauli components
+        ax = axes[0, 1]
+        for pauli_idx in range(4):
+            ax.plot(np.abs(gk_totals_sim[pauli_idx, :]), label=pauli_names[pauli_idx], linewidth=1.5)
+        ax.set_xlabel('t2 index', fontsize=12)
+        ax.set_ylabel('|violation|', fontsize=12)
+        ax.set_title('Simulated: g^K FDT total violation by Pauli component', fontsize=11, fontweight='bold')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
 
-        print(f"\nSimulated state - largest g^K FDT error at (t1={t1_idx}, t2={t2_max_sim}):")
-        print(f"  Total error: {error_max_sim:.6e}")
+        # Simulated state: g^R @ g^K contribution
+        ax = axes[1, 1]
+        for pauli_idx in range(4):
+            ax.plot(np.abs(gk_components_sim['gr_gk_conv'][pauli_idx, :]), label=pauli_names[pauli_idx], linewidth=1.5)
+        ax.set_xlabel('t2 index', fontsize=12)
+        ax.set_ylabel('|g^R @ g^K|', fontsize=12)
+        ax.set_title('Simulated: g^R @ g^K convolution by Pauli component', fontsize=11, fontweight='bold')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
 
-        print(f"\n  Commutator [τ₃, g^K] Nambu components:")
-        for i in range(2):
-            for j in range(2):
-                val = components_max_sim['commutator'].data[i, j]
-                print(f"    [{i},{j}]: {val.real:+.6e} {val.imag:+.6e}j")
+        # Simulated state: g^K @ g^A contribution
+        ax = axes[2, 1]
+        for pauli_idx in range(4):
+            ax.plot(np.abs(gk_components_sim['gk_ga_conv'][pauli_idx, :]), label=pauli_names[pauli_idx], linewidth=1.5)
+        ax.set_xlabel('t2 index', fontsize=12)
+        ax.set_ylabel('|g^K @ g^A|', fontsize=12)
+        ax.set_title('Simulated: g^K @ g^A convolution by Pauli component', fontsize=11, fontweight='bold')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
 
-        print(f"\n  Commutator Pauli decomposition:")
-        for pauli_idx, pauli_name in enumerate(['τ₀', 'τ₁', 'τ₂', 'τ₃']):
-            val = components_max_sim['commutator'].trace(pauli_idx) / 2
-            print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
+        # Print comparison
+        print(f"\n  Initial state max g^K FDT error:   {np.max(gk_errors_init):.6e} (at t2={np.argmax(gk_errors_init)})")
+        print(f"  Simulated state max g^K FDT error: {np.max(gk_errors_sim):.6e} (at t2={np.argmax(gk_errors_sim)})")
+        print(f"  Error increase during evolution:   {np.max(gk_errors_sim) / np.max(gk_errors_init):.2f}x")
 
-        print(f"\n  g^R @ g^K convolution Pauli decomposition:")
-        for pauli_idx, pauli_name in enumerate(['τ₀', 'τ₁', 'τ₂', 'τ₃']):
-            val = components_max_sim['gr_gk_conv'].trace(pauli_idx) / 2
-            print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
-
-        print(f"\n  g^K @ g^A convolution Pauli decomposition:")
-        for pauli_idx, pauli_name in enumerate(['τ₀', 'τ₁', 'τ₂', 'τ₃']):
-            val = components_max_sim['gk_ga_conv'].trace(pauli_idx) / 2
-            print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
-
-        # Compare initial vs simulated maximum errors
-        print(f"\n" + "-"*70)
-        print(f"Comparison: Initial vs Simulated")
-        print(f"-"*70)
-        print(f"  Initial state max g^K FDT error:   {error_max_init:.6e} (at t2={t2_max_init})")
-        print(f"  Simulated state max g^K FDT error: {error_max_sim:.6e} (at t2={t2_max_sim})")
-        print(f"  Error increase during evolution:   {error_max_sim / error_max_init:.2f}x")
+    plt.tight_layout()
+    plt.show()
 
     print("="*70)
 

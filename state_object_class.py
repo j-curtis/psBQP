@@ -123,7 +123,7 @@ class StateObject:
 
         gk_row_data = new_gk_row
 
-        gk_column_data = tau3 * gk_row_data.conj().complete_transpose() * tau3
+        gk_column_data = gk_row_data.involution() 
 
         self.gk.update_entries(new_gk_row, gk_column_data, new_gk_diag)
 
@@ -144,109 +144,101 @@ class StateObject:
         
     # ========== Consistency Checks ==========
 
-    def check_gr_normalization_at_point(self, t1_idx, t2_idx):
+    def check_gr_normalization(self, t1_idx):
         """
-        Verify g^R normalization at specific (t₁, t₂).
+        Verify g^R normalization at fixed t₁ for all t₂.
 
-        Checks: ∫_{t₂}^{t₁} dt' g'^R(t₁,t') g'^R(t',t₂) + g'^R(t₁,t₂)τ₃ + τ₃ g'^R(t₁,t₂) = 0
+        Checks: ∫_{t₂+δt}^{t₁-δt} dt' g'^R(t₁,t') g'^R(t',t₂) + g'^R(t₁,t₂)τ₃ + τ₃ g'^R(t₁,t₂) = 0
 
         Args:
-            t1_idx: Index for t₁ time
-            t2_idx: Index for t₂ time (must have t1_idx >= t2_idx for causality)
+            t1_idx: Index for t₁ time (supports negative indexing)
 
         Returns:
-            error: Norm of deviation from zero (scalar)
-            components: Dict with 'convolution', 'right_term', 'left_term' for analysis
+            errors: np.ndarray of shape (N_t,) with error norm at each t₂
+            totals: np.ndarray of shape (4, N_t) with Pauli components of total violation
         """
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
-        # Convert negative indices to positive
         N_t = self.gr.data.shape[2]
         t1_pos = t1_idx if t1_idx >= 0 else N_t + t1_idx
-        t2_pos = t2_idx if t2_idx >= 0 else N_t + t2_idx
 
-        # Extract g'^R(t₁, t₂)
-        gr_t1_t2 = self.gr[t1_pos, t2_pos]
+        errors = np.zeros(N_t)
+        totals = np.zeros((4, N_t), dtype=complex)
 
-        # Left term: τ₃ g'^R(t₁, t₂)
-        left_term = tau3 * gr_t1_t2
+        for t2_pos in range(t1_pos + 1):
+            gr_t1_t2 = self.gr[t1_pos, t2_pos]
 
-        # Right term: g'^R(t₁, t₂) τ₃
-        right_term = gr_t1_t2 * tau3
+            left_term = tau3 * gr_t1_t2
+            right_term = gr_t1_t2 * tau3
 
-        # Convolution: ∫_{t₂+δt}^{t₁-δt} dt' g'^R(t₁, t') g'^R(t', t₂)
-        # Discrete: δt Σ_{t'=t₂+δt}^{t₁-δt} g'^R(t₁, t') g'^R(t', t₂)
-        # Excludes both boundaries (t₂ and t₁)
-        if t1_pos - t2_pos <= 1:
-            # No interior points: convolution is zero
-            convolution = NambuKeldyshTensor(np.zeros(4, dtype=complex))
-        else:
-            gr_row = self.gr[t1_pos:t1_pos+1, t2_pos+1:t1_pos]  # g'^R(t₁, t₂+δt:t₁-δt)
-            gr_col = self.gr[t2_pos+1:t1_pos, t2_pos:t2_pos+1]  # g'^R(t₂+δt:t₁-δt, t₂)
-            convolution = (gr_row @ gr_col)[0, 0] * self.dt
+            if t1_pos - t2_pos <= 1:
+                convolution = NambuKeldyshTensor(np.zeros((2, 2), dtype=complex))
+            else:
+                gr_row = self.gr[t1_pos:t1_pos+1, t2_pos+1:t1_pos]
+                gr_col = self.gr[t2_pos+1:t1_pos, t2_pos:t2_pos+1]
+                convolution = (gr_row @ gr_col)[0, 0] * self.dt
 
-        # Total should be zero
-        total = left_term + right_term + convolution
+            total = left_term + right_term + convolution
+            errors[t2_pos] = np.sqrt(np.sum(np.abs(total.data)**2))
+            totals[:, t2_pos] = total.matrix_to_vector().flatten()
 
-        # Compute error norm
-        error = np.sqrt(np.sum(np.abs(total.data)**2))
+        return errors, totals
 
-        return error, {
-            'left_term': left_term,
-            'right_term': right_term,
-            'convolution': convolution,
-            'total': total
-        }
-
-    def check_keldysh_normalization_at_point(self, t1_idx, t2_idx):
+    def check_keldysh_normalization(self, t1_idx):
         """
-        Verify FDT normalization constraint at specific (t₁, t₂).
+        Verify FDT normalization constraint at fixed t₁ for all t₂.
 
         Checks: ∫_{-∞}^{t₁} g'^R g'^K + ∫_{-∞}^{t₂} g'^K g'^A + [τ₃, g'^K] = 0
 
         Args:
-            t1_idx: Index for t₁ time
-            t2_idx: Index for t₂ time
+            t1_idx: Index for t₁ time (supports negative indexing)
 
         Returns:
-            error: Norm of deviation from zero (scalar)
-            components: Dict with all terms for analysis
+            errors: np.ndarray of shape (N_t,) with error norm at each t₂
+            totals: np.ndarray of shape (4, N_t) with Pauli components of total violation
+            components: Dict with 'commutator', 'gr_gk_conv', 'gk_ga_conv' arrays (4, N_t)
         """
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-        ga = self._r2a()  # Compute g^A
+        ga = self._r2a()
 
-        # Convert negative indices to positive
         N_t = self.gr.data.shape[2]
         t1_pos = t1_idx if t1_idx >= 0 else N_t + t1_idx
-        t2_pos = t2_idx if t2_idx >= 0 else N_t + t2_idx
 
-        # Extract g'^K(t₁, t₂)
-        gk_t1_t2 = self.gk[t1_pos, t2_pos]
+        errors = np.zeros(N_t)
+        totals = np.zeros((4, N_t), dtype=complex)
+        commutators = np.zeros((4, N_t), dtype=complex)
+        conv1s = np.zeros((4, N_t), dtype=complex)
+        conv2s = np.zeros((4, N_t), dtype=complex)
 
-        # Commutator term: [τ₃, g'^K(t₁, t₂)]
-        commutator = tau3 * gk_t1_t2 - gk_t1_t2 * tau3
+        # g^R row is the same for all t2
+        gr_row = self.gr[t1_pos:t1_pos+1, :t1_pos+1]
 
-        # First convolution: ∫_{-∞}^{t₁} dt' g'^R(t₁, t') g'^K(t', t₂)
-        gr_row = self.gr[t1_pos:t1_pos+1, :t1_pos+1]  # g'^R(t₁, -∞:t₁)
-        gk_col = self.gk[:t1_pos+1, t2_pos:t2_pos+1]  # g'^K(-∞:t₁, t₂)
-        conv1 = (gr_row @ gk_col)[0, 0] * self.dt
+        for t2_pos in range(N_t):
+            gk_t1_t2 = self.gk[t1_pos, t2_pos]
 
-        # Second convolution: ∫_{-∞}^{t₂} dt' g'^K(t₁, t') g'^A(t', t₂)
-        gk_row = self.gk[t1_pos:t1_pos+1, :t2_pos+1]  # g'^K(t₁, -∞:t₂)
-        ga_col = ga[:t2_pos+1, t2_pos:t2_pos+1]       # g'^A(-∞:t₂, t₂)
-        conv2 = (gk_row @ ga_col)[0, 0] * self.dt
+            commutator = tau3 * gk_t1_t2 - gk_t1_t2 * tau3
 
-        # Total should be zero
-        total = commutator + conv1 + conv2
+            # First convolution: ∫_{-∞}^{t₁} dt' g'^R(t₁, t') g'^K(t', t₂)
+            gk_col = self.gk[:t1_pos+1, t2_pos:t2_pos+1]
+            conv1 = (gr_row @ gk_col)[0, 0] * self.dt
 
-        # Compute error norm
-        error = np.sqrt(np.sum(np.abs(total.data)**2))
+            # Second convolution: ∫_{-∞}^{t₂} dt' g'^K(t₁, t') g'^A(t', t₂)
+            gk_row = self.gk[t1_pos:t1_pos+1, :t2_pos+1]
+            ga_col = ga[:t2_pos+1, t2_pos:t2_pos+1]
+            conv2 = (gk_row @ ga_col)[0, 0] * self.dt
 
-        return error, {
-            'commutator': commutator,
-            'gr_gk_conv': conv1,
-            'gk_ga_conv': conv2,
-            'total': total
+            total = commutator + conv1 + conv2
+
+            errors[t2_pos] = np.sqrt(np.sum(np.abs(total.data)**2))
+            totals[:, t2_pos] = total.matrix_to_vector().flatten()
+            commutators[:, t2_pos] = commutator.matrix_to_vector().flatten()
+            conv1s[:, t2_pos] = conv1.matrix_to_vector().flatten()
+            conv2s[:, t2_pos] = conv2.matrix_to_vector().flatten()
+
+        return errors, totals, {
+            'commutator': commutators,
+            'gr_gk_conv': conv1s,
+            'gk_ga_conv': conv2s
         }
 
     # ========== String Representation ==========

@@ -451,14 +451,14 @@ class UsadelKeldyshEvolution:
         left_matrix_evolution = (1j * tau3 - 1j *self.delta_t * gap_tensor[-1] + 1j * self.eta * self.delta_t * tau3) * expansion_tensor
         right_matrix_evolution = (1j * tau3 + 1j * self.eta * self.delta_t * tau3) * expansion_tensor + 1j * self.delta_t * gap_tensor 
 
-        rhs_vector_evolution = 1j * tau3 * gk_last_row - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1)) - gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1) * tau3)) + 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t  
+        rhs_vector_evolution = 1j * tau3 * gk_last_row - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) + 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t  
 
         left_matrix_normalization = (tau3 + self.delta_t * gr_diagonal_new) * expansion_tensor 
         right_matrix_normalization = (-tau3 + self.delta_t * ga_diagonal_new) * expansion_tensor 
         rhs_vector_normalization = 0 * rhs_vector_evolution #* needs to be recomputed every timestep
 
         gk_new = self.gk_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution, rhs_vector_normalization, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk)
-        rhs_vector_evolution_diagonal =  1j * gk_new.dagger() * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1,:] @ (ga) - gr[-1,:] @ self.thermal_dist[:] * tau3)) + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
+        rhs_vector_evolution_diagonal =  1j * gk_new.dagger() * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1,:] @ (ga)) - (gr[-1,:] @ self.thermal_dist[:]) * tau3) + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
         gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization,rhs_vector_evolution_diagonal, rhs_vector_evolution_diagonal * 0, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
         
         return gk_new, gk_diagonal_new

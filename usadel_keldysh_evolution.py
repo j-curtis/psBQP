@@ -116,31 +116,25 @@ class UsadelKeldyshEvolution:
         """
         Generate angular frequency (omega) grid as exact Fourier dual of time grid.
 
-        Uses symmetric time grid [-T_max, +T_max] with same number of points as
-        evolution time grid, ensuring N_omega = N_time for grid consistency.
+        Uses the evolution time grid [-T_max, 0] with N points and spacing dt = T_max/(N-1).
+        Creates frequency grid via FFT with the same number of points.
 
         The relationship between grids:
-            - Omega spacing: d_omega = 2π / (2 * T_max)
-            - Tau spacing: d_tau = 2 * T_max / N
-            - Fourier duality: d_omega * d_tau = 2π / N
+            - Time grid: N points with spacing dt = T_max / (N-1)
+            - Frequency grid: N points from fftfreq
+            - Fourier duality: d_omega * dt = 2π / N
 
         Stores:
             self.omega_grid: Angular frequency array (centered, sorted)
-            self.energy_cutoff: Maximum omega value
+            self.energy_cutoff: Maximum omega value (Nyquist frequency)
             self.d_omega: Omega spacing
         """
-        # Use same number of points as time grid for consistency
+        # Use same number of points as time grid
         n_points = self.ntpoints
 
-        # Construct symmetric time grid for FFT: [-T_max, +T_max]
-        # This grid has the same spacing as the evolution grid
-        dt_extended = self.delta_t  # Already computed: T_max / (N-1)
-        extended_time_grid = np.linspace(-self.tmax, self.tmax, n_points)
-
-        # Get frequency bins from FFT
+        # Get frequency bins from FFT using the actual time grid spacing
         # np.fft.fftfreq gives frequencies f in cycles per unit time
-        # These are the frequency bins that correspond to fft/ifft operations
-        freq = np.fft.fftfreq(n_points, d=dt_extended)
+        freq = np.fft.fftfreq(n_points, d=self.delta_t)
 
         # Convert to angular frequency: ω = 2π*f
         omega = 2 * np.pi * freq
@@ -154,10 +148,14 @@ class UsadelKeldyshEvolution:
         # Store omega spacing and verify Fourier duality
         self.d_omega = self.omega_grid[1] - self.omega_grid[0]
         expected_product = 2 * np.pi / n_points
-        actual_product = self.d_omega * dt_extended
+        actual_product = self.d_omega * self.delta_t
         if not np.allclose(actual_product, expected_product, rtol=1e-10):
             print(f"WARNING: Fourier duality check failed!")
             print(f"  Expected: {expected_product:.10f}, Actual: {actual_product:.10f}")
+            print(f"  d_omega = {self.d_omega:.10e}")
+            print(f"  delta_t = {self.delta_t:.10e}")
+            print(f"  n_points = {n_points}")
+            print(f"  Omega grid check: uniform spacing = {np.allclose(np.diff(self.omega_grid), self.d_omega)}")
 
 
     # ========== Initial State Generation ==========
@@ -451,15 +449,15 @@ class UsadelKeldyshEvolution:
         left_matrix_evolution = (1j * tau3 - 1j *self.delta_t * gap_tensor[-1] + 1j * self.eta * self.delta_t * tau3) * expansion_tensor
         right_matrix_evolution = (1j * tau3 + 1j * self.eta * self.delta_t * tau3) * expansion_tensor + 1j * self.delta_t * gap_tensor 
 
-        rhs_vector_evolution = 1j * tau3 * gk_last_row - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) + 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t  
-
+        rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) + 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
+        #print('f is', self.thermal_dist[-1:,:].shift(1, axis = 1).trace(0))
         left_matrix_normalization = (tau3 + self.delta_t * gr_diagonal_new) * expansion_tensor 
         right_matrix_normalization = (-tau3 + self.delta_t * ga_diagonal_new) * expansion_tensor 
         rhs_vector_normalization = 0 * rhs_vector_evolution #* needs to be recomputed every timestep
 
         gk_new = self.gk_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution, rhs_vector_normalization, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk)
         rhs_vector_evolution_diagonal =  1j * gk_new.dagger() * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1,:] @ (ga)) - (gr[-1,:] @ self.thermal_dist[:]) * tau3) + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
-        gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization,rhs_vector_evolution_diagonal, rhs_vector_evolution_diagonal * 0, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
+        #gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization,rhs_vector_evolution_diagonal, rhs_vector_evolution_diagonal * 0, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
         
         return gk_new, gk_diagonal_new
 
@@ -473,6 +471,7 @@ class UsadelKeldyshEvolution:
         matrix_row_2 = (tau3 * left_matrix_1 + right_matrix_1 * tau3).matrix_to_vector()
         matrix_row_3 = (tau1 * left_matrix_2 + right_matrix_2 * tau1).matrix_to_vector()
         matrix_row_4 = (tau2 * left_matrix_2 + right_matrix_2 * tau2).matrix_to_vector()
+
 
         #print(tau1 * left_matrix_2 + right_matrix_2 * tau1)
 
@@ -501,11 +500,10 @@ class UsadelKeldyshEvolution:
 
             total_matrix = np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]])
             diagonal_components = solution_tensor[-1].matrix_to_vector()
-            total_vector = np.array([vector_row_1[time], vector_row_2[time],vector_row_3[time],vector_row_4[time]] ) +  np.array([1j * diagonal_components[3], 1j * diagonal_components[0], norm_convolution[1], norm_convolution[2]])
-            #if time == int(self.ntpoints * 0.95):
-            #    print(total_matrix)
-            #    print(vector_row_3[time])
-            #    print(norm_convolution[1])
+            total_vector = np.array([vector_row_1[time], vector_row_2[time],vector_row_3[time],vector_row_4[time]] ) + np.array([1j * diagonal_components[3], 1j * diagonal_components[0], norm_convolution[1], norm_convolution[2]])
+            #if time == self.ntpoints -2:
+                #print(total_matrix)
+                #print(total_vector)
 
             g_components = np.linalg.solve(total_matrix, total_vector )
 

@@ -653,9 +653,31 @@ def main():
 
     print(f"\n  Convolution complete.")
 
-    # Extract traces for convolution
-    gk_conv_analytical_tau2 = np.imag(gk_conv_analytical.trace(2)) / 2
-    gk_conv_analytical_tau3 = np.imag(gk_conv_analytical.trace(3)) / 2
+    # ========== ADD CORRECTION TERM: τ₃ * 2 * f ==========
+    print(f"\n  Adding correction term: τ₃ * 2 * f(τ)")
+
+    # Create τ₃ tensor
+    from nambu_keldysh_class import NambuKeldyshTensor
+    tau3_correction = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+    # Add correction: g^K_corrected = g^K_conv + τ₃ * 2 * f
+    # f_tau is already a NambuKeldyshTensor with shape (2, 2, N)
+    # Extract scalar f (it's identity in Nambu space)
+    f_scalar_for_correction = f_tau.trace(0)[:N] / 2  # Get the scalar part
+
+    # Create correction term: τ₃ ⊗ (2 * f)
+    correction_term = tau3_correction * NambuKeldyshTensor(2.0 * f_scalar_for_correction, pauli_channel=0)
+
+    # Add to convolution result
+    gk_conv_analytical_corrected = gk_conv_analytical + correction_term
+
+    print(f"  Correction term τ₃ component max: {np.max(np.abs(correction_term.trace(3)/2)):.6e}")
+    print(f"  Original convolution τ₃ max: {np.max(np.abs(gk_conv_analytical.trace(3)/2)):.6e}")
+    print(f"  Corrected convolution τ₃ max: {np.max(np.abs(gk_conv_analytical_corrected.trace(3)/2)):.6e}")
+
+    # Extract traces for convolution (now using corrected version)
+    gk_conv_analytical_tau2 = np.imag(gk_conv_analytical_corrected.trace(2)) / 2
+    gk_conv_analytical_tau3 = np.imag(gk_conv_analytical_corrected.trace(3)) / 2
 
     # Apply time shift: roll by N//2 + 1 to align with tau grid properly
     gk_conv_analytical_tau2 = np.roll(gk_conv_analytical_tau2, N//2 + 1)
@@ -692,18 +714,18 @@ def main():
             val = gk_tau.data[i, j, n_center]
             print(f"  [{i},{j}]: {val.real:+.6e} {val.imag:+.6e}j")
 
-    # Check all Nambu components at τ=0 for analytical convolved g^K
-    print(f"\ng^K(τ=0) Nambu components (analytical convolution):")
+    # Check all Nambu components at τ=0 for analytical convolved g^K (CORRECTED)
+    print(f"\ng^K(τ=0) Nambu components (analytical convolution + correction):")
     for i in range(2):
         for j in range(2):
-            val = gk_conv_analytical.data[i, j, n_center]
+            val = gk_conv_analytical_corrected.data[i, j, n_center]
             print(f"  [{i},{j}]: {val.real:+.6e} {val.imag:+.6e}j")
 
-    # Compute and display the differences
-    print(f"\nDifference (convolution - equilibrium) at τ=0:")
+    # Compute and display the differences (using CORRECTED convolution)
+    print(f"\nDifference (corrected convolution - equilibrium) at τ=0:")
     for i in range(2):
         for j in range(2):
-            diff = gk_conv_analytical.data[i, j, n_center] - gk_tau.data[i, j, n_center]
+            diff = gk_conv_analytical_corrected.data[i, j, n_center] - gk_tau.data[i, j, n_center]
             print(f"  [{i},{j}]: {diff.real:+.6e} {diff.imag:+.6e}j")
 
     # Check individual convolution terms at τ=0
@@ -740,9 +762,9 @@ def main():
         val = gk_tau.trace(pauli_idx)[n_center] / 2
         print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
 
-    print(f"  Convolved g^K:")
+    print(f"  Corrected Convolved g^K:")
     for pauli_idx, pauli_name in enumerate(['τ₀', 'τ₁', 'τ₂', 'τ₃']):
-        val = gk_conv_analytical.trace(pauli_idx)[n_center] / 2
+        val = gk_conv_analytical_corrected.trace(pauli_idx)[n_center] / 2
         print(f"    {pauli_name}: {val.real:+.6e} {val.imag:+.6e}j")
 
     print("="*70)
@@ -818,7 +840,7 @@ def main():
 
     print(f"\nComparison at τ=0:")
     print(f"  Equilibrium direct:           τ₃ = {gk_tau.trace(3)[n_center]/2:.6e}")
-    print(f"  Time-domain convolution:      τ₃ = {gk_conv_analytical.trace(3)[n_center]/2:.6e}")
+    print(f"  Time-domain convolution (corrected): τ₃ = {gk_conv_analytical_corrected.trace(3)[n_center]/2:.6e}")
     print(f"  Freq-domain convolution:      τ₃ = {gk_tau_freq.trace(3)[n_center_freq]/2:.6e}")
 
     print("="*70)
@@ -894,6 +916,32 @@ def main():
 
     print(f"  Result shape: {gk_conv_last_row.data.shape}")
 
+    # ========== ADD CORRECTION TERM: 2 * τ₃ * f[-1, :] for two-time (NO dt) ==========
+    print(f"\n  Adding correction term: 2 * τ₃ * f(t_max, t') (without dt factor)")
+
+    # Extract f[-1, :] as scalar array (it's identity in Nambu space)
+    # f_two_time has shape (2, 2, n_t, n_t), extract last row
+    f_last_row_scalar = f_two_time.trace(0)[-1, :] / 2  # Shape: (n_t,)
+
+    # Create correction: 2 * τ₃ ⊗ f[-1, :]
+    # First create the scalar part as row: shape (1, n_t)
+    f_last_row_reshaped = f_last_row_scalar.reshape(1, -1)
+
+    # Create Nambu tensor: τ₃ ⊗ (2 * f)
+    correction_term_two_time = NambuKeldyshTensor(2.0 * f_last_row_reshaped, pauli_channel=3)
+
+    print(f"  Correction term shape: {correction_term_two_time.data.shape}")
+    print(f"  Correction term τ₃ component max: {np.max(np.abs(correction_term_two_time.trace(3)/2)):.6e}")
+    print(f"  Original convolution*dt τ₃ max: {np.max(np.abs(gk_conv_last_row.trace(3)/2)):.6e}")
+
+    # Add correction to convolution result (correction has NO dt factor)
+    gk_conv_last_row_corrected = gk_conv_last_row + correction_term_two_time
+
+    print(f"  Corrected convolution τ₃ max: {np.max(np.abs(gk_conv_last_row_corrected.trace(3)/2)):.6e}")
+
+    # Use corrected version for comparison
+    gk_conv_last_row = gk_conv_last_row_corrected
+
     # Compare last row: g^K[-1, :] vs (g^R[-1,:] @ f - f[-1,:] @ g^A)
     print(f"\nComparing last time slice (t = t_max):")
 
@@ -937,10 +985,10 @@ def main():
     conv_tau2_last = np.imag(gk_conv_last_row.trace(2)[0, :]) / 2  # Index 0 for single row
 
     t_axis_two_time = np.arange(n_t_two_time)
-    ax.plot(t_axis_two_time, gk_tau2_last, linewidth=2, color='black',
-            label='g^K(t_max, t\')', alpha=0.9)
-    ax.plot(t_axis_two_time, conv_tau2_last, linewidth=2, color='blue',
-            label='(g^R[-1,:] @ f - f[-1,:] @ g^A)', alpha=0.7, linestyle='--')
+    ax.scatter(t_axis_two_time, gk_tau2_last, s=30, color='black',
+               label='g^K(t_max, t\')', alpha=0.7, marker='o')
+    ax.scatter(t_axis_two_time, conv_tau2_last, s=20, color='blue',
+               label='(g^R[-1,:] @ f - f[-1,:] @ g^A)', alpha=0.6, marker='x')
     ax.set_xlabel('t\' (time index)', fontsize=12)
     ax.set_ylabel('Im[g^K(t_max, t\')]  (τ_2)', fontsize=12)
     ax.set_title('Two-Time FDT: τ_2 Component (Last Row)', fontsize=13, fontweight='bold')
@@ -952,10 +1000,10 @@ def main():
     gk_tau3_last = np.imag(gk_two_time.trace(3)[t_last, :]) / 2
     conv_tau3_last = np.imag(gk_conv_last_row.trace(3)[0, :]) / 2  # Index 0 for single row
 
-    ax.plot(t_axis_two_time, gk_tau3_last, linewidth=2, color='black',
-            label='g^K(t_max, t\')', alpha=0.9)
-    ax.plot(t_axis_two_time, conv_tau3_last, linewidth=2, color='red',
-            label='(g^R[-1,:] @ f - f[-1,:] @ g^A)', alpha=0.7, linestyle='--')
+    ax.scatter(t_axis_two_time, gk_tau3_last, s=30, color='black',
+               label='g^K(t_max, t\')', alpha=0.7, marker='o')
+    ax.scatter(t_axis_two_time, conv_tau3_last, s=20, color='red',
+               label='(g^R[-1,:] @ f - f[-1,:] @ g^A)', alpha=0.6, marker='x')
     ax.set_xlabel('t\' (time index)', fontsize=12)
     ax.set_ylabel('Im[g^K(t_max, t\')]  (τ_3)', fontsize=12)
     ax.set_title('Two-Time FDT: τ_3 Component (Last Row)', fontsize=13, fontweight='bold')
@@ -1017,9 +1065,9 @@ def main():
     ax.plot(time_grid_two_time, gk_two_time_tau2, linewidth=2, color='green',
             label='g^K[-1,:] (two-time last row)', alpha=0.8, linestyle='-.')
     ax.plot(tau_axis_conv_neg, gk_conv_one_time_tau2_neg, linewidth=2, color='blue',
-            label='g^R ⊛ f - f ⊛ g^A (one-time)', alpha=0.7, linestyle='--')
+            label='g^R ⊛ f - f ⊛ g^A + τ₃·2f (one-time)', alpha=0.7, linestyle='--')
     ax.plot(time_grid_two_time, gk_conv_two_time_tau2, linewidth=1.5, color='red',
-            label='dt*(g^R[-1,:] @ f - f[-1,:] @ g^A) (two-time)', alpha=0.7, linestyle=':')
+            label='dt*(g^R[-1,:] @ f - f[-1,:] @ g^A + τ₃·2f) (two-time)', alpha=0.7, linestyle=':')
     ax.set_xlabel('t (time, t ≤ 0)', fontsize=12)
     ax.set_ylabel('Im[g^K]  (τ_2 component)', fontsize=12)
     ax.set_title('Comprehensive g^K Comparison: τ_2 Component', fontsize=13, fontweight='bold')
@@ -1034,9 +1082,9 @@ def main():
     ax.plot(time_grid_two_time, gk_two_time_tau3, linewidth=2, color='green',
             label='g^K[-1,:] (two-time last row)', alpha=0.8, linestyle='-.')
     ax.plot(tau_axis_conv_neg, gk_conv_one_time_tau3_neg, linewidth=2, color='blue',
-            label='g^R ⊛ f - f ⊛ g^A (one-time)', alpha=0.7, linestyle='--')
+            label='g^R ⊛ f - f ⊛ g^A + τ₃·2f (one-time)', alpha=0.7, linestyle='--')
     ax.plot(time_grid_two_time, gk_conv_two_time_tau3, linewidth=1.5, color='red',
-            label='dt*(g^R[-1,:] @ f - f[-1,:] @ g^A) (two-time)', alpha=0.7, linestyle=':')
+            label='dt*(g^R[-1,:] @ f - f[-1,:] @ g^A + τ₃·2f) (two-time)', alpha=0.7, linestyle=':')
     ax.set_xlabel('t (time, t ≤ 0)', fontsize=12)
     ax.set_ylabel('Im[g^K]  (τ_3 component)', fontsize=12)
     ax.set_title('Comprehensive g^K Comparison: τ_3 Component', fontsize=13, fontweight='bold')
@@ -1100,10 +1148,10 @@ def main():
         ax.plot(tau_axis_conv, gk_tau2_imag_eq, linewidth=2, color='black',
                 label='g^K(τ) from equilibrium', alpha=0.9)
         ax.plot(tau_axis_conv, gk_conv_analytical_tau2, linewidth=2, color='blue',
-                label='g^R ⊛ f - f ⊛ g^A', alpha=0.7, linestyle='--')
+                label='g^R ⊛ f - f ⊛ g^A + τ₃·2f (corrected)', alpha=0.7, linestyle='--')
         ax.set_xlabel('τ (relative time)', fontsize=12)
         ax.set_ylabel('Im[g^K(τ)]  (τ_2 component)', fontsize=12)
-        ax.set_title('FDT Verification: τ_2 Component', fontsize=13, fontweight='bold')
+        ax.set_title('FDT Verification (with correction): τ_2 Component', fontsize=13, fontweight='bold')
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
 
@@ -1112,10 +1160,10 @@ def main():
         ax.plot(tau_axis_conv, gk_tau3_imag_eq, linewidth=2, color='black',
                 label='g^K(τ) from equilibrium', alpha=0.9)
         ax.plot(tau_axis_conv, gk_conv_analytical_tau3, linewidth=2, color='red',
-                label='g^R ⊛ f - f ⊛ g^A', alpha=0.7, linestyle='--')
+                label='g^R ⊛ f - f ⊛ g^A + τ₃·2f (corrected)', alpha=0.7, linestyle='--')
         ax.set_xlabel('τ (relative time)', fontsize=12)
         ax.set_ylabel('Im[g^K(τ)]  (τ_3 component)', fontsize=12)
-        ax.set_title('FDT Verification: τ_3 Component', fontsize=13, fontweight='bold')
+        ax.set_title('FDT Verification (with correction): τ_3 Component', fontsize=13, fontweight='bold')
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
 
@@ -1152,7 +1200,7 @@ def main():
         time_grid_sim = evolution.time_grid
 
         print(f"\nComputing convolution from simulated state...")
-        print(f"  dt * (g^R[-1,:] @ f - f[-1,:] @ g^A)")
+        print(f"  dt * (g^R[-1,:] @ f - f[-1,:] @ g^A) + 2 * τ₃ * f[-1,:]")
 
         # Extract last rows for convolution
         gr_sim_last_row = NambuKeldyshTensor(gr_sim.data[:, :, -1:, :])
@@ -1162,6 +1210,25 @@ def main():
         dt = evolution.delta_t
         gk_sim_conv_raw = gr_sim_last_row @ f_two_time - f_last_row @ ga_sim
         gk_sim_conv = NambuKeldyshTensor(gk_sim_conv_raw.data * dt)
+
+        # ========== ADD CORRECTION TERM: 2 * τ₃ * f[-1, :] for simulated state ==========
+        print(f"  Adding correction term: 2 * τ₃ * f(t_max, t') (without dt factor)")
+
+        # Extract f[-1, :] as scalar array
+        f_last_row_scalar_sim = f_two_time.trace(0)[-1, :] / 2  # Shape: (n_t,)
+        f_last_row_reshaped_sim = f_last_row_scalar_sim.reshape(1, -1)
+
+        # Create correction: 2 * τ₃ ⊗ f[-1, :]
+        correction_term_sim = NambuKeldyshTensor(2.0 * f_last_row_reshaped_sim, pauli_channel=3)
+
+        print(f"  Correction term shape: {correction_term_sim.data.shape}")
+        print(f"  Correction term τ₃ component max: {np.max(np.abs(correction_term_sim.trace(3)/2)):.6e}")
+        print(f"  Original convolution*dt τ₃ max: {np.max(np.abs(gk_sim_conv.trace(3)/2)):.6e}")
+
+        # Add correction to convolution result
+        gk_sim_conv = gk_sim_conv + correction_term_sim
+
+        print(f"  Corrected convolution τ₃ max: {np.max(np.abs(gk_sim_conv.trace(3)/2)):.6e}")
 
         # Extract traces for plotting
         gk_sim_last_row_tau2 = np.imag(gk_sim.trace(2)[-1, :]) / 2
@@ -1180,30 +1247,30 @@ def main():
 
         # Plot τ_2 component
         ax = axes[0]
-        ax.plot(time_grid_sim, gk_sim_last_row_tau2, linewidth=2.5, color='purple',
-                label='g^K[-1,:] simulated', alpha=0.9)
-        ax.plot(time_grid_sim, gk_sim_conv_tau2, linewidth=2, color='orange',
-                label='dt*(g^R[-1,:] @ f - f[-1,:] @ g^A) simulated', alpha=0.8, linestyle='--')
-        ax.plot(time_grid_two_time, gk_eq_last_row_tau2, linewidth=1.5, color='green',
-                label='g^K[-1,:] equilibrium', alpha=0.6, linestyle=':')
+        ax.scatter(time_grid_sim, gk_sim_last_row_tau2, s=30, color='purple',
+                   label='g^K[-1,:] simulated', alpha=0.7, marker='o')
+        ax.scatter(time_grid_sim, gk_sim_conv_tau2, s=20, color='orange',
+                   label='dt*(g^R @ f - f @ g^A) + 2τ₃f simulated', alpha=0.6, marker='x')
+        ax.scatter(time_grid_two_time, gk_eq_last_row_tau2, s=15, color='green',
+                   label='g^K[-1,:] equilibrium', alpha=0.5, marker='+')
         ax.set_xlabel('t\' (time)', fontsize=12)
         ax.set_ylabel('Im[g^K(t_max, t\')]  (τ_2)', fontsize=12)
-        ax.set_title('FDT Verification for Simulated State: τ_2 Component', fontsize=13, fontweight='bold')
+        ax.set_title('FDT Verification (corrected) for Simulated State: τ_2 Component', fontsize=13, fontweight='bold')
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([time_grid_sim[0], 0])
 
         # Plot τ_3 component
         ax = axes[1]
-        ax.plot(time_grid_sim, gk_sim_last_row_tau3, linewidth=2.5, color='purple',
-                label='g^K[-1,:] simulated', alpha=0.9)
-        ax.plot(time_grid_sim, gk_sim_conv_tau3, linewidth=2, color='orange',
-                label='dt*(g^R[-1,:] @ f - f[-1,:] @ g^A) simulated', alpha=0.8, linestyle='--')
-        ax.plot(time_grid_two_time, gk_eq_last_row_tau3, linewidth=1.5, color='green',
-                label='g^K[-1,:] equilibrium', alpha=0.6, linestyle=':')
+        ax.scatter(time_grid_sim, gk_sim_last_row_tau3, s=30, color='purple',
+                   label='g^K[-1,:] simulated', alpha=0.7, marker='o')
+        ax.scatter(time_grid_sim, gk_sim_conv_tau3, s=20, color='orange',
+                   label='dt*(g^R @ f - f @ g^A) + 2τ₃f simulated', alpha=0.6, marker='x')
+        ax.scatter(time_grid_two_time, gk_eq_last_row_tau3, s=15, color='green',
+                   label='g^K[-1,:] equilibrium', alpha=0.5, marker='+')
         ax.set_xlabel('t\' (time)', fontsize=12)
         ax.set_ylabel('Im[g^K(t_max, t\')]  (τ_3)', fontsize=12)
-        ax.set_title('FDT Verification for Simulated State: τ_3 Component', fontsize=13, fontweight='bold')
+        ax.set_title('FDT Verification (corrected) for Simulated State: τ_3 Component', fontsize=13, fontweight='bold')
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([time_grid_sim[0], 0])

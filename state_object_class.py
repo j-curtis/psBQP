@@ -140,7 +140,7 @@ class StateObject:
             new_gk_diag: New diagonal element g^K(t_new, t_new) - shape (2,2) or NambuKeldyshTensor
         """
         self.update_state_gr(new_gr_row, new_gr_diag)
-        self.update_state_gk(new_gr_row, new_gr_diag)
+        self.update_state_gk(new_gk_row, new_gk_diag)
         
     # ========== Consistency Checks ==========
 

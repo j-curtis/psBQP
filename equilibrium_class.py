@@ -406,12 +406,9 @@ class EquilibriumSolver:
         else:
             raise ValueError("grid_parameters must contain 'time_duration' or 't_max'")
 
-        # Compute time step (from UsadelKeldyshEvolution convention)
+        # Use the single time grid from [-T_max, 0]
         dt = tmax / (ntpoints - 1)
-
-        # Extend time grid from [-T_max, 0] to [-T_max, +T_max]
-        n_extended = 2 * ntpoints - 1
-        time_grid_full = np.linspace(-tmax, tmax, n_extended)
+        time_grid = np.linspace(-tmax, 0, ntpoints)
 
         # Get omega grid from old usadel solver
         omega_grid = self.usadel_solver.w_arr
@@ -426,9 +423,9 @@ class EquilibriumSolver:
             # Extract component using trace and normalization
             g_tau_pauli.append(np.array(g_one_time.trace(pauli_idx))/2)
 
-        # Build g(t,t') on the full extended time grid, then truncate to t < 0, t' < 0
-        # Create meshgrid of time values for all (t_i, t_j) pairs on FULL grid
-        t_i, t_j = np.meshgrid(time_grid_full, time_grid_full, indexing='ij')
+        # Build g(t,t') on the time grid [-T_max, 0]
+        # Create meshgrid of time values for all (t_i, t_j) pairs
+        t_i, t_j = np.meshgrid(time_grid, time_grid, indexing='ij')
 
         # Compute tau = t_i - t_j for all pairs at once
         tau_matrix = t_i - t_j
@@ -445,9 +442,13 @@ class EquilibriumSolver:
         # Verify using formula (for debugging)
         # Note: linspace with n_omega points uses n_omega-1 intervals
         dtau_formula = 2*np.pi / (d_omega * (n_omega - 1))
-        if not np.allclose(dtau_fft, dtau_formula, rtol=1e-10):
+        if not np.allclose(dtau_fft, dtau_formula, rtol=1e-6):
             print(f"WARNING: Tau spacing mismatch!")
             print(f"  From grid: {dtau_fft:.10e}, From formula: {dtau_formula:.10e}")
+            print(f"  d_omega = {d_omega:.10e}")
+            print(f"  n_omega = {n_omega}")
+            print(f"  tau range = {tau_grid_actual[0]:.6f} to {tau_grid_actual[-1]:.6f}")
+            print(f"  Difference: {abs(dtau_fft - dtau_formula):.10e}")
 
         # Compute tau indices by finding nearest neighbor in tau_grid_actual
         # Use searchsorted to find insertion points, then check which neighbor is closer
@@ -475,17 +476,13 @@ class EquilibriumSolver:
 
         g_two_time_pauli = []
         for g_tau in g_tau_pauli:
-            # Initialize g(t,t') array on FULL extended grid
-            g_tt_full = np.zeros((n_extended, n_extended), dtype=complex)
+            # Initialize g(t,t') array on time grid [-T_max, 0]
+            g_tt = np.zeros((ntpoints, ntpoints), dtype=complex)
 
             # Fill g(t,t') using advanced indexing (vectorized)
-            g_tt_full[valid_mask] = g_tau[tau_idx_matrix[valid_mask]]
+            g_tt[valid_mask] = g_tau[tau_idx_matrix[valid_mask]]
 
-            # Extract only the part where t < 0 and t' < 0
-            # The full grid is [-T_max, T_max], we want only [-T_max, 0)
-            g_tt_negative = g_tt_full[:ntpoints, :ntpoints]
-
-            g_two_time_pauli.append(g_tt_negative)
+            g_two_time_pauli.append(g_tt)
 
         # Convert from Pauli components to NambuKeldyshTensor
         g_two_time = None

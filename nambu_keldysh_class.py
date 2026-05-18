@@ -174,6 +174,103 @@ class NambuKeldyshTensor:
 
         return NambuKeldyshTensor(result_data)
 
+    def precise_convolution_left(self, other, other_integral, dt):
+        """
+        Compute regularized left convolution: self @ other (regularized).
+
+        The regularized matrix (other) is on the right side.
+        Regularization suppresses Gibbs oscillations from other.
+
+        Formula:
+            result = dt * (self @ other)
+                   - dt * (self * (ones @ other))
+                   + (self * other_integral)
+
+        Args:
+            other: NambuKeldyshTensor - function to convolve with (regularized)
+            other_integral: NambuKeldyshTensor - integral of other
+            dt: float - time step for discretization
+
+        Returns:
+            NambuKeldyshTensor - regularized convolution result
+
+        Example:
+            # gr @ f with regularization on f
+            result = gr_row.precise_convolution_left(f_thermal, f_integral, dt)
+        """
+        # Create ones tensor as a row vector (identity in Nambu space)
+        # Shape: (2, 2, 1, N_t) where N_t is the last dimension of other
+        # pauli_channel=0 automatically creates the (2,2) identity structure
+        ones_data = np.ones((1, other.data.shape[-1]), dtype=complex)
+        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+
+        # Standard convolution
+        result_std = (self @ other) * dt
+
+        # Factored term (non-analytic contribution)
+        result_fact = (self * (ones_tensor @ other)) * dt
+
+        # Analytic term (using integral)
+        result_anal = self * other_integral
+
+        # Combine: standard - factored + analytic
+        return result_std - result_fact + result_anal
+
+    def precise_convolution_right(self, other, other_integral, dt, self_index = -1):
+        """
+        Compute regularized right convolution: other @ self (regularized).
+
+        The regularized matrix (other) is on the left side.
+        Regularization suppresses Gibbs oscillations from other.
+
+        Formula:
+            result = dt * (other @ self)
+                   - dt * ((other @ ones) * self_row)
+                   + (other_integral * self_row)
+
+        When other is a row (shape 2,2,1,N_t), self_row = self[0:1,:] is used
+        for factored and analytic terms, while full self is used for convolution.
+
+        Args:
+            other: NambuKeldyshTensor - function to convolve with (regularized)
+            other_integral: NambuKeldyshTensor - integral of other
+            dt: float - time step for discretization
+
+        Returns:
+            NambuKeldyshTensor - regularized convolution result
+
+        Example:
+            # f @ ga with regularization on f
+            result = ga.precise_convolution_right(f_thermal, f_integral, dt)
+        """
+        # Create ones tensor as a column vector (identity in Nambu space)
+        # Shape: (2, 2, N_t, 1) where N_t is from other
+        # pauli_channel=0 automatically creates the (2,2) identity structure
+        ones_data = np.ones((other.data.shape[-1], 1), dtype=complex)
+        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+
+        # Check if other is a row (shape: 2, 2, 1, N_t)
+        is_other_row = (other.data.shape[2] == 1)
+
+        # Standard convolution (always uses full self)
+        result_std = (other @ self) * dt
+
+        # For factored and analytic terms: use row of self if other is a row
+        if is_other_row:
+            # Extract corresponding row from self
+            self_for_reg = self[self_index:self_index+1, :]
+        else:
+            self_for_reg = self
+
+        # Factored term (non-analytic contribution)
+        result_fact = ((other @ ones_tensor) * self_for_reg) * dt
+
+        # Analytic term (using integral)
+        result_anal = other_integral * self_for_reg
+
+        # Combine: standard - factored + analytic
+        return result_std - result_fact + result_anal
+
     def _binary_ewise(self, other, op):
         """Helper for element-wise binary operations."""
         if isinstance(other, NambuKeldyshTensor):

@@ -246,7 +246,7 @@ class EquilibriumSolver:
                 elif pauli_idx == 2: # tau_1, tau_2: 1/ω asymptotic     
                     # Choose regularization scale ω₀
                     # Use a characteristic energy (e.g., twice the gap or broadening)
-                    omega_10percent = np.max(omega_grid) * 1e-2
+                    omega_10percent = np.max(omega_grid) * 5e-2
                     omega_0 = np.abs(omega_10percent) / 2.0  # Regularization scale
                     C_decay = -1j*self.gap_0
                     C_prime = -1j*self.gap_0 * (-1j * self.system_parameters['eta'])
@@ -267,9 +267,17 @@ class EquilibriumSolver:
                     pauli_component = pauli_component - C_tanh * tanh_omega
 
                     asymptotic_coeffs.append(('tanh', C_tanh, temperature))
-                # pauli_idx == 2: NO regularization for g^K_2
-                # Direct FFT without asymptotic subtraction/addition
-                else:  # pauli_idx 0, 1, 2: no regularization for these
+                elif pauli_idx == 2:  # tau_2 (Y): 2iΔ/ω · tanh(ω/2T) asymptotic for g^K
+                    # At equilibrium, g^K_2(ω) → 2i·Δ/ω · tanh(ω/2T) at large |ω|
+                    # Subtract this before FFT to avoid Gibbs oscillations
+                    # Add back 2*Δ*F(τ) in time domain, where F is thermal integral
+                    # TODO: Fix normalization factor before enabling
+                    tanh_omega = np.tanh(omega_grid / (2.0 * temperature))
+                    asymptotic_gk2 = 2.0j * self.gap_0 / (omega_grid + 1e-10) * tanh_omega
+                    pauli_component = pauli_component #- asymptotic_gk2
+
+                    asymptotic_coeffs.append(None)  # Don't add back (normalization issue)
+                else:  # pauli_idx 0, 1: no regularization for these
                     asymptotic_coeffs.append(None)
             else:  # Unknown g_type
                 asymptotic_coeffs.append(None)
@@ -348,6 +356,38 @@ class EquilibriumSolver:
 
                     #* this part is only called for gk_3 so it should be fine
                     g_tau_shifted = g_tau_shifted# + asymptotic_contribution
+
+                elif asym_type == 'thermal_integral':  # 2*Δ*F(τ) for g^K_2
+                    # FT[2j*Δ/ω * tanh(ω/2T)] = 2*Δ * F(τ)
+                    # where F(τ) = ∫_{-∞}^{τ} f(τ') dτ' = (-i/π) * ln(tanh(πτT/2))
+                    T = asymptotic_coeffs[pauli_idx][2]  # Temperature
+                    C = asymptotic_coeffs[pauli_idx][1]  # 2*Δ
+
+                    # Create mask to avoid issues at τ=0
+                    mask = (np.abs(tau_grid_fft) > 1e-6)
+
+                    # Initialize with zeros
+                    asymptotic_contribution = np.zeros_like(tau_grid_fft, dtype=complex)
+
+                    # Compute thermal integral F(τ) = (-i/π) * ln(tanh(πτT/2))
+                    # For τ > 0: F(τ) = (-i/π) * ln(tanh(πτT/2))
+                    # For τ < 0: Use F(-τ) = -F(τ) (odd function)
+                    tau_pos_mask = (tau_grid_fft > 1e-6)
+                    tau_neg_mask = (tau_grid_fft < -1e-6)
+
+                    if np.any(tau_pos_mask):
+                        asymptotic_contribution[tau_pos_mask] = (-1j / np.pi) * \
+                            np.log(np.tanh(np.pi * tau_grid_fft[tau_pos_mask] * T / 2.0))
+
+                    if np.any(tau_neg_mask):
+                        asymptotic_contribution[tau_neg_mask] = -(-1j / np.pi) * \
+                            np.log(np.tanh(-np.pi * tau_grid_fft[tau_neg_mask] * T / 2.0))
+
+                    # At τ=0, set to zero (principal value)
+                    asymptotic_contribution[~mask] = 0.0
+
+                    # Multiply by C = 2*Δ and add back
+                    g_tau_shifted = g_tau_shifted + C * asymptotic_contribution
 
                 # bessel_K0 case removed - no regularization for g^K_2
 

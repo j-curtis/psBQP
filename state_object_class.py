@@ -63,7 +63,7 @@ class StateObject:
 
         Uses the gap equation: Δ(t) = λ Tr[τ₋ g^K(t,t)]
         where τ₋ = (τ₁ - iτ₂)/2 is the lowering operator.
-
+        
         Returns:
             np.ndarray: Gap values Δ(t) at each time point
         """
@@ -240,6 +240,60 @@ class StateObject:
             'gr_gk_conv': conv1s,
             'gk_ga_conv': conv2s
         }
+
+    def check_fdt(self, f_thermal, f_thermal_integral, time_index):
+        """
+        Check FDT relation: g^K = g^R @ f - f @ g^A using precise convolution.
+
+        Computes the regularized FDT convolution for a specific time index by:
+        1. Computing regularized gr @ f using precise_convolution_left
+        2. Computing regularized f @ ga using precise_convolution_right
+        3. Combining as: term1 - term2
+
+        Args:
+            f_thermal: NambuKeldyshTensor - thermal distribution f(t, t')
+            f_thermal_integral: NambuKeldyshTensor - integral of thermal distribution F(t, t')
+            time_index: int - time index to check (supports negative indexing)
+
+        Returns:
+            gk_fdt_row: NambuKeldyshTensor - FDT prediction for g^K[time_index, :]
+            gk_actual_row: NambuKeldyshTensor - actual g^K[time_index, :]
+            error_row: NambuKeldyshTensor - difference between actual and FDT prediction
+            max_error: float - maximum absolute error for this row
+        """
+        if self.dt is None:
+            raise ValueError("Time step dt must be set in grid_params to use check_fdt")
+
+        # Compute advanced Green's function
+        ga = self._r2a()
+
+        # Handle negative indexing
+        N_t = self.gr.data.shape[2]
+        t_idx = time_index if time_index >= 0 else N_t + time_index
+
+        # Extract rows for time t_idx
+        gr_row = self.gr[t_idx:t_idx+1, :]
+        f_row = f_thermal[t_idx:t_idx+1, :]
+        F_row = f_thermal_integral[t_idx:t_idx+1, :]
+
+        # First term: regularized gr @ f (f is regularized, on the right)
+        term1 = gr_row.precise_convolution_left(f_thermal, F_row, self.dt)
+
+        # Second term: regularized f @ ga (f is regularized, on the left)
+        # Pass t_idx (positive index) for correct row extraction
+        term2 = ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t_idx)
+
+        # FDT relation: g^K = term1 - term2
+        gk_fdt_row = term1 - term2
+
+        # Extract actual g^K row
+        gk_actual_row = self.gk[t_idx:t_idx+1, :]
+
+        # Compute error
+        error_row = gk_actual_row - gk_fdt_row
+        max_error = np.max(np.abs(error_row.data))
+
+        return gk_fdt_row, gk_actual_row, error_row, max_error
 
     # ========== String Representation ==========
 

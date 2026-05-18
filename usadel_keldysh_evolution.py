@@ -206,7 +206,8 @@ class UsadelKeldyshEvolution:
         gr_two_time, gk_two_time, gr_tau, gk_tau = equilibrium_solver.fourier_transform_to_two_time(gr_eq, gk_eq)
 
         # Get BCS coupling constant for StateObject
-        bcs_coupling = self._get_BCS_coupling()
+        #* the effective coupling passed to the time state has to be rescaled in the instananeous case!
+        bcs_coupling = self._get_BCS_coupling() * (1 + 0 * self._get_BCS_coupling()/4/np.pi * np.log(self.critical_temperature/self.temperature))
 
         # Create and return StateObject
         initial_state = StateObject(
@@ -303,7 +304,7 @@ class UsadelKeldyshEvolution:
         # Compute finite-domain integral: F(upper) - F(lower) + 1
         F_upper = compute_F_full(tau_upper)
         F_lower = compute_F_full(tau_lower)
-        F_two_time = F_upper - F_lower #+ 1.0
+        F_two_time = F_upper - F_lower + 1.0
 
         # Store as NambuKeldyshTensor (identity in Nambu space)
         self.thermal_integral = NambuKeldyshTensor(F_two_time, pauli_channel=0)
@@ -333,7 +334,7 @@ class UsadelKeldyshEvolution:
 
         # Extract gap history
         gap_history = state.get_gap_history()
-        gap_history = np.ones(np.size(gap_history)) * 1.5232319831848145
+        #gap_history = np.ones(np.size(gap_history)) * 1.5232319831848145
         #! overwrite gap update
 
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
@@ -426,7 +427,7 @@ class UsadelKeldyshEvolution:
         # Extract gap history
         gap_history = state.get_gap_history()
         #! overwrite gap update
-        gap_history = np.ones(np.size(gap_history)) * 1.5232319831848145
+        #gap_history = np.ones(np.size(gap_history)) * 1.5232319831848145
         
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
         # Create τ_3 Pauli matrix as NambuKeldyshTensor (identity in time)
@@ -450,14 +451,19 @@ class UsadelKeldyshEvolution:
         right_matrix_evolution = (1j * tau3 + 1j * self.eta * self.delta_t * tau3) * expansion_tensor + 1j * self.delta_t * gap_tensor 
         
         #* removed last term since we now consider the shifted g^k equation
+        #! This integral should be changed by the precise convolution
+        #rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
         rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
+    
         rhs_vector_evolution += -2 * (-1j * self.delta_t * gap_tensor[-1] * tau3 * self.thermal_dist[-1:,:].shift(1, axis = 1) + 1j * self.delta_t * tau3 * self.thermal_dist[-1:,:].shift(1, axis = 1) * gap_tensor)
         
         #print('f is', self.thermal_dist[-1:,:].shift(1, axis = 1).trace(0))
         left_matrix_normalization = (tau3 + self.delta_t * gr_diagonal_new) * expansion_tensor 
         right_matrix_normalization = (-tau3 + self.delta_t * ga_diagonal_new) * expansion_tensor 
-        
+        #! This integral should be changed by the precise convolution
+        #rhs_vector_normalization = -2 *self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) + (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3)
         rhs_vector_normalization = -2 *self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) + (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3)
+
 
         gk_new = self.gk_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution, rhs_vector_normalization, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk)
         #print(gk_new.data.shape)
@@ -468,7 +474,7 @@ class UsadelKeldyshEvolution:
         
         rhs_vector_normalization_diagonal = -2 * self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga[:,-1])) + (gr[-1:,:] @ self.thermal_dist[:,-1]) * tau3)
 
-        gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization,rhs_vector_evolution_diagonal, rhs_vector_normalization_diagonal, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
+        gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution_diagonal, rhs_vector_normalization_diagonal, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
         
         return gk_new, gk_diagonal_new
 

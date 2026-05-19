@@ -53,7 +53,13 @@ class StateObject:
         Returns:
             NambuKeldyshTensor: Advanced Green's function g^A
         """
-        return -self.gr.involution()
+        ga = -self.gr.involution()
+
+        # Zero out diagonal of g^A to break F(0) cancellation
+        diag_indices = np.diag_indices(ga.data.shape[2])
+        ga.data[:, :, diag_indices[0], diag_indices[1]] = 0.0
+
+        return NambuKeldyshTensor(ga.data)
 
     # ========== State Properties ==========
 
@@ -267,6 +273,7 @@ class StateObject:
         # Compute advanced Green's function
         ga = self._r2a()
 
+
         # Handle negative indexing
         N_t = self.gr.data.shape[2]
         t_idx = time_index if time_index >= 0 else N_t + time_index
@@ -277,7 +284,8 @@ class StateObject:
         F_row = f_thermal_integral[t_idx:t_idx+1, :]
 
         # First term: regularized gr @ f (f is regularized, on the right)
-        term1 = gr_row.precise_convolution_left(f_thermal, F_row, self.dt)
+        # Pass full f_thermal_integral tensor so method can extract correct row t_idx
+        term1 = gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=t_idx)
 
         # Second term: regularized f @ ga (f is regularized, on the left)
         # Pass t_idx (positive index) for correct row extraction

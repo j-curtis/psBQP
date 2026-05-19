@@ -174,7 +174,7 @@ class NambuKeldyshTensor:
 
         return NambuKeldyshTensor(result_data)
 
-    def precise_convolution_left(self, other, other_integral, dt):
+    def precise_convolution_left(self, other, other_integral, dt, other_index=-1):
         """
         Compute regularized left convolution: self @ other (regularized).
 
@@ -186,32 +186,53 @@ class NambuKeldyshTensor:
                    - dt * (self * (ones @ other))
                    + (self * other_integral)
 
+        When self is a row (shape 2,2,1,N_t), other_integral_row = other_integral[other_index:other_index+1,:]
+        is used for the analytic term, while full other is used for convolution.
+
         Args:
             other: NambuKeldyshTensor - function to convolve with (regularized)
             other_integral: NambuKeldyshTensor - integral of other
             dt: float - time step for discretization
+            other_index: int - row index to extract from other_integral when self is a row (default 0)
 
         Returns:
             NambuKeldyshTensor - regularized convolution result
 
         Example:
             # gr @ f with regularization on f
-            result = gr_row.precise_convolution_left(f_thermal, f_integral, dt)
+            result = gr_row.precise_convolution_left(f_thermal, f_integral, dt, other_index=-1)
         """
         # Create ones tensor as a row vector (identity in Nambu space)
         # Shape: (2, 2, 1, N_t) where N_t is the last dimension of other
         # pauli_channel=0 automatically creates the (2,2) identity structure
-        ones_data = np.ones((1, other.data.shape[-1]), dtype=complex)
+        ones_data = np.ones((1, other.data.shape[-2]), dtype=complex)
         ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
 
-        # Standard convolution
+        # Check if self is a row (shape: 2, 2, 1, N_t)
+        is_self_row = (self.data.shape[2] == 1)
+
+        # Standard convolution (always uses full other)
         result_std = (self @ other) * dt
 
         # Factored term (non-analytic contribution)
         result_fact = (self * (ones_tensor @ other)) * dt
 
+        # For analytic term: use row of other_integral if self is a row
+        if is_self_row:
+            # Extract corresponding row from other_integral
+            # Handle negative indices properly to avoid empty slices
+            N_t = other_integral.data.shape[2]
+            if other_index < 0:
+                # Convert negative index to positive
+                positive_index = N_t + other_index
+            else:
+                positive_index = other_index
+            other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
+        else:
+            other_integral_for_reg = other_integral
+
         # Analytic term (using integral)
-        result_anal = self * other_integral
+        result_anal = self * other_integral_for_reg
 
         # Combine: standard - factored + analytic
         return result_std - result_fact + result_anal
@@ -258,7 +279,14 @@ class NambuKeldyshTensor:
         # For factored and analytic terms: use row of self if other is a row
         if is_other_row:
             # Extract corresponding row from self
-            self_for_reg = self[self_index:self_index+1, :]
+            # Handle negative indices properly to avoid empty slices
+            N_t = self.data.shape[2]
+            if self_index < 0:
+                # Convert negative index to positive
+                positive_index = N_t + self_index
+            else:
+                positive_index = self_index
+            self_for_reg = self[positive_index:positive_index+1, :]
         else:
             self_for_reg = self
 
@@ -271,9 +299,31 @@ class NambuKeldyshTensor:
         # Combine: standard - factored + analytic
         return result_std - result_fact + result_anal
 
+    def _check_binary_shape_compatibility(self, other):
+        """
+        Check if two NambuKeldyshTensor objects have compatible shapes for binary operations.
+
+        Args:
+            other: Another NambuKeldyshTensor object
+
+        Raises:
+            ValueError: If shapes are incompatible for element-wise operations
+        """
+        if not isinstance(other, NambuKeldyshTensor):
+            return  # Allow broadcasting with scalars/arrays
+
+        if self.data.shape != other.data.shape:
+            raise ValueError(
+                f"Shape mismatch for binary operation: "
+                f"left operand has shape {self.data.shape}, "
+                f"right operand has shape {other.data.shape}. "
+                f"Binary operations require identical shapes."
+            )
+
     def _binary_ewise(self, other, op):
         """Helper for element-wise binary operations."""
         if isinstance(other, NambuKeldyshTensor):
+            self._check_binary_shape_compatibility(other)
             return NambuKeldyshTensor(op(self.data, other.data))
         else:
             return NambuKeldyshTensor(op(self.data, other))
@@ -488,6 +538,17 @@ class NambuKeldyshTensor:
         """
         actual_axis = axis + 2
         shifted_data = np.roll(self.data, shift=shift, axis=actual_axis)
+
+        # Zero out the wrapped boundary elements to avoid circular contamination
+        if shift > 0:
+            slices = [slice(None)] * self.data.ndim
+            slices[actual_axis] = slice(0, shift)
+            shifted_data[tuple(slices)] = 0.0
+        elif shift < 0:
+            slices = [slice(None)] * self.data.ndim
+            slices[actual_axis] = slice(shift, None)
+            shifted_data[tuple(slices)] = 0.0
+
         return NambuKeldyshTensor(shifted_data)
 
     # ========== Gradient Operations ==========

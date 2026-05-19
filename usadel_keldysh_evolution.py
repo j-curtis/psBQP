@@ -207,7 +207,7 @@ class UsadelKeldyshEvolution:
 
         # Get BCS coupling constant for StateObject
         #* the effective coupling passed to the time state has to be rescaled in the instananeous case!
-        bcs_coupling = self._get_BCS_coupling() * (1 + 0 * self._get_BCS_coupling()/4/np.pi * np.log(self.critical_temperature/self.temperature))
+        bcs_coupling = self._get_BCS_coupling() #* (1 + 0 * self._get_BCS_coupling()/4/np.pi * np.log(self.critical_temperature/self.temperature))
 
         # Create and return StateObject
         initial_state = StateObject(
@@ -290,7 +290,7 @@ class UsadelKeldyshEvolution:
             result = np.zeros_like(tau_vals, dtype=complex)
 
             # Mask to avoid singularity at τ = 0
-            mask = (np.abs(tau_vals) > 1e-10)
+            mask = (np.abs(tau_vals) > 1e-6)
 
             # Compute where τ ≠ 0
             x = np.pi * tau_vals[mask] * temperature / 2.0
@@ -305,6 +305,15 @@ class UsadelKeldyshEvolution:
         F_upper = compute_F_full(tau_upper)
         F_lower = compute_F_full(tau_lower)
         F_two_time = F_upper - F_lower + 1.0
+
+        # Set F(0) to BCS regularization: 1/λ + ln(T_c/T)
+        bcs_coupling = self._get_BCS_coupling()
+
+        F_zero_bcs = 2 * 1j * (1 + bcs_coupling/(2 * np.pi) * np.log(self.critical_temperature / temperature))
+
+        # Replace diagonal (τ=0) with BCS value
+        diagonal_mask = (np.abs(tau_upper) < 1e-6)
+        F_two_time[diagonal_mask] = F_zero_bcs
 
         # Store as NambuKeldyshTensor (identity in Nambu space)
         self.thermal_integral = NambuKeldyshTensor(F_two_time, pauli_channel=0)
@@ -391,7 +400,7 @@ class UsadelKeldyshEvolution:
         solution_tensor = diagonal_entry * NambuKeldyshTensor([1.0], pauli_channel=0)
 
         # Backward sweep in time
-        for time in range(self.ntpoints-1, -1, -1):
+        for time in range(self.ntpoints-1, -1, -1): 
             # Compute normalization convolution term
             if time == self.ntpoints - 1:
                 norm_convolution = np.array([0, 0, 0, 0])
@@ -451,28 +460,37 @@ class UsadelKeldyshEvolution:
         right_matrix_evolution = (1j * tau3 + 1j * self.eta * self.delta_t * tau3) * expansion_tensor + 1j * self.delta_t * gap_tensor 
         
         #* removed last term since we now consider the shifted g^k equation
-        #! This integral should be changed by the precise convolution
         #rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
-        rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
+        rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t * self.eta * (
+            tau3 * ga.shift(1, axis=1).precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:], self.delta_t,self_index=-1)
+            - gr[-1:,:].precise_convolution_left(self.thermal_dist.shift(1, axis=1), self.thermal_integral[-1:,:].shift(1, axis=1), self.delta_t, other_index=-1) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
     
         rhs_vector_evolution += -2 * (-1j * self.delta_t * gap_tensor[-1] * tau3 * self.thermal_dist[-1:,:].shift(1, axis = 1) + 1j * self.delta_t * tau3 * self.thermal_dist[-1:,:].shift(1, axis = 1) * gap_tensor)
         
         #print('f is', self.thermal_dist[-1:,:].shift(1, axis = 1).trace(0))
         left_matrix_normalization = (tau3 + self.delta_t * gr_diagonal_new) * expansion_tensor 
         right_matrix_normalization = (-tau3 + self.delta_t * ga_diagonal_new) * expansion_tensor 
-        #! This integral should be changed by the precise convolution
         #rhs_vector_normalization = -2 *self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) + (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3)
-        rhs_vector_normalization = -2 *self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) + (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3)
-
+        rhs_vector_normalization = -2 * (
+            tau3 * ga.shift(1, axis=1).precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1)
+            + gr[-1:,:].precise_convolution_left(self.thermal_dist.shift(1, axis=1), self.thermal_integral[-1:,:].shift(1, axis=1), self.delta_t) * tau3)
 
         gk_new = self.gk_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution, rhs_vector_normalization, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk)
-        #print(gk_new.data.shape)
-        #gk_new += 2 * tau3 * self.thermal_dist[-1,:].shift(1, axis = 0)
-        #* removed last term since we now consider the  shifted g^k equation
-        rhs_vector_evolution_diagonal =  1j * (gk_new.dagger())[-1:] * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga[:,-1])) - (gr[-1:,:] @ self.thermal_dist[:,-1]) * tau3)# + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
-        rhs_vector_evolution_diagonal += -2 * (-1j * self.delta_t * gap_tensor[-1] * tau3 * self.thermal_dist[-1:,-1] + 1j * self.delta_t * tau3 * self.thermal_dist[-1:,-1] * gap_tensor[-1])
         
-        rhs_vector_normalization_diagonal = -2 * self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga[:,-1])) + (gr[-1:,:] @ self.thermal_dist[:,-1]) * tau3)
+        #* removed last term since we now consider the  shifted g^k equation
+        #rhs_vector_evolution_diagonal =  1j * (gk_new.dagger())[-1:] * tau3  - 2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga[:,-1])) - (gr[-1:,:] @ self.thermal_dist[:,-1]) * tau3)# + 4j * self.eta * self.thermal_dist[-1] * self.delta_t  
+        #rhs_vector_evolution_diagonal += -2 * (-1j * self.delta_t * gap_tensor[-1] * tau3 * self.thermal_dist[-1:,-1] + 1j * self.delta_t * tau3 * self.thermal_dist[-1:,-1] * gap_tensor[-1])
+
+        rhs_vector_evolution_diagonal =  1j * (gk_new.dagger())[-1:] * tau3 -  2j * self.delta_t * self.eta * (
+            tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:], self.delta_t,self_index=-1)[-1,-1:]
+            - gr[-1:,:].precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1)[-1,-1:] * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
+    
+        rhs_vector_evolution_diagonal += -2 * (-1j * self.delta_t * gap_tensor[-1] * tau3 * self.thermal_dist[-1:,-1] + 1j * self.delta_t * tau3 * self.thermal_dist[-1:,-1] * gap_tensor[-1])
+
+        #rhs_vector_normalization_diagonal = -2 * self.delta_t * (tau3 * (self.thermal_dist[-1:,:] @ (ga[:,-1])) + (gr[-1:,:] @ self.thermal_dist[:,-1]) * tau3)
+        rhs_vector_normalization_diagonal = -2 * (
+            tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1)[-1,-1:]
+            + gr[-1:,:].precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1)[-1,-1:] * tau3)
 
         gk_diagonal_new = self.gk_diagonal_update_rule(left_matrix_evolution, left_matrix_normalization, right_matrix_evolution, right_matrix_normalization, rhs_vector_evolution_diagonal, rhs_vector_normalization_diagonal, new_gr_row, full_ga_matrix=ga, old_gk_matrix=state.gk, solution_tensor= gk_new)
         
@@ -583,6 +601,7 @@ class UsadelKeldyshEvolution:
         # Initialize thermal distribution if not already done
         if not hasattr(self, 'thermal_dist'):
             self.get_thermal_occupation(self.temperature)
+            self.get_thermal_integral(self.temperature)
 
         # Compute new gr and gk rows and diagonals
         new_gr_row, new_gr_diag = self._compute_new_gr_row(state, external_field)

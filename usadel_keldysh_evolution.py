@@ -461,6 +461,7 @@ class UsadelKeldyshEvolution:
         
         #* removed last term since we now consider the shifted g^k equation
         #rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t**2 * self.eta * (tau3 * (self.thermal_dist[-1:,:] @ (ga.shift(1,axis = 1))) - (gr[-1:,:] @ self.thermal_dist.shift(1, axis = 1)) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
+        #! if there is an error its most likely here
         rhs_vector_evolution = 1j * tau3 * gk_last_row -  2j * self.delta_t * self.eta * (
             tau3 * ga.shift(1, axis=1).precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:], self.delta_t,self_index=-1)
             - gr[-1:,:].precise_convolution_left(self.thermal_dist.shift(1, axis=1), self.thermal_integral[-1:,:].shift(1, axis=1), self.delta_t, other_index=-1) * tau3) #+ 4j * self.eta * self.thermal_dist[-1:,:].shift(1, axis = 1) * self.delta_t
@@ -507,7 +508,6 @@ class UsadelKeldyshEvolution:
         matrix_row_3 = (tau1 * left_matrix_2 + right_matrix_2 * tau1).matrix_to_vector()
         matrix_row_4 = (tau2 * left_matrix_2 + right_matrix_2 * tau2).matrix_to_vector()
 
-
         #print(tau1 * left_matrix_2 + right_matrix_2 * tau1)
 
         vector_row_1 = (rhs_matrix_1.trace(0)/2)[0]
@@ -515,7 +515,7 @@ class UsadelKeldyshEvolution:
         vector_row_3 = (rhs_matrix_2.trace(1)/2)[0]
         vector_row_4 = (rhs_matrix_2.trace(2)/2)[0]
 
-        solution_tensor = NambuKeldyshTensor([0.0j], pauli_channel=0) # old_gk_matrix[-1, 0:1]
+        solution_tensor = old_gk_matrix[-1, 0:1]
 
         for time in range(1, self.ntpoints):
             #* the start of the sum doesn't matter since its -infty somehow, so it should be zero anyway -- 1/2 may be important? 

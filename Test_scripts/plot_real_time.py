@@ -8,9 +8,11 @@ This script loads a saved state from real-time evolution and visualizes:
 - FDT verification for last row (debug mode)
 
 Usage:
-    python plot_real_time.py                  # Plot gap only
-    python plot_real_time.py --debug          # Plot everything
-    python plot_real_time.py --state <file>   # Specify state file
+    python plot_real_time.py                    # Display gap plot
+    python plot_real_time.py --debug            # Display all plots
+    python plot_real_time.py --save             # Save gap plot to file
+    python plot_real_time.py --debug --save     # Save all plots to files
+    python plot_real_time.py --state <file>     # Specify state file
 """
 
 import numpy as np
@@ -311,6 +313,8 @@ def main():
                         help='Enable debug mode (plot full matrices and FDT check)')
     parser.add_argument('--state', type=str, default='simulated_state.pkl',
                         help='Path to saved state file (default: simulated_state.pkl)')
+    parser.add_argument('--save', action='store_true',
+                        help='Save plots to files instead of displaying them')
 
     args = parser.parse_args()
 
@@ -343,7 +347,8 @@ def main():
     print("="*70)
     print("Plotting Gap Evolution")
     print("="*70)
-    plot_gap_evolution(state, time_grid, save_filename='gap_evolution.png')
+    plot_gap_evolution(state, time_grid,
+                       save_filename='gap_evolution.png' if args.save else None)
     print()
 
     # ========== Plot Current Evolution (Placeholder) ==========
@@ -351,7 +356,8 @@ def main():
     # print("="*70)
     # print("Plotting Current Evolution")
     # print("="*70)
-    # plot_current_evolution(state, time_grid, save_filename='current_evolution.png')
+    # plot_current_evolution(state, time_grid,
+    #                        save_filename='current_evolution.png' if args.save else None)
     # print()
 
     # ========== Debug Mode ==========
@@ -365,14 +371,14 @@ def main():
         print("Plotting g^R (retarded Green's function)...")
         plot_nambu_components(state.gr, time_grid,
                               title="Retarded Green's Function g^R(t,t')",
-                              save_filename='gr_full_matrix.png')
+                              save_filename='gr_full_matrix.png' if args.save else None)
         print()
 
         # Plot g^K matrix
         print("Plotting g^K (Keldysh Green's function)...")
         plot_nambu_components(state.gk, time_grid,
                               title="Keldysh Green's Function g^K(t,t')",
-                              save_filename='gk_full_matrix.png')
+                              save_filename='gk_full_matrix.png' if args.save else None)
         print()
 
         # Plot FDT comparison
@@ -407,7 +413,7 @@ def main():
 
         # Plot FDT comparison
         plot_fdt_comparison(state, thermal_dist, thermal_integral, time_grid,
-                            save_filename='fdt_verification_last_row.png')
+                            save_filename='fdt_verification_last_row.png' if args.save else None)
         print()
 
     print("="*70)

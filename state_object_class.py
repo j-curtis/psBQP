@@ -85,9 +85,77 @@ class StateObject:
 
         return gap_history
 
-    def get_current_history(self, Q=None):
-        """Compute total current. -- this is stage 2 of the project"""
-        pass
+    def get_current_at_time_t(self, A_history, thermal_dist, thermal_integral, time_index = -1):
+        """
+        Compute current J(t) at specific time with thermal distribution (tex Eq. 942-945).
+
+        Formula: J(t) = -i(π /4) ∫ dt' Tr[
+            τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
+          + τ₃ g'^K(t,t') A(t') τ₃ g'^A(t',t)
+          + 2τ₃ g'^R(t,t') A(t') F(t',t)
+          + 2F(t,t') A(t') τ₃ g'^A(t',t)
+        ]
+
+        Uses precise_convolution for thermal terms (3 & 4) to suppress Gibbs oscillations.
+
+        Args:
+            A_history: Vector potential A(t') - array of length N_t
+            thermal_dist: Thermal distribution F(t,t') - NambuKeldyshTensor
+            thermal_integral: Integral of F - NambuKeldyshTensor
+            time_index: Time index to compute current at (default -1, supports negative indexing)
+
+        Returns:
+            complex: Current J(t) at specified time
+        """
+        if A_history is None:
+            return 0.0
+        # Handle negative indexing
+        N_t = self.gr.data.shape[2]
+        t_idx = time_index if time_index >= 0 else N_t + time_index
+
+        # Define τ₃ Pauli matrix and A(t') as NambuKeldyshTensor
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+        A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
+
+        # Get advanced Green's function
+        ga = self._r2a()
+
+        # Extract rows and columns for time t
+        gr_row = self.gr[t_idx:t_idx+1, :]      # g'^R(t, :) shape (2,2,1,Nt)
+        gk_row = self.gk[t_idx:t_idx+1, :]      # g'^K(t, :) shape (2,2,1,Nt)
+        gk_col = self.gk[:, t_idx:t_idx+1]      # g'^K(:, t) shape (2,2,Nt,1)
+        ga_col = ga[:, t_idx:t_idx+1]           # g'^A(:, t) shape (2,2,Nt,1)
+        F_col = thermal_dist[:, t_idx:t_idx+1]  # F(:, t) shape (2,2,Nt,1)
+        F_row = thermal_dist[t_idx:t_idx+1, :]  # F(t, :) shape (2,2,1,Nt)
+
+        # Thermal integrals for precise_convolution
+        F_integral_col = thermal_integral[:, t_idx:t_idx+1]  # ∫F(:,t)
+        F_integral_row = thermal_integral[t_idx:t_idx+1, :]  # ∫F(t,:)
+
+        # Term 1: ∫ dt' τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
+        # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]
+        term1 = tau3 * (gr_row @ (A_tensor * tau3 * gk_col))[0,0] * self.dt 
+
+        # Term 2: ∫ dt' τ₃ g'^K(t,t') A(t') τ₃ g'^A(t',t)
+        # = τ₃ [g'^K(t,:) @ (A(:) τ₃ g'^A(:,t))]
+        term2 = tau3 * (gk_row @ (A_tensor * tau3 * ga_col))[0,0] * self.dt 
+
+        # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
+        # Multiply gr with A*tau3, then precise_convolution_left with F (regularized)
+        term3 = 2.0 * (A_tensor * tau3 * gr_row).precise_convolution_left(F_col, F_integral_col, self.dt, other_index=t_idx)[0,0]
+
+        # Term 4: ∫ dt' 2F(t,t') A(t') τ₃ g'^A(t',t)
+        # Multiply ga with A*tau3, then precise_convolution_right with F (regularized)
+        term4 = 2.0 * (A_tensor * tau3 * ga_col).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=t_idx)[0,0]
+
+        # Sum all terms and take Nambu trace
+        total = term1 + term2 + term3 + term4
+        current = total.trace(pauli_index=0) / 2.0
+
+        # Apply prefactor -i(π / 4) [σ_n absorbed into normalization]
+        current = -1j * np.pi / 4 * current
+
+        return current
 
     # ========== Utilities ==========
 
@@ -150,6 +218,7 @@ class StateObject:
         
     # ========== Consistency Checks ==========
 
+    #TODO: check this code and properties
     def check_gr_normalization(self, t1_idx):
         """
         Verify g^R normalization at fixed t₁ for all t₂.
@@ -190,6 +259,7 @@ class StateObject:
 
         return errors, totals
 
+    #TODO check this code and properties
     def check_keldysh_normalization(self, t1_idx):
         """
         Verify FDT normalization constraint at fixed t₁ for all t₂.

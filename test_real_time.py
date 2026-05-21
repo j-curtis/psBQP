@@ -176,7 +176,7 @@ def main():
     # ========== Load Initial State ==========
     print("Loading initial equilibrium state...")
     try:
-        initial_state = load_state('initial_state_test.pkl')
+        initial_state = load_state('initial_state_thermalized.pkl')
     except FileNotFoundError:
         print("Initial state file not found. Generating new equilibrium state...")
         initial_state, _, _ = evolution.generate_initial_state(Q=0.0)
@@ -192,8 +192,8 @@ def main():
     print("="*70)
 
     # Evolve from initial state for 200 steps
-    simulated_state, gaps, currents = evolution.real_time_evolution(
-        initial_state, num_timesteps= 1500)
+    simulated_state, gaps, currents, vector_potentials = evolution.real_time_evolution(
+        initial_state, num_timesteps= 1)
     print("Evolution complete!")
     print(f"  Final gap after 200 steps: {gaps[-1]:.6f}")
 

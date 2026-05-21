@@ -343,7 +343,7 @@ class UsadelKeldyshEvolution:
         #Extract gap history Δ(t) from current state via gap equation
         gap_history = state.get_gap_history()
         #! overwrite gap 
-        gap_history = np.ones(np.size(gap_history)) * 1.4524034261703491
+        gap_history = np.ones(np.size(gap_history)) * 1.2971004247665405
         #Build gap tensor as Δ̂ = Re(Δ)τ₂ + Im(Δ)τ₁ (off-diagonal Nambu structure)
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 

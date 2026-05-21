@@ -151,7 +151,7 @@ def main():
 
     system_parameters = {
         'critical_temperature': 1.0,
-        'temperature': 0.7,
+        'temperature': 0.3,
         'eta': 0.2
     }
 
@@ -176,10 +176,10 @@ def main():
     # ========== Load Initial State ==========
     print("Loading initial equilibrium state...")
     try:
-        initial_state = load_state('initial_state_thermalized.pkl')
+        initial_state = load_state('initial_state_test.pkl')
     except FileNotFoundError:
         print("Initial state file not found. Generating new equilibrium state...")
-        initial_state, _, _ = evolution.generate_initial_state(Q=0.0)
+        initial_state, _, _ = evolution.generate_initial_state(Q=0.3)
         print(f"Initial state generated")
         print(f"  g^R shape: {initial_state.gr.data.shape}")
         print(f"  g^K shape: {initial_state.gk.data.shape}")
@@ -191,9 +191,11 @@ def main():
     print("Performing 200 timesteps and saving...")
     print("="*70)
 
+    vector_potential = np.ones((evolution.ntpoints)) * 0.3
+
     # Evolve from initial state for 200 steps
     simulated_state, gaps, currents, vector_potentials = evolution.real_time_evolution(
-        initial_state, num_timesteps= 1)
+        initial_state, num_timesteps= 100, A_external = vector_potential)
     print("Evolution complete!")
     print(f"  Final gap after 200 steps: {gaps[-1]:.6f}")
 

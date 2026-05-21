@@ -342,7 +342,8 @@ class UsadelKeldyshEvolution:
 
         #Extract gap history Δ(t) from current state via gap equation
         gap_history = state.get_gap_history()
-
+        #! overwrite gap 
+        gap_history = np.ones(np.size(gap_history)) * 1.4524034261703491
         #Build gap tensor as Δ̂ = Re(Δ)τ₂ + Im(Δ)τ₁ (off-diagonal Nambu structure)
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
@@ -378,15 +379,16 @@ class UsadelKeldyshEvolution:
         #Boundary condition: ĝ'^R(t,t) = -Δ̂(t) (tex Eq. 60)
         gr_diagonal_new = -gap_tensor[-1]
 
-        #Left operator L̂_R = iτ̂₃ - iδt·Δ̂(t) + iη·δt·τ̂₃ + [A terms] (tex Eq. 70-71)
+        #Left operator L̂_R = iτ̂₃ - iδt·Δ̂(t) + iη·δt·τ̂₃ + ie²D δt [A²(t)τ₃ - A(t)A(t')τ₃] - ie²D δt² A²(t)τ₃Δτ₃
         left_matrix_evolution = (
             (1j * tau3
             - 1j * self.delta_t * gap_tensor[-1]
             + 1j * self.eta * self.delta_t * tau3
-            # Phase 1: Vector potential terms (tex lines 70-71, e²D=1)
-            + 1j * self.delta_t * A2_t * tau3 - 1j * self.delta_t**2 * A2_t * tau3 * gap_tensor[-1] * tau3 )* expansion_tensor  # A²(t) term
-            + 1j * self.delta_t * A_t * A_tensor * tau3  # A(t)A(t') term
-              # Higher-order A²·Δ term
+            # Electromagnetic terms (e²D=1): +A²(t)τ₃ - A(t)A(t')τ₃ - A²(t)τ₃Δτ₃
+            + 1j * self.delta_t * A2_t * tau3  # +iδt·A²(t)·τ₃
+            - 1j * self.delta_t**2 * A2_t * tau3 * gap_tensor[-1] * tau3  # -iδt²·A²(t)·τ₃·Δ(t)·τ₃
+            ) * expansion_tensor
+            - 1j * self.delta_t * A_t * A_tensor * tau3  # -iδt·A(t)A(t')·τ₃ (CORRECTED SIGN)
         ) 
         #Right operator R̂_R = -iτ̂₃ + iδt·Δ̂(t') - iη·δt·τ̂₃ - [A terms] (tex Eq. 72)
         right_matrix_evolution = (
@@ -498,8 +500,8 @@ class UsadelKeldyshEvolution:
 
                 # Extract τ₁ and τ₂ components for evolution equation
                 source_A_vector = np.array([
-                    source_A_correction.trace(1)[0, time] / 2,  # τ₁ component
-                    source_A_correction.trace(2)[0, time] / 2   # τ₂ component
+                    source_A_correction.trace(1)/ 2,# [0, time]   # τ₁ component
+                    source_A_correction.trace(2) / 2 #[0, time]   # τ₂ component
                 ])
             else:
                 source_A_vector = np.array([0, 0])
@@ -542,6 +544,8 @@ class UsadelKeldyshEvolution:
 
         #Extract gap and build Pauli matrices
         gap_history = state.get_gap_history()
+        #! overwrite gap 
+        gap_history = np.ones(np.size(gap_history)) * 1.4524034261703491
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) +  NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
@@ -750,8 +754,8 @@ class UsadelKeldyshEvolution:
 
                 # Extract τ₀ and τ₃ components for g^K evolution
                 source_A_vector = np.array([
-                    source_A_correction.trace(0)[0, time] / 2,  # τ₀ component
-                    source_A_correction.trace(3)[0, time] / 2   # τ₃ component
+                    source_A_correction.trace(0)/2, #[0, time] / 2,  # τ₀ component
+                    source_A_correction.trace(3)/2 #[0, time] / 2   # τ₃ component
                 ])
             else:
                 source_A_vector = np.array([0, 0])
@@ -875,7 +879,8 @@ class UsadelKeldyshEvolution:
         else:
             vector_potential_new = A_external[-1]        
         
-        current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral)
+        #! some error here in computing the current, should be fixed
+        current_new = 0 # state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral)
 
         return gap_new, current_new, vector_potential_new
 

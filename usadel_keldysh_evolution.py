@@ -531,7 +531,11 @@ class UsadelKeldyshEvolution:
         return solution_tensor[:-1]
 
     def _compute_new_gk_row(self, state, A_history=None):
-        """Evolve g^K by one timestep (tex Eq. 142-194). Includes thermal collision integrals."""
+        """Evolve g^K by one timestep (tex Eq. 142-194). Includes thermal collision integrals.
+
+        Electromagnetic coupling signs corrected to match Chapter 9 analytics (lines 166-175, 180-193).
+        R_K operator and bilinear sandwich terms updated based on boundary extraction derivations.
+        """
         #Get Green's functions (g^A computed via involution from g^R)
         gr = state.gr
         ga = state._r2a()
@@ -577,12 +581,12 @@ class UsadelKeldyshEvolution:
             # Higher-order A²·Δ term
         ) 
 
-        #Right operator R̂_K = iτ̂₃ + iδt·Δ̂(t') + iη·δt·τ̂₃ - [A terms] (tex Eq. 152-154)
+        #Right operator R̂_K = iτ̂₃ + iδt·Δ̂(t') + iη·δt·τ̂₃ + [A terms] (tex Eq. 169-175, corrected)
         right_matrix_evolution = (
             (1j * tau3 + 1j * self.eta * self.delta_t * tau3) * expansion_tensor
             + 1j * self.delta_t * gap_tensor
-            # Phase 2: Vector potential terms (tex lines 152-154, e²D=1)
-            - 1j * self.delta_t * (A_tensor * A_tensor) * tau3  # -A²(t') term
+            # Electromagnetic terms (corrected to match tex lines 169-175)
+            + 1j * self.delta_t * (A_tensor * A_tensor) * tau3  # +A²(t') term (CORRECTED)
             - 1j * self.delta_t * A_t * A_tensor * tau3  # -A(t)A(t') term
             + 1j * self.delta_t**2 * (A_tensor * A_tensor) * tau3 * gap_tensor * tau3  # +A²(t')·Δ(t') term
         )
@@ -626,14 +630,15 @@ class UsadelKeldyshEvolution:
             self.thermal_dist[-1:,:], self.thermal_integral[-1:,:], self.delta_t, self_index=-1) * A_tensor * tau3
         rhs_vector_evolution += 2j * self.delta_t * (conv2_part1 - conv2_part2)
 
-        # Phase 3: TWO bilinear sandwich terms (tex lines 159-161)
-        # Sandwich term 1 (LEFT-acting): -iδt²·A(t)A(t')·Δ̂(t)τ̂₃ · g^K · τ̂₃
-        left_sandwich_1 = -1j * self.delta_t**2 * A_t * A_tensor * gap_tensor[-1] * tau3
+        # Bilinear sandwich terms (tex lines 180-193, corrected based on boundary extraction)
+        # Full bilinear: ie²D δt² A(t)A(t') [+Δ(t) τ₃ g'^K τ₃ - τ₃ g'^K τ₃ Δ(t')]
+        # Sandwich term 1: +iδt²·A(t)A(t')·Δ̂(t)τ̂₃ · g^K · τ̂₃ (CORRECTED to match g^R structure)
+        left_sandwich_1 = +1j * self.delta_t**2 * A_t * A_tensor * gap_tensor[-1] * tau3
         right_sandwich_1 = tau3 * expansion_tensor
 
-        # Sandwich term 2 (RIGHT-acting): +iδt²·A(t)A(t')·τ̂₃ · g^K · τ̂₃·Δ̂(t')
-        left_sandwich_2 = 1j * self.delta_t**2 * A_t * A_tensor * tau3
-        right_sandwich_2 = tau3 * gap_tensor # I removed 1 factor of tau_3 here * tau3  # τ̂₃·Δ̂(t')·τ̂₃ = -Δ̂(t')
+        # Sandwich term 2: -iδt²·A(t)A(t')·τ̂₃ · g^K · τ̂₃·Δ̂(t') (opposite sign from term 1)
+        left_sandwich_2 = -1j * self.delta_t**2 * A_t * A_tensor * tau3
+        right_sandwich_2 = tau3 * gap_tensor
 
         g_sandwich_list = [(left_sandwich_1, right_sandwich_1), (left_sandwich_2, right_sandwich_2)]
 

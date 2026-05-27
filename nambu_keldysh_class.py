@@ -107,9 +107,14 @@ class NambuKeldyshTensor:
 
     def __matmul__(self, other):
         """
-        Convolution for time-domain Green's functions.
+        Convolution for time-domain Green's functions using trapezoidal rule.
 
         Contracts over Nambu index j and shared inner dimension.
+        IMPORTANT: Uses trapezoidal weighting with 0.5 weight at boundaries.
+
+        Trapezoidal rule: ∫f(x)dx ≈ Δx[f(a)/2 + Σf(interior) + f(b)/2]
+        With Crank-Nicolson δt/4 factor: boundaries get δt/8, interior gets δt/4.
+
         Supports various shapes:
         - (2,2,a,b) @ (2,2,b,c) -> (2,2,a,c)
         - (2,2,a) @ (2,2,a,b) -> (2,2,b)
@@ -141,6 +146,39 @@ class NambuKeldyshTensor:
                 f"Contraction dimension mismatch: {self.data.shape[-1]} != {other_data.shape[2]}"
             )
 
+        # Determine contraction size
+        contraction_size = self.data.shape[-1]
+
+        # Create trapezoidal weights: [0.5, 1, 1, ..., 1, 0.5]
+        if contraction_size == 0:
+            # Empty contraction - return zeros
+            if self_ndim > 1 and other_ndim > 1:
+                result_shape = (2, 2) + self.data.shape[2:-1] + other_data.shape[3:]
+            elif self_ndim > 1:
+                result_shape = (2, 2) + self.data.shape[2:-1]
+            else:
+                result_shape = (2, 2) + other_data.shape[3:]
+            result_data = np.zeros(result_shape, dtype=complex)
+            return NambuKeldyshTensor(result_data, pauli_channel=0)
+        elif contraction_size == 1:
+            # Single point gets full weight
+            weights = np.array([1.0])
+        else:
+            # Multiple points: boundaries get 0.5, interior gets 1.0
+            weights = np.ones(contraction_size)
+            weights[0] = 0.5
+            weights[-1] = 0.5
+
+        # Apply weights to self (last axis)
+        # Shape of weights for broadcasting to self: (1, 1, ..., 1, contraction_size)
+        weight_shape_left = [1] * (self.data.ndim - 1) + [contraction_size]
+        weighted_self = self.data * np.reshape(weights, weight_shape_left)
+
+        # Apply weights to other (axis 2, first extra dimension)
+        # Shape of weights for broadcasting to other: (1, 1, contraction_size, 1, ...)
+        weight_shape_right = [1, 1, contraction_size] + [1] * (other_data.ndim - 3)
+        weighted_other = other_data * np.reshape(weights, weight_shape_right)
+
         # Build einsum string dynamically
         # Left: ij + remaining indices
         # Right: jk + remaining indices (first one shared with left's last)
@@ -170,9 +208,9 @@ class NambuKeldyshTensor:
             result_extra = right_extra[1:]
 
         einsum_str = f'ij{left_extra},jk{right_extra}->ik{result_extra}'
-        result_data = np.einsum(einsum_str, self.data, other_data)
+        result_data = np.einsum(einsum_str, weighted_self, weighted_other)
 
-        return NambuKeldyshTensor(result_data)
+        return NambuKeldyshTensor(result_data, pauli_channel=0)
 
     def precise_convolution_left(self, other, other_integral, dt, other_index=-1):
         """
@@ -180,6 +218,10 @@ class NambuKeldyshTensor:
 
         The regularized matrix (other) is on the right side.
         Regularization suppresses Gibbs oscillations from other.
+
+        NOTE: Trapezoidal boundary weighting (0.5 at endpoints) is automatically
+        handled by the @ operator. Both (self @ other) and (ones @ other) receive
+        the same boundary treatment, so the cancellation in regularization works correctly.
 
         Formula:
             result = dt * (self @ other)
@@ -243,6 +285,10 @@ class NambuKeldyshTensor:
 
         The regularized matrix (other) is on the left side.
         Regularization suppresses Gibbs oscillations from other.
+
+        NOTE: Trapezoidal boundary weighting (0.5 at endpoints) is automatically
+        handled by the @ operator. Both (other @ self) and (other @ ones) receive
+        the same boundary treatment, so the cancellation in regularization works correctly.
 
         Formula:
             result = dt * (other @ self)
@@ -438,6 +484,41 @@ class NambuKeldyshTensor:
         """
         det = self.data[0,0,...]*self.data[1,1,...] - self.data[0,1,...]*self.data[1,0,...]
         return det[None, None, ...]
+
+    def diagonal_time(self):
+        """
+        Extract time diagonal from a two-time tensor.
+
+        For a tensor with shape (2, 2, Nt, Nt), extracts the diagonal elements
+        where both time indices are equal, returning a tensor with shape (2, 2, Nt).
+
+        This is useful for operators like R(t'', t') where we need R(t', t')
+        (diagonal elements as a function of time).
+
+        Returns:
+            NambuKeldyshTensor: Tensor with shape (2, 2, Nt) containing diagonal elements
+
+        Raises:
+            ValueError: If tensor doesn't have exactly 4 dimensions (not a two-time object)
+
+        Example:
+            For R with shape (2, 2, 100, 100), R.diagonal_time() returns shape (2, 2, 100)
+            where result[:, :, i] = R[:, :, i, i]
+        """
+        if self.data.ndim != 4:
+            raise ValueError(
+                f"diagonal_time() requires a two-time tensor with shape (2, 2, Nt, Nt). "
+                f"Got shape {self.data.shape} with {self.data.ndim} dimensions."
+            )
+
+        # Extract diagonal: data[:, :, i, i] for all i
+        Nt = self.data.shape[2]
+        diagonal_data = np.zeros((2, 2, Nt), dtype=self.data.dtype)
+
+        for i in range(Nt):
+            diagonal_data[:, :, i] = self.data[:, :, i, i]
+
+        return NambuKeldyshTensor(diagonal_data)
 
     # ========== Pauli Basis Operations ==========
 
@@ -750,6 +831,27 @@ class NambuKeldyshTensor:
 
         # Update shape (should be unchanged, but good practice)
         self.data_shape = self.data.shape
+
+    def update_diagonal_only(self, new_diagonal, time_index=-1):
+        """
+        Update only the diagonal element at specified time index without shifting.
+
+        Used when diagonal is computed separately and matrix has already been shifted.
+        Critical for Keldysh evolution where g^K(t,t) is computed after g^K(t,t') row
+        is inserted and matrix is shifted.
+
+        Args:
+            new_diagonal: New diagonal element g[t, t] - shape (2, 2) or NambuKeldyshTensor
+            time_index: Time index to update (default -1 for last element)
+        """
+        # Extract data from input
+        if isinstance(new_diagonal, NambuKeldyshTensor):
+            diag_data = new_diagonal.data[:, :, 0, 0] if new_diagonal.data.ndim == 4 else new_diagonal.data
+        else:
+            diag_data = new_diagonal
+
+        # Update only the specified diagonal position
+        self.data[:, :, time_index, time_index] = diag_data
 
 
 def get_pauli_matrix(index = None) -> np.array:

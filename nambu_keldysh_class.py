@@ -197,7 +197,8 @@ class NambuKeldyshTensor:
         return NambuKeldyshTensor(result_data)
 
     def precise_convolution_left(self, other, other_integral, dt, other_index=-1):
-        """
+        #* we dont care about midpoint here, because the last element is zero anaywaya and the analytic term is the same since there is no truncation
+        """ 
         Compute regularized left convolution: self @ other (regularized).
 
         The regularized matrix (other) is on the right side.
@@ -585,7 +586,7 @@ class NambuKeldyshTensor:
 
     def shift(self, shift=1, axis=0):
         """
-        Shift data along specified axis using np.roll.
+        Shift data along specified axis with zero-padding at the boundary.
 
         Args:
             shift: Number of positions to shift (default 1)
@@ -605,7 +606,6 @@ class NambuKeldyshTensor:
         actual_axis = axis + 2
         shifted_data = np.roll(self.data, shift=shift, axis=actual_axis)
 
-        # Zero out the wrapped boundary elements to avoid circular contamination
         if shift > 0:
             slices = [slice(None)] * self.data.ndim
             slices[actual_axis] = slice(0, shift)

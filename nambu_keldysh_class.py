@@ -11,7 +11,13 @@ class NambuKeldyshTensor:
 
     def __init__(self, data_in: np.array, pauli_channel=None):
         """Initialize Nambu tensor from data array or Pauli channel projection."""
-        # if the input data has a lot of dimensions then we assume its already a nambu tensor
+        # Handle case where data_in is already a NambuKeldyshTensor (unwrap it)
+        if isinstance(data_in, NambuKeldyshTensor):
+            data_in = data_in.data
+
+        # Convert to numpy array if it's not already
+        if not isinstance(data_in, np.ndarray):
+            data_in = np.asarray(data_in, dtype=complex)
 
         # if not a nambu tensor make one
         #NOTE: The data_in is not allowed to be of the shape (2,2)
@@ -33,7 +39,7 @@ class NambuKeldyshTensor:
             data = np.tensordot(pauli_matrix,data_in,axes=0)
 
         self.data = data
-        self.data_shape = data.shape
+        self.shape = data.shape
 
     # ========== Matrix Operations ==========
 
@@ -107,19 +113,17 @@ class NambuKeldyshTensor:
 
     def __matmul__(self, other):
         """
-        Convolution for time-domain Green's functions using trapezoidal rule.
+        Matrix product with contraction over Nambu index and shared dimension.
 
-        Contracts over Nambu index j and shared inner dimension.
-        IMPORTANT: Uses trapezoidal weighting with 0.5 weight at boundaries.
-
-        Trapezoidal rule: ∫f(x)dx ≈ Δx[f(a)/2 + Σf(interior) + f(b)/2]
-        With Crank-Nicolson δt/4 factor: boundaries get δt/8, interior gets δt/4.
+        Performs pure matrix multiplication: contracts over Nambu j index and
+        the shared inner dimension (last axis of left, first extra axis of right).
+        Includes all points (edge and interior) with uniform weight 1.0.
 
         Supports various shapes:
-        - (2,2,a,b) @ (2,2,b,c) -> (2,2,a,c)
-        - (2,2,a) @ (2,2,a,b) -> (2,2,b)
-        - (2,2,a,b) @ (2,2,b) -> (2,2,a)
-        - (2,2,a) @ (2,2,a) -> (2,2)
+        - (2,2,a,b) @ (2,2,b,c) -> (2,2,a,c)  [contracts over all b]
+        - (2,2,a) @ (2,2,a,b) -> (2,2,b)      [contracts over all a]
+        - (2,2,a,b) @ (2,2,b) -> (2,2,a)      [contracts over all b]
+        - (2,2,a) @ (2,2,a) -> (2,2)          [contracts over all a]
 
         Usage: A @ B
         """
@@ -137,21 +141,20 @@ class NambuKeldyshTensor:
         self_ndim = self.data.ndim - 2  # e.g., 2 for (2,2,a,b)
         other_ndim = other_data.ndim - 2  # e.g., 2 for (2,2,b,c)
 
-        # Check contraction dimension matches (last of left = first extra of right)
+        # Check at least one extra dimension exists
         if self_ndim == 0 or other_ndim == 0:
             raise ValueError(f"matmul requires at least one extra dimension beyond (2,2), got {self.data.shape} @ {other_data.shape}")
 
+        # Check contraction dimension matches (last of left = first extra of right)
         if self.data.shape[-1] != other_data.shape[2]:
             raise ValueError(
                 f"Contraction dimension mismatch: {self.data.shape[-1]} != {other_data.shape[2]}"
             )
 
-        # Determine contraction size
+        # Handle too-small contraction
         contraction_size = self.data.shape[-1]
-
-        # Create trapezoidal weights: [0.5, 1, 1, ..., 1, 0.5]
         if contraction_size == 0:
-            # Empty contraction - return zeros
+            # Empty - return zeros
             if self_ndim > 1 and other_ndim > 1:
                 result_shape = (2, 2) + self.data.shape[2:-1] + other_data.shape[3:]
             elif self_ndim > 1:
@@ -159,58 +162,39 @@ class NambuKeldyshTensor:
             else:
                 result_shape = (2, 2) + other_data.shape[3:]
             result_data = np.zeros(result_shape, dtype=complex)
-            return NambuKeldyshTensor(result_data, pauli_channel=0)
-        elif contraction_size == 1:
-            # Single point gets full weight
-            weights = np.array([1.0])
-        else:
-            # Multiple points: boundaries get 0.5, interior gets 1.0
-            weights = np.ones(contraction_size)
-            weights[0] = 0.5
-            weights[-1] = 0.5
+            return NambuKeldyshTensor(result_data)
 
-        # Apply weights to self (last axis)
-        # Shape of weights for broadcasting to self: (1, 1, ..., 1, contraction_size)
-        weight_shape_left = [1] * (self.data.ndim - 1) + [contraction_size]
-        weighted_self = self.data * np.reshape(weights, weight_shape_left)
-
-        # Apply weights to other (axis 2, first extra dimension)
-        # Shape of weights for broadcasting to other: (1, 1, contraction_size, 1, ...)
-        weight_shape_right = [1, 1, contraction_size] + [1] * (other_data.ndim - 3)
-        weighted_other = other_data * np.reshape(weights, weight_shape_right)
+        # Use full data for both operands (all points with weight 1.0)
+        left_data = self.data
+        right_data = other_data
 
         # Build einsum string dynamically
-        # Left: ij + remaining indices
-        # Right: jk + remaining indices (first one shared with left's last)
-        # Result: ik + non-contracted indices
+        letters = string.ascii_lowercase
 
-        # Use letters for extra dimensions
-        letters = string.ascii_lowercase[13:]  # n, o, p, q, ...
+        # Left operand indices: 'ij' + extra dimensions
+        left_extra = ''.join(letters[:self_ndim])
 
-        # Left operand indices
-        if self_ndim == 1:
-            left_extra = 'a'
-        else:
-            left_extra = ''.join(letters[:self_ndim])
-
-        # Right operand indices (first matches left's last)
+        # Right operand indices: 'jk' + (shared index from left) + remaining
         if other_ndim == 1:
-            right_extra = left_extra[-1]  # Just the shared index
+            right_extra = left_extra[-1]
         else:
             right_extra = left_extra[-1] + ''.join(letters[self_ndim:self_ndim+other_ndim-1])
 
-        # Result indices (all except the contracted one)
+        # Result indices: all non-contracted dimensions
         if self_ndim > 1 and other_ndim > 1:
             result_extra = left_extra[:-1] + right_extra[1:]
-        elif self_ndim > 1:  # other_ndim == 1
+        elif self_ndim > 1:
             result_extra = left_extra[:-1]
-        else:  # self_ndim == 1, other_ndim > 1
+        elif other_ndim > 1:
             result_extra = right_extra[1:]
+        else:
+            result_extra = ''
 
+        # Construct and execute einsum (with trapezoidal weights included)
         einsum_str = f'ij{left_extra},jk{right_extra}->ik{result_extra}'
-        result_data = np.einsum(einsum_str, weighted_self, weighted_other)
+        result_data = np.einsum(einsum_str, left_data, right_data)
 
-        return NambuKeldyshTensor(result_data, pauli_channel=0)
+        return NambuKeldyshTensor(result_data)
 
     def precise_convolution_left(self, other, other_integral, dt, other_index=-1):
         """
@@ -275,7 +259,7 @@ class NambuKeldyshTensor:
 
         # Analytic term (using integral)
         result_anal = self * other_integral_for_reg
-
+        #! here we should by hand add the 1/2 factors since precise convolution is always done on known functions, so 1/2 midpoint factors can easily be added!
         # Combine: standard - factored + analytic
         return result_std - result_fact + result_anal
 
@@ -350,7 +334,7 @@ class NambuKeldyshTensor:
         Check if two NambuKeldyshTensor objects have compatible shapes for binary operations.
 
         Args:
-            other: Another NambuKeldyshTensor object
+            other: Another NambuKeldyshTensor object5
 
         Raises:
             ValueError: If shapes are incompatible for element-wise operations
@@ -418,6 +402,7 @@ class NambuKeldyshTensor:
         else:
             # Result doesn't have Nambu structure, return raw array
             return result
+
 
     def __str__(self):
         """String representation showing Pauli decomposition."""

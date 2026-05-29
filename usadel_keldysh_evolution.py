@@ -158,9 +158,6 @@ class UsadelKeldyshEvolution:
             print(f"  n_points = {n_points}")
             print(f"  Omega grid check: uniform spacing = {np.allclose(np.diff(self.omega_grid), self.d_omega)}")
 
-
-    # ========== Initial State Generation ==========
-
     def generate_initial_state(self, Q=0.0, gr0=None):
         """
         Generate initial state from equilibrium for t,t' < 0.
@@ -219,8 +216,6 @@ class UsadelKeldyshEvolution:
         )
 
         return initial_state, gr_tau, gk_tau
-
-    # ========== Thermal Distributions ==========
 
     def get_thermal_occupation(self, temperature):
         """
@@ -319,8 +314,6 @@ class UsadelKeldyshEvolution:
         # Store as NambuKeldyshTensor (identity in Nambu space)
         self.thermal_integral = NambuKeldyshTensor(F_two_time, pauli_channel=0)
 
-    # ========== Discrete Operator Construction ==========
-
     def construct_discrete_operators(self, terms_dict, state, g_type = 'r'):
         """
         Construct discrete Crank-Nicolson operators from Type classifications.
@@ -349,14 +342,96 @@ class UsadelKeldyshEvolution:
              rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices)
         """
 
+        #evolution term shapes: type 1: L -- (2,2,ntpoints)
+        #                       type 2: R -- (2,2,ntpoints)
+        #                       type 3: L -- (2,2,ntpoints,ntpoints)
+        #                       type 4: R -- (2,2,ntpoints,ntpoints)
+        #                       type 5: L,M,R -- (2,2,ntpoints) each
+        #                       type 6: L -- (2,2,ntpoints,ntpoints) R -- (2,2,ntpoints)
+        #                       type 7: L -- (2,2,ntpoints) R -- (2,2,ntpoints,ntpoints)
+
+        # ========== Shape Validation ==========
+        # Validate all term shapes before processing
+        if True:
+            single_time_shape = (2, 2, self.ntpoints)
+            two_time_shape = (2, 2, self.ntpoints, self.ntpoints)
+
+            # Define expected shapes for each type
+            type_shape_requirements = {
+                1: {'L': single_time_shape},
+                2: {'R': single_time_shape},
+                3: {'L': two_time_shape},
+                4: {'R': two_time_shape},
+                5: {'L': single_time_shape, 'M': single_time_shape, 'R': single_time_shape},
+                6: {'L': two_time_shape, 'R': single_time_shape},
+                7: {'L': single_time_shape, 'R': two_time_shape}
+            }
+
+            for term_name, term_spec in terms_dict.items():
+                # Extract type number from term name
+                match = re.search(r'type(\d+)', term_name)
+                if not match:
+                    raise ValueError(f"Invalid term name: '{term_name}'. Expected format: 'typeN' or 'typeN_description'")
+                type_num = int(match.group(1))
+
+                # Check if type is valid
+                if type_num not in type_shape_requirements:
+                    raise ValueError(f"Unknown type number {type_num} in term '{term_name}'. Valid types: 1-7")
+
+                # Get expected shapes for this type
+                expected_shapes = type_shape_requirements[type_num]
+
+                # Validate that all required operators are present
+                for op_key in expected_shapes.keys():
+                    if op_key not in term_spec:
+                        raise ValueError(
+                            f"Term '{term_name}' (Type {type_num}) is missing required operator '{op_key}'. "
+                            f"Expected operators: {list(expected_shapes.keys())}"
+                        )
+
+                # Validate shape of each operator
+                for op_key, expected_shape in expected_shapes.items():
+                    operator = term_spec[op_key]
+
+                    # Extract data shape from NambuKeldyshTensor
+                    if isinstance(operator, NambuKeldyshTensor):
+                        actual_shape = operator.data.shape
+                    else:
+                        raise TypeError(
+                            f"Term '{term_name}' operator '{op_key}' must be a NambuKeldyshTensor, "
+                            f"got {type(operator).__name__}"
+                        )
+
+                    # Check shape matches
+                    if actual_shape != expected_shape:
+                        shape_desc = "single-time (2,2,Nt)" if len(expected_shape) == 3 else "two-time (2,2,Nt,Nt)"
+                        raise ValueError(
+                            f"Term '{term_name}' operator '{op_key}' has wrong shape.\n"
+                            f"  Expected: {expected_shape} ({shape_desc})\n"
+                            f"  Got:      {actual_shape}\n"
+                            f"  Type {type_num} requires {op_key} to be {shape_desc}"
+                        )
+
+        # ========== End Shape Validation ==========
+        #* the indices at least the t' ones should be defined relative to old t' i.e. absolute t' values!!
         if g_type == 'r':
-            g_matrix = state.gr
+            g_matrix = state.gr 
             shift_index = -1
-            g_diagonal = state.gr.diagonal_time()
+            #g_diagonal = state.gr.diagonal_time()
+            gap_history = state.get_gap_history()
+            gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
+            g_diagonal = -gap_tensor
+            g_last_row = g_matrix[-1:, :]  # Shape: (2, 2, 1, Nt)
+            g_diagonal_current = g_diagonal[-1]
+            #TODO: the full gap tensor will have to be passed! 
+            #TODO: the gap(t) will have to include the guess for new gap basically. we can use the old one perhaps 
+            #TODO: basically we need to know the new L operator, which is where the tricky bit comes from, we dont care about update for t' = t! since we know the diagonal
         elif g_type == 'k':
             g_matrix = state.gk
             shift_index = 1
             g_diagonal = state.gk.diagonal_time()
+            g_last_row = g_matrix[-1:, :]  # Shape: (2, 2, 1, Nt)
+            g_diagonal_current = g_last_row[-1,-1]
 
         # Initialize outputs
         left_matrix = None
@@ -370,7 +445,6 @@ class UsadelKeldyshEvolution:
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
 
-        g_last_row = g_matrix[-1:, :]  # Shape: (2, 2, 1, Nt)
 
         # Process each Type in dictionary
         for type_key, term_spec in terms_dict.items():
@@ -383,14 +457,15 @@ class UsadelKeldyshEvolution:
 
             # ========== Type 1: Left operator multiplication L(t)·g(t,t') ==========
             if type_num == 1:
+                #* assumes that L(t) is computed in the new time domain!
                 # From LaTeX Eq. (Type 1, line ~203):
                 # F(t,t') = L(t)·g(t,t')
                 # CN averages 4 corners: (t-δt,t'), (t,t'), (t-δt,t'+δt), (t,t'+δt)
                 l_operator = term_spec['L']
-                cn_factor = 1.0 / 4.0
+                cn_factor = 1.0 / 4.0 * self.delta_t
 
                 # 1. Operator contribution: M_L = (1/4)·L(t)
-                left_contribution = cn_factor * l_operator[-1]
+                left_contribution = cn_factor * l_operator[-1] * expansion_tensor
                 if left_matrix is None:
                     left_matrix = left_contribution
                 else:
@@ -401,28 +476,29 @@ class UsadelKeldyshEvolution:
                 v_old_contribution = cn_factor * l_operator[-2] * (g_last_row + g_last_row.shift(shift_index, axis=1))
 
                 if rhs_vector is None:
-                    rhs_vector = v_old_contribution
+                    rhs_vector = -v_old_contribution
                 else:
-                    rhs_vector = rhs_vector + v_old_contribution
+                    rhs_vector = rhs_vector - v_old_contribution
 
                 # 3. V_crt_diag contribution: (1/4)·L(t)·g(t,t'+δt)
                 # This is a factored term: L multiplies g at shifted t'
                 # Add as tuple (left_op, right_op) = (L(t), identity)
                 # The shift in t' is handled by the update rule accessing g at t'+δt
-                rhs_vector_factor_list.append((cn_factor * l_operator[-1], tau0 * expansion_tensor))
+                rhs_vector_factor_list.append((-cn_factor * l_operator[-1], tau0 * expansion_tensor))
 
                 # 4. V_crt_conv contribution: None (no integrals in Type 1)
 
             # ========== Type 2: Right operator multiplication g(t,t')·R(t') ==========
             elif type_num == 2:
+                #* assumes R(t) is computed in old time domain and we only use it for elements that have t' < t. last element is t' = t -dt
                 # From LaTeX Eq. (Type 2, line ~234):
                 # F(t,t') = g(t,t')·R(t')
                 # CN averages 4 corners: (t-δt,t'), (t,t'), (t-δt,t'+δt), (t,t'+δt)
                 r_operator = term_spec['R']
-                cn_factor = 1.0 / 4.0
+                cn_factor = 1.0 / 4.0 * self.delta_t
 
                 # 1. Operator contribution: M_R = (1/4)·R(t')
-                right_contribution = cn_factor * r_operator
+                right_contribution = cn_factor * r_operator * self.delta_t
                 if right_matrix is None:
                     right_matrix = right_contribution
                 else:
@@ -433,26 +509,28 @@ class UsadelKeldyshEvolution:
                 v_old_contribution = cn_factor * (g_last_row * r_operator + g_last_row.shift(shift_index, axis=1) * r_operator.shift(shift_index, axis=0))
 
                 if rhs_vector is None:
-                    rhs_vector = v_old_contribution
+                    rhs_vector = -v_old_contribution
                 else:
-                    rhs_vector = rhs_vector + v_old_contribution
+                    rhs_vector = rhs_vector - v_old_contribution
 
                 # 3. V_crt_diag contribution: (1/4)·g(t,t'+δt)·R(t'+δt)
                 # Factored term: identity on left, R(t'+δt) on right
                 # Note: R is shifted to access R(t'+δt)
-                rhs_vector_factor_list.append((tau0 * expansion_tensor, cn_factor * r_operator.shift(shift_index, axis=0)))
+                rhs_vector_factor_list.append((-tau0, cn_factor * r_operator.shift(shift_index, axis=0)))
 
                 # 4. V_crt_conv contribution: None (no integrals in Type 2)
 
             # ========== Type 3: Left convolution ∫_{-∞}^t L(t,t'')·g(t'',t') dt'' ==========
             elif type_num == 3:
+                #* assumes that the L operator is computed in correct time domain in t but t' is still old labeling
+                #* for gk will have to shift if we are dealing with gr here since gr will automatically be updated
                 # From LaTeX Eq. (Type 3, line ~280):
                 # F(t,t') = ∫_{-∞}^t L(t,t'')·g(t'',t') dt''
                 # L is a two-time object L(t, t''), convolution over t''
                 # Boundary extraction at t''=t, interior sums from t_init to t-δt
                 l_operator = term_spec['L']  # Shape: (2, 2, Nt, Nt) with L(t_i, t_j)
-                boundary_factor = self.delta_t / 8.0
-                interior_factor = self.delta_t / 4.0
+                boundary_factor = self.delta_t / 8.0 * self.delta_t
+                interior_factor = self.delta_t / 4.0 * self.delta_t
 
                 # 1. Operator contribution: M_L = (δt/8)·L(t,t)
                 # Extract diagonal element L(t,t)
@@ -470,11 +548,13 @@ class UsadelKeldyshEvolution:
                 v_old_boundary_2 = boundary_factor * l_operator[-2:-1, -2] * g_last_row.shift(shift_index, axis=1)
 
                 # 2b. Interior sums from F(t-δt, ·): L(t-δt, :) @ g, sum to t-2δt (Eq. 298)
+                #* we exclude the last element corresponding to t-dt because we computed its contribution by hand using trapezoid rule
                 v_old_interior_1 = interior_factor * (l_operator[-2:-1, :-1] @ g_matrix[:-1, :])
                 v_old_interior_2 = interior_factor * (l_operator[-2:-1, :-1] @ g_matrix[:-1, :].shift(shift_index, axis=1))
 
                 # 2c. Interior sums from F(t, ·): L(t, :) @ g, sum to t-δt (Eq. 299-300)
                 # These ALSO go to V_old because all involve g(t'', ·) with t'' < t
+                #* this summation goes until t-dt so we sum over all elements since the last one corresponds to that time label
                 v_old_interior_3 = interior_factor * (l_operator[-1:, :] @ g_matrix)
                 v_old_interior_4 = interior_factor * (l_operator[-1:, :] @ g_matrix.shift(shift_index, axis=1))
 
@@ -484,24 +564,25 @@ class UsadelKeldyshEvolution:
                                      v_old_interior_3 + v_old_interior_4)
 
                 if rhs_vector is None:
-                    rhs_vector = v_old_contribution
+                    rhs_vector = -v_old_contribution
                 else:
-                    rhs_vector = rhs_vector + v_old_contribution
+                    rhs_vector = rhs_vector - v_old_contribution
 
                 # 3. V_crt_diag contribution: Boundary term only (δt/8)·L(t,t)·g(t, t'+shift)
-                rhs_vector_factor_list.append((boundary_factor * l_operator[-1, -1], tau0 * expansion_tensor))
+                rhs_vector_factor_list.append((-boundary_factor * l_operator[-1, -1], tau0 * expansion_tensor))
 
                 # 4. V_crt_conv = 0 (Eq. 294)
                 # Per note at line 306: all interior sums have t'' < t, so no V_crt_conv
 
             # ========== Type 4: Right convolution ∫_{-∞}^{t'} g(t,t'')·R(t'',t') dt'' ==========
             elif type_num == 4:
+                #* again, assuming R(t') with second index is computed in the old basis in t' and old basis for t.
                 # From LaTeX Eq. (Type 4, line ~337):
                 # F(t,t') = ∫_{-∞}^{t'} g(t,t'')·R(t'',t') dt''
                 # R is a two-time object R(t'', t'), need to extract diagonal R(t', t')
                 r_operator = term_spec['R']
-                boundary_factor = self.delta_t / 8.0
-                interior_factor = self.delta_t / 4.0
+                boundary_factor = self.delta_t / 8.0 * self.delta_t
+                interior_factor = self.delta_t / 4.0 * self.delta_t
 
                 # Extract diagonal R(t', t') for boundary terms and M_R
                 # Check if R is two-time (4D) or single-time (3D)
@@ -522,35 +603,37 @@ class UsadelKeldyshEvolution:
                 # 2b. Interior sums: (δt/4)·Σ_{t''} g(t-δt, t'')·R(t'', t')
                 # Four interior convolutions total (2 for V_old, 2 for V_crt):
                 # V_old terms (use full R for convolution):
-                v_old_interior_1 = interior_factor * (g_last_row @ r_operator)
-                #TODO: check this term specifically! -- should be ok, but its tricky the assumption is that R will truncate the integral!
+                v_old_interior_1 = interior_factor * (g_last_row @ r_operator)  
+                #* this is the part that enforces that r(t,t') be computed w.r.t old basis and not new basis since g_last row is w.r.t. old basis in t'
                 v_old_interior_2 = interior_factor * (g_last_row @ r_operator.shift(shift_index, axis=1))
 
                 v_old_contribution = v_old_boundary_1 + v_old_boundary_2 + v_old_interior_1 + v_old_interior_2
 
                 if rhs_vector is None:
-                    rhs_vector = v_old_contribution
+                    rhs_vector = -v_old_contribution
                 else:
-                    rhs_vector = rhs_vector + v_old_contribution
+                    rhs_vector = rhs_vector - v_old_contribution
 
                 # 3. V_crt_diag contribution: (δt/8)·g(t, t'+shift)·R(t'+shift, t'+shift)
-                rhs_vector_factor_list.append((tau0 * expansion_tensor, boundary_factor * r_diagonal))
+                rhs_vector_factor_list.append((-tau0, boundary_factor * r_diagonal))
 
                 # 4. V_crt interior contributions: (δt/4)·Σ_{t''} g(t, t'')·R(t'', t') and the shifted one 
                 # Two more interior convolutions for current time (use full R)
-                rhs_vector_history_list.append((interior_factor * tau0 * expansion_tensor, r_operator))
-                rhs_vector_history_list.append((interior_factor * tau0 * expansion_tensor, r_operator.shift(shift_index, axis=1)))
+                #* the convolution with this term should take approriately such that the last term here is going against the new 1 off diagonal element!
+                rhs_vector_history_list.append((-interior_factor * tau0 * expansion_tensor, r_operator))
+                rhs_vector_history_list.append((-interior_factor * tau0 * expansion_tensor, r_operator.shift(shift_index, axis=1)))
 
             # ========== Type 5: Bilinear convolution L·∫_{t'}^t g·M·g dt''·R ==========
             elif type_num == 5:
+                #! This still has to be debugged properly!!
                 # From LaTeX Eq. (Type 5, line ~435):
                 # F(t,t') = L(t)·∫_{t'}^t g(t,t'')·M(t'')·g(t'',t') dt''·R(t')
                 # Boundary extractions using g(t,t)=-Δ(t) create sandwich terms
                 l_operator = term_spec['L']
                 m_operator = term_spec['M']
                 r_operator = term_spec['R']
-                boundary_factor = self.delta_t / 8.0
-                interior_factor = self.delta_t / 4.0
+                boundary_factor = self.delta_t / 8.0 * self.delta_t
+                interior_factor = self.delta_t / 4.0 * self.delta_t
 
                 # Extract diagonal g(t',t') from existing Green's function
                 # state.gr contains data up to time t-δt
@@ -563,6 +646,7 @@ class UsadelKeldyshEvolution:
                 # 2a. Boundary terms at t''=t-δt and t''=t'
                 # LaTeX Eq. 454: -δt/8 L(t-δt) Δ(t-δt)·M(t-δt)·g(t-δt,t')·R(t')
                 # Since Δ(t-δt) = -g(t-δt,t-δt) = -g_diagonal[-1]:
+
                 v_old_upper_boundary = -boundary_factor * l_operator[-2] * (-g_diagonal[-1]) * m_operator[-2] * g_last_row * r_operator
                 v_old_upper_boundary_shift = -boundary_factor * l_operator[-2] * (-g_diagonal[-1]) * m_operator[-2] * g_last_row.shift(shift_index, axis=1) * r_operator.shift(shift_index, axis=0)
 
@@ -584,22 +668,22 @@ class UsadelKeldyshEvolution:
                                      v_old_interior_1 + v_old_interior_2)
 
                 if rhs_vector is None:
-                    rhs_vector = v_old_contribution
+                    rhs_vector = -v_old_contribution
                 else:
-                    rhs_vector = rhs_vector + v_old_contribution
+                    rhs_vector = rhs_vector -v_old_contribution
 
                 # 3. V_crt_diag: Diagonal coupling terms (Eq. 449-450)
                 # Term 1: -δt/8 L(t)·g(t,t'+δt)·M(t'+δt)·Δ(t'+δt)·R(t'+δt)
                 # Since Δ(t') = -g(t',t') = -g_diagonal, we use -g_diagonal for Δ(t'+δt)
                 rhs_vector_factor_list.append(
-                    -boundary_factor * l_operator[-1],
-                    m_operator.shift(shift_index, axis=0) * (-g_diagonal.shift(shift_index, axis=0) * r_operator.shift(shift_index, axis=0)
+                    (-boundary_factor * l_operator[-1],
+                    m_operator.shift(shift_index, axis=0) * (g_diagonal.shift(shift_index, axis=0) * r_operator.shift(shift_index, axis=0))
                 ))
 
                 # Term 2: -δt/8 L(t)·Δ(t)·M(t)·g(t,t'+δt)·R(t'+δt)
                 # Since Δ(t) = -g(t,t) = -g_diagonal_current:
                 rhs_vector_factor_list.append((
-                    -boundary_factor * l_operator[-1] * (-g_diagonal_current) * m_operator[-1],
+                    -boundary_factor * l_operator[-1] * (g_diagonal_current) * m_operator[-1],
                     r_operator.shift(shift_index, axis=0)
                 ))
 
@@ -607,14 +691,14 @@ class UsadelKeldyshEvolution:
                 # LaTeX Eq. 448: Bilinear contributions to sandwich term
                 # Term 1: Upper boundary (t''=t): -δt/8·L(t)·Δ(t)·M(t)·g(t,t')·R(t')
                 # Since Δ(t) = -g(t,t) = -g_diagonal_current:
-                left_sandwich_1 = -boundary_factor * l_operator[-1] * (-g_diagonal_current) * m_operator[-1]
+                left_sandwich_1 = boundary_factor * l_operator[-1] * (g_diagonal_current) * m_operator[-1]
                 right_sandwich_1 = r_operator
                 g_sandwich_matrices.append((left_sandwich_1, right_sandwich_1))
 
                 # Term 2: Lower boundary (t''=t'): -δt/8·L(t)·g(t,t')·M(t')·Δ(t')·R(t')
                 # Since Δ(t') = -g(t',t') = -g_diagonal:
-                left_sandwich_2 = -boundary_factor * l_operator[-1]
-                right_sandwich_2 = m_operator * (-g_diagonal) * r_operator
+                left_sandwich_2 = boundary_factor * l_operator[-1]
+                right_sandwich_2 = m_operator * (g_diagonal) * r_operator
                 g_sandwich_matrices.append((left_sandwich_2, right_sandwich_2))
 
                 # 5. V_crt_conv: Interior bilinear sums (Eq. 451-452)
@@ -622,26 +706,28 @@ class UsadelKeldyshEvolution:
                 # Pre-compute effective operator: M(t'')·g(t'',t')·R(t')
                 # Then convolution: g(t,t'') @ [M·g·R](t'',t')
                 rhs_vector_history_list.append((
-                    interior_factor * l_operator[-1],
+                    -interior_factor * l_operator[-1],
                     m_operator * g_matrix * r_operator
                 ))
 
                 # Term 2: δt/4 L(t) Σ_{t''=t'+2δt}^{t-δt} g(t,t'')·M(t'')·g(t'',t'+δt)·R(t'+δt)
                 # Pre-compute effective operator with shifted t': M(t'')·g(t'',t'+δt)·R(t'+δt)
                 rhs_vector_history_list.append((
-                    interior_factor * l_operator[-1],
+                    -interior_factor * l_operator[-1],
                     m_operator.shift(shift_index, axis=0) * g_matrix.shift(shift_index, axis=1) * r_operator.shift(shift_index, axis=0)
                 ))
 
             # ========== Type 6: Mixed left-right ∫_{-∞}^t L(t,t'')·g(t'',t')·R(t') dt'' ==========
             elif type_num == 6:
+                #! This still has to be debugged properly!!
+
                 # From LaTeX Eq. (Type 6, line ~487):
                 # F(t,t') = ∫_{-∞}^t L(t,t'')·g(t'',t')·R(t') dt''
                 # L is two-time object L(t,t''), R is single-time R(t')
                 l_operator = term_spec['L']  # Shape: (2, 2, Nt, Nt) for two-time
                 r_operator = term_spec['R']  # Shape: (2, 2, Nt) for single-time
-                boundary_factor = self.delta_t / 8.0
-                interior_factor = self.delta_t / 4.0
+                boundary_factor = self.delta_t / 8.0 * self.delta_t
+                interior_factor = self.delta_t / 4.0 * self.delta_t
 
                 # 1. No M_L or M_R (operators inside integral or depend on t'')
 
@@ -670,14 +756,14 @@ class UsadelKeldyshEvolution:
                                      v_old_interior_3 + v_old_interior_4)
 
                 if rhs_vector is None:
-                    rhs_vector = v_old_contribution
+                    rhs_vector = -v_old_contribution
                 else:
-                    rhs_vector = rhs_vector + v_old_contribution
+                    rhs_vector = rhs_vector  - v_old_contribution
 
                 # 3. V_crt_diag: Diagonal coupling term (Eq. 503)
                 # δt/8 L(t,t)·g(t,t'+δt)·R(t'+δt)
                 rhs_vector_factor_list.append((
-                    boundary_factor * l_operator[-1, -1],
+                    -boundary_factor * l_operator[-1, -1],
                     r_operator.shift(shift_index, axis=0)
                 ))
 
@@ -692,13 +778,14 @@ class UsadelKeldyshEvolution:
 
             # ========== Type 7: Mixed right-left L(t)·∫_{-∞}^{t'} g(t,t'')·R(t'',t') dt'' ==========
             elif type_num == 7:
+                #! This still has to be debugged properly!!
                 # From LaTeX Eq. (Type 7, line ~543):
                 # F(t,t') = L(t)·∫_{-∞}^{t'} g(t,t'')·R(t'',t') dt''
                 # L is single-time L(t), R is two-time R(t'',t')
                 l_operator = term_spec['L']  # Shape: (2, 2, Nt) for single-time
                 r_operator = term_spec['R']  # Shape: (2, 2, Nt, Nt) for two-time
-                boundary_factor = self.delta_t / 8.0
-                interior_factor = self.delta_t / 4.0
+                boundary_factor = self.delta_t / 8.0 * self.delta_t
+                interior_factor = self.delta_t / 4.0 * self.delta_t
 
                 # Extract diagonal R(t', t') for boundary terms and sandwich
                 if r_operator.data.ndim == 4:
@@ -722,14 +809,14 @@ class UsadelKeldyshEvolution:
                                      v_old_interior_1 + v_old_interior_2)
 
                 if rhs_vector is None:
-                    rhs_vector = v_old_contribution
+                    rhs_vector = -v_old_contribution
                 else:
-                    rhs_vector = rhs_vector + v_old_contribution
+                    rhs_vector = rhs_vector -v_old_contribution
 
                 # 3. V_crt_diag: Diagonal coupling term (Eq. 560)
                 # δt/8 L(t)·g(t,t'+δt)·R(t'+δt,t'+δt)
                 rhs_vector_factor_list.append((
-                    boundary_factor * l_operator[-1],
+                    -boundary_factor * l_operator[-1],
                     r_diagonal.shift(shift_index, axis=0)
                 ))
 
@@ -743,26 +830,35 @@ class UsadelKeldyshEvolution:
                 # Initial time boundary terms (Eq. 561):
                 # δt/8 L(t)·g(t,t_init)·R(t_init,t')
                 rhs_vector_history_list.append((
-                    boundary_factor * l_operator[-1],
+                    -boundary_factor * l_operator[-1],
                     r_operator
                 ))
                 # δt/8 L(t)·g(t,t_init)·R(t_init,t'+δt)
                 rhs_vector_history_list.append((
-                    boundary_factor * l_operator[-1],
+                    -boundary_factor * l_operator[-1],
                     r_operator.shift(shift_index, axis=1)
                 ))
 
                 # Interior sums (Eq. 562-563):
                 # δt/4 L(t) Σ_{t''=t_init+δt}^{t'-δt} g(t,t'')·R(t'',t')
-                rhs_vector_history_list.append((interior_factor * l_operator[-1] * expansion_tensor, r_operator))
+                rhs_vector_history_list.append((-interior_factor * l_operator[-1] * expansion_tensor, r_operator))
                 # δt/4 L(t) Σ_{t''=t_init+δt}^{t'} g(t,t'')·R(t'',t'+δt)
-                rhs_vector_history_list.append((interior_factor * l_operator[-1] * expansion_tensor, r_operator.shift(shift_index, axis=1)))
+                rhs_vector_history_list.append((-interior_factor * l_operator[-1] * expansion_tensor, r_operator.shift(shift_index, axis=1)))
 
         # Return tuple matching generalized_gr_update_rule signature
-        return (left_matrix, right_matrix, rhs_vector,
-                rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices)
+        # shape of tuples should be:
+        # left_matrix: (2,2,1)
+        # right_matrix: (2,2,N_t)
+        # rhs_vector: (2,2,1,N_t)
+        # rhs_vector_history_list: [(2,2), (2,2,N_t)]
+        # rhs_vector_factor_list: [(2,2), (2,2,N_t)]
+        # g_sandwich_matrices: [(2,2), (2,2,N_t)]
+
+        return (left_matrix, right_matrix, rhs_vector, rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices)
 
     def get_gr_constraint(self, state, gap_tensor):
+        #TODO: Future issue -- subtle differences between newest gap tensor and gr diagonal, one has to be careful in which order things are updated!
+        #TODO should update the diagonal g term first and then the rest
         """
         Construct operators for retarded normalization constraint using MIDPOINT RULE.
 
@@ -779,6 +875,7 @@ class UsadelKeldyshEvolution:
             6-tuple: (left_matrix, right_matrix, rhs_vector,
                       rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices)
         """
+
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
         expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
@@ -788,10 +885,10 @@ class UsadelKeldyshEvolution:
 
         # Operator matrices (anticommutator structure: τ₃·g + g·τ₃)
         # Left: τ₃ - δt·Δ(t)
-        left_matrix = tau3 * expansion_tensor - self.delta_t * gap_tensor[-1] * expansion_tensor
+        left_matrix = tau3 * expansion_tensor - self.delta_t * gap_tensor[-1] * expansion_tensor/2
 
         # Right: τ₃ - δt·Δ(t')
-        right_matrix = tau3 * expansion_tensor - self.delta_t * gap_tensor
+        right_matrix = tau3 * expansion_tensor - self.delta_t * gap_tensor/2
 
         # RHS vector (V_old): no direct terms for gr constraint
         rhs_vector = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
@@ -799,7 +896,7 @@ class UsadelKeldyshEvolution:
         # Convolution term: δt·Σ g'^R(t,t'')·g'^R(t'',t') where sum is from t'+δt to t-δt
         # This is handled via history list: (left_term * current_solution) @ right_term
         # For gr constraint: (tau0 * g_current) @ gr gives the convolution
-        rhs_vector_history_list = [(tau0 * expansion_tensor, gr)]
+        rhs_vector_history_list = [(-tau0, gr * self.delta_t)]
 
         # No diagonal coupling terms for this constraint
         rhs_vector_factor_list = []
@@ -837,32 +934,31 @@ class UsadelKeldyshEvolution:
 
         # Operator matrices (commutator structure: [τ₃, g^K])
         # Left: τ₃
-        left_matrix = tau3 * expansion_tensor
+        left_matrix = tau3 * expansion_tensor + self.delta_t * gr[-1,-1] * expansion_tensor/2
 
         # Right: -τ₃ (minus for commutator)
-        right_matrix = -tau3 * expansion_tensor
+        right_matrix = -tau3 * expansion_tensor + self.delta_t * ga[-1,-1] * expansion_tensor/2
 
         # RHS vector (V_old): mixed convolution terms + gap sources
 
         # Term 1: δt·Σ g'^R(t,t'')·g'^K(t'',t') from t''=-∞ to t-δt
         gr_last_row = gr[-1:, :]
         gk_full = gk
-        rhs_term_1 = self.delta_t * (gr_last_row @ gk_full)
+        #* this assumes that gr_last_row has correct time index and not shifted t' index 
+        #* this is enforced by gk_full being of that type, last term is t-dt anyway in both so it works perfectly
+        rhs_term_1 = -self.delta_t * (gr_last_row @ gk_full)
 
         # RHS gap source terms (boundary extractions from mixed convolutions)
         # From g^R(t,t) = -Δ(t) and g^A(t',t') = -Δ(t')
         # These come from extracting boundary at t''=t in first convolution
         # and boundary at t''=t' in second convolution
-        gk_last_row = gk[-1:, :]
-        rhs_gap_source = self.delta_t * (gap_tensor[-1] * expansion_tensor * gk_full +
-                                          gk_last_row * gap_tensor)
 
-        rhs_vector = rhs_term_1 + rhs_gap_source
+        rhs_vector = rhs_term_1 
 
         # Term 2: δt·Σ g'^K(t,t'')·g'^A(t'',t') from t''=-∞ to t'-δt
-        # This convolution is handled via history list: (tau0 * gk_current) @ ga
-        rhs_vector_history_list = [(tau0 * expansion_tensor, ga)]
-
+        # This convolution is handled via history list: (tau0 * gk_current) @ ga 
+        #* this also assumes that ga is not shifted in time because gk has that form as well
+        rhs_vector_history_list = [(-tau0 , ga * self.delta_t)]
         # No diagonal coupling terms
         rhs_vector_factor_list = []
 
@@ -874,118 +970,9 @@ class UsadelKeldyshEvolution:
 
     # ========== Real-Time Evolution ==========
 
-    def _compute_new_gr_row(self, state, A_history=None):
-        """
-        Evolve retarded Green's function gr by one timestep using Crank-Nicolson discretization.
-
-        Computes g^R(t_{time_index}, t_j) for all j < time_index using the
-        discretized Usadel equation with CN averaging over 4 time corners.
-
-        Args:
-            state: StateObject with current gr data
-            A_history: Optional external vector potential history
-
-        Returns:
-            new_gr_row: NambuKeldyshTensor for g^R(t_new, :)
-            gr_diagonal_new: Boundary condition g^R(t,t) = -Δ(t)
-
-        Called by:
-            - _evolve_state_by_one_timestep()
-        """
-        # ========== 1. Extract physics parameters ==========
-        gap_history = state.get_gap_history()
-        # ! overwrite gap
-        gap_history = np.ones(np.size(gap_history)) * 1.2971004247665405
-        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + \
-                     NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
-
-        if A_history is None:
-            A_history = np.zeros(len(gap_history), dtype=complex)
-        A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
-        A_t = A_tensor[-1]
-        A2_t = A_history[-1]**2
-
-        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
-        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
-        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-        expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
-
-        # ========== 2. Boundary condition ==========
-        gr_diagonal_new = -gap_tensor[-1]
-
-        # ========== 3. Build evolution equation via Type classification ==========
-        # NOTE: delta_t factor is applied later in construct_discrete_operators
-        evolution_terms = {
-            'type1_gap': {'L': -1j * gap_tensor[-1]},
-            'type2_gap': {'R': 1j * gap_tensor},
-            'type1_damping': {'L': 1j * self.eta * tau3},
-            'type2_damping': {'R': -1j * self.eta * tau3},
-            'type1_em_local': {'L': 1j * A2_t * tau3},
-            'type2_em_local': {'R': -1j * (A_tensor * A_tensor) * tau3},
-            'type1_em_cross': {'L': -1j * A_t * A_tensor * tau3},
-            'type2_em_cross': {'R': -1j * A_t * A_tensor * tau3},
-            'type5_em_1': {
-                'L': 1j * self.delta_t * A_t * tau3,
-                'M': A_tensor * tau3,
-                'R': tau0 * expansion_tensor
-            },
-            'type5_em_2': {
-                'L': tau0 * expansion_tensor,
-                'M': A_tensor * tau3,
-                'R': -1j * self.delta_t * A_tensor * tau3
-            }
-        }
-
-        L1, R1, V1, Vhist1, Vfact1, sandwich1 = \
-            self.construct_discrete_operators(evolution_terms, state, g_type='r')
-
-        # ========== 4. Add derivative corrections and source terms ==========
-        gr_last_row = state.gr[-1:, :]
-
-        # M_L correction: +(i/2)τ₃
-        L1 = L1 + (1j/2) * tau3 * expansion_tensor
-
-        # M_R correction (opposite sign!): -(i/2)τ₃
-        R1 = R1 - (1j/2) * tau3 * expansion_tensor
-
-        # V_crt_diag correction (couples to g(t, t'+δt))
-        Vfact1.append(((1j/2) * tau3 * expansion_tensor, tau0 * expansion_tensor))
-        Vfact1.append((tau0 * expansion_tensor, (1j/2) * tau3 * expansion_tensor))
-
-        # V_old correction (from derivatives)
-        # Retarded: -(i/2)τ₃·g(t-δt,t') - (i/2)g(t-δt,t')·τ₃
-        #           -(i/2)τ₃·g(t-δt,t'+δt) + (i/2)g(t-δt,t'+δt)·τ₃  [+ sign on last term]
-        v_old_deriv = (-(1j/2) * tau3 * gr_last_row - (1j/2) * gr_last_row * tau3
-                       - (1j/2) * tau3 * gr_last_row.shift(-1, axis=1)
-                       + (1j/2) * gr_last_row.shift(-1, axis=1) * tau3)
-
-        # Add all source terms to V1
-        V1 = V1 + v_old_deriv
-
-        # ========== 5. Build normalization constraint operators ==========
-        L2, R2, V2, Vhist2, Vfact2, sandwich2 = self.get_gr_constraint(state, gap_tensor)
-
-        # ========== 6. Call unified solver ==========
-        gr_new = self.generalized_g_update_rule(
-            g_type='r',
-            diagonal_entry=gr_diagonal_new,
-            left_matrix_1=L1,
-            left_matrix_2=L2,
-            right_matrix_1=R1,
-            right_matrix_2=R2,
-            rhs_vector_1=V1,
-            rhs_vector_2=V2,
-            rhs_vector_history_1_list=Vhist1,
-            rhs_vector_history_2_list=Vhist2,
-            rhs_vector_factor_1_list=Vfact1,
-            rhs_vector_factor_2_list=Vfact2,
-            g_sandwich_matrices=sandwich1
-        )
-
-        return gr_new, gr_diagonal_new 
-
     def generalized_g_update_rule(self, g_type, diagonal_entry, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_vector_1, rhs_vector_2, rhs_vector_history_1_list, rhs_vector_history_2_list,rhs_vector_factor_1_list, rhs_vector_factor_2_list, g_sandwich_matrices = []):
         #* a function which updates the g based on the structure of the equation
+
         if g_type == 'r':
             trace_index_list = [1,2,3,0]
             loop_start = self.ntpoints - 1
@@ -1017,14 +1004,13 @@ class UsadelKeldyshEvolution:
         for terms in g_sandwich_matrices:
             left_term = terms[0]
             right_term = terms[1]
-            matrix_row_1 += (right_term * tau_vector[trace_index_list[0]] * left_term).matrix_to_vector()
-            matrix_row_2 += (right_term * tau_vector[trace_index_list[1]] * left_term).matrix_to_vector()
+            matrix_row_1 += (right_term * tau_vector[trace_index_list[0]] * left_term)
+            matrix_row_2 += (right_term * tau_vector[trace_index_list[1]] * left_term)
 
         vector_row_1 = (rhs_vector_1.trace(trace_index_list[0])/2)[0]  # τ₁
         vector_row_2 = (rhs_vector_1.trace(trace_index_list[1])/2)[0]  # τ₂
         vector_row_3 = (rhs_vector_2.trace(trace_index_list[2])/2)[0]  # τ₃
         vector_row_4 = (rhs_vector_2.trace(trace_index_list[3])/2)[0]  # τ₀
-
 
         matrix_row_1 = matrix_row_1.matrix_to_vector()
         matrix_row_2 = matrix_row_2.matrix_to_vector()
@@ -1032,158 +1018,169 @@ class UsadelKeldyshEvolution:
         matrix_row_4 = matrix_row_4.matrix_to_vector()
 
         #========== Backward sweep: t'=0 → -T_max ==========
+        #* Main idea: we are actually computing a new element at time-1 and we should appropriately take into account of all the elements
+        #* smallest error is given by a weird condition, this has to be understood better
         for time in range(loop_start, loop_end, loop_step):
-            previous_solution = solution_tensor[solution_tensor_index].matrix_to_vector()
-
+            #print(solution_tensor.shape)
+            previous_solution = solution_tensor[solution_tensor_index]
+            #solution_string = solution_tensor[(self.ntpoints - solution_tensor_index) % self.ntpoints: self.ntpoints - (solution_tensor_index_2) % self.ntpoints]
+            #print(solution_tensor.data.shape)
             #Normalization convolution: Σ_{t''=t'+δt}^{t-δt} ĝ^R(t,t'') ĝ^R(t'',t')
-            if time == self.ntpoints - 1:
-                
-                #First iteration (t'=0): no intermediate points, convolution = 0
-                convolution_term_1 = 0 * previous_solution
-                convolution_term_2 = 0 * previous_solution
-            else:
+            convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
+            convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
 
+            for terms in rhs_vector_factor_1_list:
+                left_term = terms[0]
+                right_term = terms[1]
+                convolution_term_1 += (left_term * previous_solution * right_term[time])
+            
+            for terms in rhs_vector_factor_2_list:
+                left_term = terms[0]
+                right_term = terms[1]
+                convolution_term_2 += (left_term * previous_solution * right_term[time])
+                
+            if time != loop_start: 
                 for terms in rhs_vector_history_1_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    convolution_term_1 = (left_term * solution_tensor[:-1]) @ right_term[time+1:, time] * self.delta_t
-                
-                for terms in rhs_vector_factor_1_list:
-                    left_term = terms[0]
-                    right_term = terms[1]
-                    convolution_term_1 += (left_term * solution_tensor[-1:] * right_term[time])
+                    if g_type == 'r':
+                        #* last element in right_term corresponds to time t-dt actually so it should be summed with solution tensor last element
+                        convolution_term_1 += (left_term * solution_tensor[:-1]) @ right_term[time+1:, time] 
+                    elif g_type == 'k':
+                        #* note, last right term is actually time t-dt as last time index and last solution tensor is that as well? 
+                        convolution_term_1 += (left_term * solution_tensor[:]) @ right_term[:time, time] 
 
                 for terms in rhs_vector_history_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    convolution_term_2 = (left_term * previous_solution) @ right_term[time+1:, time] * self.delta_t
-
-                for terms in rhs_vector_factor_2_list:
-                    left_term = terms[0]
-                    right_term = terms[1]
-                    convolution_term_2 += (left_term * previous_solution * right_term[time])
-
-
+                    if g_type == 'r':
+                        convolution_term_2 += (left_term * solution_tensor[:-1]) @ right_term[time+1:, time]  
+                    elif g_type == 'k':
+                        #* in principle first solution corresponds to t-dt, last time is n_points which ends with t-dt, as it should 
+                        convolution_term_2 += (left_term * solution_tensor[:]) @ right_term[:time, time] 
+                    
             total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
-
-            convolution_term_1 = convolution_term_1.matrix_to_vector()
-            convolution_term_2 = convolution_term_2.matrix_to_vector()
-
-            total_vector = np.array([vector_row_1[time],vector_row_2[time],vector_row_3[time], vector_row_4[time]]) + np.array([convolution_term_1[trace_index_list[0]],convolution_term_1[trace_index_list[1]],convolution_term_2[trace_index_list[2]],convolution_term_2[trace_index_list[3]]])
-
+            #print('total_matrix',total_matrix.shape)
+            convolution_term_1_vec = convolution_term_1.matrix_to_vector()
+            convolution_term_2_vec = convolution_term_2.matrix_to_vector()
+            total_vector = np.array([vector_row_1[time],vector_row_2[time],vector_row_3[time], vector_row_4[time]]) + np.array([convolution_term_1_vec[trace_index_list[0]],convolution_term_1_vec[trace_index_list[1]],convolution_term_2_vec[trace_index_list[2]],convolution_term_2_vec[trace_index_list[3]]])
+            #print('total_vector',total_vector.shape)
             g_components = np.linalg.solve(total_matrix, total_vector)
-
             #Prepend to solution (builds backward in time)
-            solution_tensor.append(g_components)
+            if g_type == 'r':
+                solution_tensor.append(g_components)
+            elif g_type == 'k':
+                solution_tensor.append_right(g_components)
 
         #Remove diagonal element (only needed for boundary condition)
-        return solution_tensor[:-1]
+        
+        if g_type == 'r':
+            return solution_tensor[:-1]
+        elif g_type == 'k':
+            return solution_tensor
 
 
-    #! DEPRACATED
-    def gr_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, diagonal_entry, full_g_matrix, g_sandwich_list = [], A_history = None):
+    def _compute_new_gr_row(self, state, A_history=None):
         """
-        Solve for g^R(t, t') at all t' using backward sweep (tex Eq. 62 + 95).
+        Evolve retarded Green's function gr by one timestep using Crank-Nicolson discretization.
 
-        The backward sweep from t'=0 down to t'=-T_max implicitly handles the forward
-        derivative term -iĝ^R(t,t'+δt)τ̂₃ because each iteration uses the solution
-        from the previous iteration (which computed the point at t'+δt).
+        Computes g^R(t_{time_index}, t_j) for all j < time_index using the
+        discretized Usadel equation with CN averaging over 4 time corners.
 
-        Pauli trace projection reduces the 2×2 matrix equation to 4 scalar equations.
+        Args:
+            state: StateObject with current gr data
+            A_history: Optional external vector potential history
+
+        Returns:
+            new_gr_row: NambuKeldyshTensor for g^R(t_new, :)
+            gr_diagonal_new: Boundary condition g^R(t,t) = -Δ(t)
+
+        Called by:
+            - _evolve_state_by_one_timestep()
         """
-        #Define Pauli matrices for trace projection
+        # ========== 1. Extract physics parameters ==========
+        gap_history = state.get_gap_history()
+        # ! overwrite gap
+        gap_history = np.ones(np.size(gap_history)) * 1.5232319831848145
+        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
+
+        if A_history is None:
+            A_history = np.zeros(len(gap_history), dtype=complex)
+        A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
+        A_t = A_tensor[-1]
+        A2_t = A_history[-1]**2
+
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
-        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+        expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
 
-        #Build 4×4 system by projecting onto Pauli basis (exploits redundancy)
-        #Evolution equation rows: τ₁, τ₂ traces
-        matrix_row_1 = (tau1 * left_matrix_1 + right_matrix_1 * tau1).matrix_to_vector()
-        matrix_row_2 = (tau2 * left_matrix_1 + right_matrix_1 * tau2).matrix_to_vector()
-        #Normalization constraint rows: τ₃, τ₀ traces
-        matrix_row_3 = (tau3 * left_matrix_2 + right_matrix_2 * tau3).matrix_to_vector()
-        matrix_row_4 = (tau0 * left_matrix_2 + right_matrix_2 * tau0).matrix_to_vector()
+        # ========== 2. Boundary condition ==========
+        gr_diagonal_new = -gap_tensor[-1]
 
-        for terms in g_sandwich_list:
-            left_term = terms[0]
-            right_term = terms[1]
-            matrix_row_1 += (right_term * tau1 * left_term).matrix_to_vector()
-            matrix_row_2 += (right_term * tau2 * left_term).matrix_to_vector()
+        # ========== 3. Build evolution equation via Type classification ==========
+        # NOTE: delta_t factor is applied later in construct_discrete_operators
+        evolution_terms = {
+            'type1_gap': {'L': -1j * gap_tensor}, 
+            'type2_gap': {'R': 1j * gap_tensor},
+            'type1_damping': {'L': 1j * self.eta * tau3 * expansion_tensor},
+            'type2_damping': {'R': -1j * self.eta * tau3 * expansion_tensor},
+            'type1_em_local': {'L': 1j * A2_t * tau3 * expansion_tensor},
+            'type2_em_local': {'R': -1j * (A_tensor * A_tensor) * tau3},
+            'type1_em_cross': {'L': -1j * A_t * A_tensor * tau3},
+            'type2_em_cross': {'R': -1j * A_t * A_tensor * tau3},
+            'type5_em_1': {'L': 1j * A_t * tau3 * expansion_tensor,'M': A_tensor * tau3, 'R': expansion_tensor}, 
+             'type5_em_2': {'L': expansion_tensor,'M': A_tensor * tau3,'R': -1j * A_tensor * tau3}
+            }  
 
-        #Extract RHS vectors for each Pauli component
-        vector_row_1 = (rhs_matrix_1.trace(1)/2)[0]  # τ₁
-        vector_row_2 = (rhs_matrix_1.trace(2)/2)[0]  # τ₂
-        vector_row_3 = (rhs_matrix_2.trace(3)/2)[0]  # τ₃
-        vector_row_4 = (rhs_matrix_2.trace(0)/2)[0]  # τ₀
+        L1, R1, V1, Vhist1, Vfact1, sandwich1 =  self.construct_discrete_operators(evolution_terms, state, g_type='r')
 
-        #Initialize with diagonal: g^R(t,t) = -Δ̂(t)
-        solution_tensor = diagonal_entry * NambuKeldyshTensor([1.0], pauli_channel=0)
+        # ========== 4. Add derivative corrections and source terms ==========
+        gr_last_row = state.gr[-1:, :]
 
-        #========== Backward sweep: t'=0 → -T_max ==========
-        for time in range(self.ntpoints-1, -1, -1):
-            #Normalization convolution: Σ_{t''=t'+δt}^{t-δt} ĝ^R(t,t'') ĝ^R(t'',t')
-            if time == self.ntpoints - 1:
-                #First iteration (t'=0): no intermediate points, convolution = 0
-                norm_convolution = np.array([0, 0, 0, 0])
-            else:
-                #solution_tensor[:-1]: New ĝ^R(t,t'') for t'' from current t' to t-δt (excl. diagonal)
-                #full_g_matrix[time+1:, time]: Old ĝ^R(t'',t') for t'' from t'+δt to latest
-                norm_convolution = -(solution_tensor[:-1] @ full_g_matrix[time+1:, time]).matrix_to_vector() * self.delta_t
+        # M_L correction: +(i/2)τ₃
+        L1 = L1 + (1j/2) * tau3 * expansion_tensor
 
-            # Phase 4: Source convolutions with vector potential (tex lines 80-81)
-            # Compute only if time < ntpoints-1 and A_history is not all zeros
-            if time < self.ntpoints - 1 and A_history is not None and not np.allclose(A_history, 0):
-                # Need tau3 and A_tensor for convolutions
-                tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-                A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
+        # M_R correction (opposite sign!): -(i/2)τ₃
+        R1 = R1 - (1j/2) * tau3 * expansion_tensor
 
-                # Build weighted_gr = g^R(t,t'')·A(t'')·τ̂₃
-                weighted_gr = solution_tensor[:-1] * A_tensor[time+1:] * tau3
+        # V_crt_diag correction (couples to g(t, t'+δt))
+        Vfact1.append(((-1j/2) * tau3, expansion_tensor))
+        Vfact1.append((tau0, -(1j/2) * tau3 * expansion_tensor))
 
-                # First convolution: A(t)τ̂₃·[weighted_gr @ g^R(t'',t')]
-                first_conv = A_tensor[-1] * tau3 * (weighted_gr @ full_g_matrix[time+1:, time])
+        # V_old correction (from derivatives)
+        # Retarded: -(i/2)τ₃·g(t-δt,t') - (i/2)g(t-δt,t')·τ₃
+        #           -(i/2)τ₃·g(t-δt,t'+δt) + (i/2)g(t-δt,t'+δt)·τ₃  [+ sign on last term]
+        v_old_deriv = ((1j/2) * tau3 * gr_last_row + (1j/2) * gr_last_row * tau3
+                       + (1j/2) * tau3 * gr_last_row.shift(-1, axis=1)
+                       - (1j/2) * gr_last_row.shift(-1, axis=1) * tau3) 
 
-                # Second convolution: [weighted_gr @ g^R(t'',t')]·A(t')τ̂₃
-                second_conv = (weighted_gr @ full_g_matrix[time+1:, time]) * A_tensor[time] * tau3
+        # Add all source terms to V1
+        boundary_correction =  -1j * tau3 * gap_tensor[-2] * NambuKeldyshTensor([np.append(np.zeros(self.ntpoints-1),[1.0])], pauli_channel=0) #* correction due to delta jump condition term
+        V1 = V1 + v_old_deriv + boundary_correction
 
-                # Add to RHS: -iδt²[first - second]
-                source_A_correction = -1j * self.delta_t**2 * (first_conv - second_conv)
+        # ========== 5. Build normalization constraint operators ==========
+        L2, R2, V2, Vhist2, Vfact2, sandwich2 = self.get_gr_constraint(state, gap_tensor)
 
-                # Extract τ₁ and τ₂ components for evolution equation
-                source_A_vector = np.array([
-                    source_A_correction.trace(1)/ 2,# [0, time]   # τ₁ component
-                    source_A_correction.trace(2) / 2 #[0, time]   # τ₂ component
-                ])
-            else:
-                source_A_vector = np.array([0, 0])
+        # ========== 6. Call unified solver ==========
+        gr_new = self.generalized_g_update_rule(
+            g_type='r',
+            diagonal_entry=gr_diagonal_new,
+            left_matrix_1=L1,
+            left_matrix_2=L2,
+            right_matrix_1=R1,
+            right_matrix_2=R2,
+            rhs_vector_1=V1,
+            rhs_vector_2=V2,
+            rhs_vector_history_1_list=Vhist1,
+            rhs_vector_history_2_list=Vhist2,
+            rhs_vector_factor_1_list=Vfact1,
+            rhs_vector_factor_2_list=Vfact2,
+            g_sandwich_matrices=sandwich1
+        )
+        return gr_new, gr_diagonal_new 
 
-            #Build 4×4 linear system at current t' point
-            total_matrix = np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]])
-
-            #Diagonal coupling: {τ̂₃, ĝ^R(t,t)} appears in evolution equation
-            diagonal_components = solution_tensor[0].matrix_to_vector()
-
-            #Assemble RHS: [evolution RHS] + [diagonal coupling] + [normalization convolution] + [A source convolution]
-            #Diagonal coupling adds [g₂_diag, -g₁_diag, 0, 0] from anticommutator
-            #Normalization adds [0, 0, g₃_conv, g₀_conv] from convolution term
-            #A source convolution adds [A_τ₁, A_τ₂, 0, 0] from electromagnetic terms
-            total_vector = np.array([
-                vector_row_1[time] + source_A_vector[0],  # τ₁ with A correction
-                vector_row_2[time] + source_A_vector[1],  # τ₂ with A correction
-                vector_row_3[time],  # τ₃ (normalization, no A correction)
-                vector_row_4[time]   # τ₀ (normalization, no A correction)
-            ]) + np.array([diagonal_components[2], -diagonal_components[1], norm_convolution[3], norm_convolution[0]])
-
-            #Solve for Pauli components [g₁, g₂, g₃, g₀] at this t'
-            g_components = np.linalg.solve(total_matrix, total_vector)
-
-            #Prepend to solution (builds backward in time)
-            solution_tensor.append(g_components)
-
-        #Remove diagonal element (only needed for boundary condition)
-        return solution_tensor[:-1]
-
+#! in gr we changed signs for derivatives so we should do something like that here as well, also no dt factors
     def _compute_new_gk_row(self, state, A_history=None):
         """
         Evolve Keldysh Green's function g^K by one timestep using Crank-Nicolson discretization.
@@ -1208,7 +1205,7 @@ class UsadelKeldyshEvolution:
 
         gap_history = state.get_gap_history()
         # ! overwrite gap
-        gap_history = np.ones(np.size(gap_history)) * 1.4524034261703491
+        gap_history = np.ones(np.size(gap_history))  * 1.5232319831848145
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + \
                      NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
@@ -1226,23 +1223,23 @@ class UsadelKeldyshEvolution:
         # ========== 2. Build evolution equation via Type classification ==========
         # NOTE: delta_t factor is applied later in construct_discrete_operators
         evolution_terms = {
-            'type1_gap': {'L': -1j * gap_tensor[-1]},
+            'type1_gap': {'L': -1j * gap_tensor},
             'type2_gap': {'R': 1j * gap_tensor},  # SAME SIGN as Type 1
-            'type1_damping': {'L': 1j * self.eta * tau3},
-            'type2_damping': {'R': 1j * self.eta * tau3},  # SAME SIGN
-            'type1_em_local': {'L': 1j * A2_t * tau3},
+            'type1_damping': {'L': 1j * self.eta * tau3 * expansion_tensor},
+            'type2_damping': {'R': 1j * self.eta * tau3 * expansion_tensor},  # SAME SIGN
+            'type1_em_local': {'L': 1j * A2_t * tau3 * expansion_tensor},
             'type2_em_local': {'R': 1j * (A_tensor * A_tensor) * tau3},  # SAME SIGN
             'type1_em_cross': {'L': -1j * A_t * A_tensor * tau3},
             'type2_em_cross': {'R': -1j * A_t * A_tensor * tau3},
             'type5_em_1': {
-                'L': 1j * self.delta_t * A_t * tau3,
-                'M': A_tensor * tau3,
-                'R': tau0 * expansion_tensor
-            },
-            'type5_em_2': {
-                'L': tau0 * expansion_tensor,
-                'M': A_tensor * tau3,
-                'R': 1j * self.delta_t * A_tensor * tau3  # PLUS SIGN (not minus like gr)
+                 'L': 1j * self.delta_t * A_t * tau3 * expansion_tensor,
+                 'M': A_tensor * tau3,
+                 'R': expansion_tensor
+             },
+             'type5_em_2': {
+                 'L': expansion_tensor,
+                 'M': A_tensor * tau3,
+                 'R': 1j * self.delta_t * A_tensor * tau3  # PLUS SIGN (not minus like gr)
             }
         }
 
@@ -1259,8 +1256,8 @@ class UsadelKeldyshEvolution:
         R1 = R1 + (1j/2) * tau3 * expansion_tensor
 
         # V_crt_diag correction (couples to g^K(t, t'-δt), BACKWARD!)
-        Vfact1.append(((1j/2) * tau3 * expansion_tensor, tau0 * expansion_tensor))
-        Vfact1.append((tau0 * expansion_tensor, (1j/2) * tau3 * expansion_tensor))
+        Vfact1.append(((1j/2) * tau3, tau0 * expansion_tensor))
+        Vfact1.append((tau0, (1j/2) * tau3 * expansion_tensor))
 
         # V_old correction (both terms MINUS)
         # Keldysh: -(i/2)τ₃·g^K(t-δt,t') - (i/2)g^K(t-δt,t')·τ₃
@@ -1274,156 +1271,139 @@ class UsadelKeldyshEvolution:
         # Add derivative corrections
         V1 = V1 + v_old_deriv
 
-        # ---------- 4.1: Thermal collision integrals (4-corner CN) ----------
-        thermal_term = tau0 * expansion_tensor * 0.0
+        # 4-corner CN: Only past time (t-δt) contributes to RHS
+        # Current time (t) handled by operator matrices
 
-        for dt_shift in [0, 1]:  # t: 0=current (t), 1=past (t-δt)
-            for dt_prime_shift in [0, 1]:  # t': 0=current, 1=backward shift (t'-δt)
-                # Extract time slices with proper indexing
-                ga_slice = ga[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                ga_shifted = ga_slice.shift(dt_prime_shift, axis=1)
+        #* note, there were some errors regarding indexing
+        #* check dt terms etc, this needs to be fixed in accordance to all the old terms
+        #* check how the source terms should even be computed 
+        #* write out the indexing structure for all the terms in the discrete operator assigment and source term computation
+        #* -- each term should have explicit indexing comment written out! and explained what happens when something is passed in. 
+        #* -- also minimize the amount of necessary convolutions 
+        # ---------- 4.1: Thermal collision integrals ----------
+        thermal_term = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
+        #! need also the change of first index and second one, simply compute and average out with 1/4 factor
+        #* take the terms from previous computation and copy-paste them here directly and simply change the first and second index -- 4 terms total
+        #* basically we can do this for all the terms, simply compute and average over 4 sites 
+        for dt_prime_shift in [0, 1]:  # t': 0=current, 1=shift by +1 (backward in Keldysh)
+            # Extract g^R/g^A at t-δt (last row of state)
+            gr_past = gr[-1:, :].shift(dt_prime_shift, axis=1)
+            ga_past = ga[:, -1:].shift(dt_prime_shift, axis=1)
 
-                gr_slice = gr[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
+            # Extract thermal distribution at t-δt
+            thermal_past = self.thermal_dist[-1:, :].shift(dt_prime_shift, axis=1)
+            integral_past = self.thermal_integral[-1:, :].shift(dt_prime_shift, axis=1)
 
-                thermal_slice = self.thermal_dist[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                thermal_shifted = thermal_slice.shift(dt_prime_shift, axis=1)
+            # Convolution: τ₃·∫g^A·f - ∫g^R·f·τ₃
+            conv_ga = tau3 * ga.precise_convolution_right(
+                self.thermal_dist[-1:, :],
+                self.thermal_integral[-1:, :],
+                self.delta_t,
+                self_index=0)
 
-                integral_slice = self.thermal_integral[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                integral_shifted = integral_slice.shift(dt_prime_shift, axis=1)
+            conv_gr = gr[-1:, :].precise_convolution_left(
+                self.thermal_dist,
+                integral_past,
+                self.delta_t,
+                other_index=0) * tau3
 
-                # Compute convolution contributions
-                conv_part1 = tau3 * ga_shifted.precise_convolution_right(
-                    thermal_slice,
-                    integral_slice,
-                    self.delta_t,
-                    self_index=-1)
-
-                conv_part2 = gr_slice.precise_convolution_left(
-                    thermal_shifted,
-                    integral_shifted,
-                    self.delta_t,
-                    other_index=-1) * tau3
-
-                # Accumulate with 1/4 CN factor
-                thermal_term = thermal_term + (1.0/4.0) * (-2j * self.delta_t * self.eta) * (conv_part1 - conv_part2)
+            thermal_term += (1.0/4.0) * (-2j * self.delta_t * self.eta) * (conv_ga - conv_gr)
 
         V1 = V1 + thermal_term
 
-        # ---------- 4.2: Gap-F coupling (4-corner CN) ----------
-        gap_f_term = tau0 * expansion_tensor * 0.0
+        # ---------- 4.2: Gap-F coupling ----------
+        gap_f_term = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
 
-        for dt_shift in [0, 1]:
-            for dt_prime_shift in [0, 1]:
-                gap_t = gap_tensor[(-1-dt_shift)]
-                gap_t_prime_shifted = gap_tensor.shift(dt_prime_shift, axis=0)
-                gap_t_prime = gap_t_prime_shifted[(-1-dt_shift)]
+        for dt_prime_shift in [0, 1]:
+            gap_past = gap_tensor[-2]  # Δ(t-δt)
+            gap_tprime = gap_tensor.shift(dt_prime_shift, axis=0)  # Δ(t' or t'-δt)
+            thermal_past = self.thermal_dist[-1:, :].shift(dt_prime_shift, axis=1)
 
-                thermal_slice = self.thermal_dist[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                thermal_shifted = thermal_slice.shift(dt_prime_shift, axis=1)
-
-                contribution = -2 * (
-                    -1j * self.delta_t * gap_t * tau3 * thermal_shifted +
-                     1j * self.delta_t * tau3 * thermal_shifted * gap_t_prime
-                )
-
-                gap_f_term = gap_f_term + (1.0/4.0) * contribution
+            contribution = -2 * (
+                -1j * self.delta_t * gap_past * tau3 * thermal_past +
+                 1j * self.delta_t * tau3 * thermal_past * gap_tprime
+            )
+            gap_f_term += (1.0/4.0) * contribution
 
         V1 = V1 + gap_f_term
 
-        # ---------- 4.3: EM-F direct coupling (4-corner CN) ----------
+
+        """
+        # ---------- 4.3: EM-F direct coupling ----------
         if A_history is not None and not np.allclose(A_history, 0):
-            em_f_direct = tau0 * expansion_tensor * 0.0
+            em_f_direct = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
 
-            for dt_shift in [0, 1]:
-                for dt_prime_shift in [0, 1]:
-                    A_t_val = A_tensor[(-1-dt_shift)]
-                    A_t_prime_shifted = A_tensor.shift(dt_prime_shift, axis=0)
-                    A_t_prime_val = A_t_prime_shifted[(-1-dt_shift)]
+            for dt_prime_shift in [0, 1]:
+                A_past = A_tensor[-2]  # A(t-δt)
+                A_tprime = A_tensor.shift(dt_prime_shift, axis=0)  # A(t' or t'-δt)
+                thermal_past = self.thermal_dist[-1:, :].shift(dt_prime_shift, axis=1)
 
-                    A_diff = A_t_val * expansion_tensor - A_t_prime_val
-                    A_diff_squared = A_diff * A_diff
-
-                    thermal_slice = self.thermal_dist[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                    thermal_shifted = thermal_slice.shift(dt_prime_shift, axis=1)
-
-                    contribution = -2j * self.delta_t * thermal_shifted * A_diff_squared
-                    em_f_direct = em_f_direct + (1.0/4.0) * contribution
+                A_diff = A_past * expansion_tensor - A_tprime
+                contribution = -2j * self.delta_t * thermal_past * (A_diff * A_diff)
+                em_f_direct += (1.0/4.0) * contribution
 
             V1 = V1 + em_f_direct
 
-            # ---------- 4.4: EM-thermal convolution T1 (4-corner CN) ----------
-            em_thermal_conv1 = tau0 * expansion_tensor * 0.0
+            # ---------- 4.4: EM-thermal convolution T1 ----------
+            em_thermal_conv1 = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
 
-            for dt_shift in [0, 1]:
-                for dt_prime_shift in [0, 1]:
-                    A_t_val = A_tensor[(-1-dt_shift)]
-                    A_t_dprime_slice = A_tensor[(-1-dt_shift):(-dt_shift if dt_shift else None)]
-                    A_t_dprime_shifted = A_t_dprime_slice.shift(dt_prime_shift, axis=0)
-                    A_t_prime_shifted = A_tensor.shift(dt_prime_shift, axis=0)
-                    A_t_prime_val = A_t_prime_shifted[(-1-dt_shift)]
+            # Create A(t-δt) as row tensor for multiplication
+            A_past_row = NambuKeldyshTensor(
+                A_tensor[-2] * np.ones((1, self.ntpoints)),
+                pauli_channel=0
+            )
 
-                    gr_slice = gr[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                    weighted_gr = gr_slice * A_t_dprime_shifted
+            for dt_prime_shift in [0, 1]:
+                A_past = A_tensor[-2]
+                A_tprime = A_tensor.shift(dt_prime_shift, axis=0)
+                thermal_past = self.thermal_dist[-1:, :].shift(dt_prime_shift, axis=1)
+                integral_past = self.thermal_integral[-1:, :].shift(dt_prime_shift, axis=1)
 
-                    thermal_slice = self.thermal_dist[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                    thermal_shifted = thermal_slice.shift(dt_prime_shift, axis=1)
-                    integral_slice = self.thermal_integral[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                    integral_shifted = integral_slice.shift(dt_prime_shift, axis=1)
+                weighted_gr = gr[-1:, :] * A_past_row
 
-                    conv_part1 = A_t_val * tau3 * weighted_gr.precise_convolution_left(
-                        thermal_shifted,
-                        integral_shifted,
-                        self.delta_t,
-                        other_index=-1)
+                conv1 = A_past * tau3 * weighted_gr.precise_convolution_left(
+                    thermal_past,
+                    integral_past,
+                    self.delta_t,
+                    other_index=0)
 
-                    conv_part2 = weighted_gr.precise_convolution_left(
-                        thermal_shifted,
-                        integral_shifted,
-                        self.delta_t,
-                        other_index=-1) * A_t_prime_val * tau3
+                conv2 = weighted_gr.precise_convolution_left(
+                    thermal_past,
+                    integral_past,
+                    self.delta_t,
+                    other_index=0) * A_tprime * tau3
 
-                    contribution = -2j * self.delta_t * (conv_part1 - conv_part2)
-                    em_thermal_conv1 = em_thermal_conv1 + (1.0/4.0) * contribution
+                em_thermal_conv1 += (1.0/4.0) * (-2j * self.delta_t) * (conv1 - conv2)
 
             V1 = V1 + em_thermal_conv1
 
-            # ---------- 4.5: EM-thermal convolution T2 (4-corner CN) ----------
-            em_thermal_conv2 = tau0 * expansion_tensor * 0.0
+            # ---------- 4.5: EM-thermal convolution T2 ----------
+            em_thermal_conv2 = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
 
-            for dt_shift in [0, 1]:
-                for dt_prime_shift in [0, 1]:
-                    A_t_val = A_tensor[(-1-dt_shift)]
-                    A_t_dprime_slice = A_tensor[(-1-dt_shift):(-dt_shift if dt_shift else None)]
-                    A_t_dprime_shifted = A_t_dprime_slice.shift(dt_prime_shift, axis=0)
-                    A_t_prime_shifted = A_tensor.shift(dt_prime_shift, axis=0)
-                    A_t_prime_val = A_t_prime_shifted[(-1-dt_shift)]
+            for dt_prime_shift in [0, 1]:
+                A_past = A_tensor[-2]
+                A_tprime = A_tensor.shift(dt_prime_shift, axis=0)
+                ga_past_shifted = ga[-1:, :].shift(dt_prime_shift, axis=1)
 
-                    ga_slice = ga[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                    ga_shifted = ga_slice.shift(dt_prime_shift, axis=1)
+                weighted_ga1 = A_past_row * tau3 * ga_past_shifted
+                weighted_ga2 = A_past_row * ga_past_shifted
 
-                    weighted_ga_1 = A_t_dprime_shifted * tau3 * ga_shifted
-                    weighted_ga_2 = A_t_dprime_shifted * ga_shifted
+                conv1 = A_past * weighted_ga1.precise_convolution_right(
+                    self.thermal_dist[-1:, :],
+                    self.thermal_integral[-1:, :],
+                    self.delta_t,
+                    self_index=0)
 
-                    thermal_slice = self.thermal_dist[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
-                    integral_slice = self.thermal_integral[(-1-dt_shift):(-dt_shift if dt_shift else None), :]
+                conv2 = weighted_ga2.precise_convolution_right(
+                    self.thermal_dist[-1:, :],
+                    self.thermal_integral[-1:, :],
+                    self.delta_t,
+                    self_index=0) * A_tprime * tau3
 
-                    conv_part1 = A_t_val * weighted_ga_1.precise_convolution_right(
-                        thermal_slice,
-                        integral_slice,
-                        self.delta_t,
-                        self_index=-1)
-
-                    conv_part2 = weighted_ga_2.precise_convolution_right(
-                        thermal_slice,
-                        integral_slice,
-                        self.delta_t,
-                        self_index=-1) * A_t_prime_val * tau3
-
-                    contribution = 2j * self.delta_t * (conv_part1 - conv_part2)
-                    em_thermal_conv2 = em_thermal_conv2 + (1.0/4.0) * contribution
+                em_thermal_conv2 += (1.0/4.0) * (2j * self.delta_t) * (conv1 - conv2)
 
             V1 = V1 + em_thermal_conv2
-
+        """
         # ========== 5. Build Keldysh constraint operators ==========
         L2, R2, V2, Vhist2, Vfact2, sandwich2 = self.get_gk_constraint(state, gap_tensor)
 
@@ -1449,7 +1429,6 @@ class UsadelKeldyshEvolution:
 
         return gk_new, None  # None = diagonal computed separately
 
-    #! DEPRACATED
     def _compute_new_gk_diagonal(self, state, gk_new, A_history=None):
         """
         Update g^K(t,t) using symmetry without shifting time indices.
@@ -1621,6 +1600,223 @@ class UsadelKeldyshEvolution:
 
         return gk_diagonal_new
 
+
+    def _evolve_state_by_one_timestep(self, state, A_external=None):
+        """
+        Evolve state by one timestep using Crank-Nicolson discretization.
+
+        Steps:
+        1. Initialize thermal distribution if needed
+        2. Update retarded Green's function g^R
+        3. Update Keldysh off-diagonal g^K(:, :-1)
+        4. Update Keldysh diagonal g^K(:, -1) separately using symmetry
+        5. Compute gap from new gk diagonal element
+        6. Return gap, current, and vector potential at new time
+
+        Args:
+            state: StateObject with current data
+            A_external: Optional external vector potential history
+
+        Returns:
+            gap_new: Gap value at new time t
+            current_new: Current at new time t (zero for now)
+            vector_potential_new: Vector potential at new time t
+
+        Calls:
+            - _compute_new_gr_row(state, A_external)
+            - _compute_new_gk_row(state, A_external)
+            - _compute_new_gk_diagonal(state, gk_new_offdiag, A_external)
+            - state.update_state_gr(), state.update_state_gk()
+        """
+        # Initialize thermal distribution if not already done
+        if not hasattr(self, 'thermal_dist'):
+            self.get_thermal_occupation(self.temperature)
+            self.get_thermal_integral(self.temperature)
+
+        old_gk_diagonal = state.gk[-1, -1]
+        # Step 1: Update retarded Green's function (shifts gr matrix)
+        new_gr_row, new_gr_diag = self._compute_new_gr_row(state, A_history=A_external)
+        state.update_state_gr(new_gr_row, new_gr_diag)
+
+        # Step 2: Compute Keldysh off-diagonal row (uses updated gr)
+        new_gk_row_offdiag, _ = self._compute_new_gk_row(state, A_history=A_external)
+
+        # Step 3: Update gk with placeholder diagonal (shifts gk matrix)
+        # Use old diagonal as placeholder - will be overwritten in step 5
+        placeholder_diag = state.gk[-1, -1]
+        state.update_state_gk(new_gk_row_offdiag, placeholder_diag)
+
+        # Step 4: Compute diagonal using SHIFTED gk row
+        # CRITICAL: Must compute diagonal AFTER matrix is shifted
+        new_gk_diag = old_gk_diagonal #self._compute_new_gk_diagonal(state, new_gk_row_offdiag, A_history=A_external)
+
+        # Step 5: Update ONLY the diagonal without shifting again
+        state.gk.update_diagonal_only(new_gk_diag, time_index=-1)
+
+        # Step 5: Extract observables
+        gap_history = state.get_gap_history()
+        gap_new = gap_history[-1]
+
+        # Current is zero for now (Stage 2 of project)
+        if A_external is None:
+            vector_potential_new = 0.0
+        else:
+            vector_potential_new = A_external[-1]
+
+        current_new = 0  # state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral)
+
+        return gap_new, current_new, vector_potential_new
+
+    def real_time_evolution(self, initial_state, num_timesteps, A_external=None):
+        """
+        Main real-time evolution loop.
+
+        Evolves state forward in time, extracting observables at each step.
+
+        Steps:
+        1. Initialize observables arrays
+        2. For each timestep:
+            a. Call _evolve_state_by_one_timestep()
+            b. Store returned gap and current values
+        3. Return evolved state and observable time series
+
+        Args:
+            initial_state: StateObject with equilibrium initial conditions
+            num_timesteps: Number of time steps to evolve
+            external_field: Optional time-dependent external field
+
+        Returns:
+            state: Final evolved StateObject
+            gaps: Array of gap values at each timestep
+            currents: Array of current values at each timestep
+
+        Calls:
+            - _evolve_state_by_one_timestep(state, time_index, external_field)
+        """
+        # Initialize arrays to track observables
+        gaps = []
+        currents = []
+        vector_potentials = []
+        
+        # Start with initial state
+        state = initial_state
+        
+        # Evolve over time with progress bar
+        for time_index in tqdm(range(num_timesteps), desc="Real-time evolution"):
+            # Evolve by one timestep and get observables
+            gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(
+                state, A_external
+            )
+            # Store observables
+            gaps += [gap_new]
+            currents  += [current_new]
+            vector_potentials += [vector_potential_new]
+
+        return state, np.array(gaps), np.array(currents), np.array(vector_potentials)#
+
+    #! DEPRACATED
+    def gr_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, diagonal_entry, full_g_matrix, g_sandwich_list = [], A_history = None):
+        """
+        Solve for g^R(t, t') at all t' using backward sweep (tex Eq. 62 + 95).
+
+        The backward sweep from t'=0 down to t'=-T_max implicitly handles the forward
+        derivative term -iĝ^R(t,t'+δt)τ̂₃ because each iteration uses the solution
+        from the previous iteration (which computed the point at t'+δt).
+
+        Pauli trace projection reduces the 2×2 matrix equation to 4 scalar equations.
+        """
+        #Define Pauli matrices for trace projection
+        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
+        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
+        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+        #Build 4×4 system by projecting onto Pauli basis (exploits redundancy)
+        #Evolution equation rows: τ₁, τ₂ traces
+        matrix_row_1 = (tau1 * left_matrix_1 + right_matrix_1 * tau1).matrix_to_vector()
+        matrix_row_2 = (tau2 * left_matrix_1 + right_matrix_1 * tau2).matrix_to_vector()
+        #Normalization constraint rows: τ₃, τ₀ traces
+        matrix_row_3 = (tau3 * left_matrix_2 + right_matrix_2 * tau3).matrix_to_vector()
+        matrix_row_4 = (tau0 * left_matrix_2 + right_matrix_2 * tau0).matrix_to_vector()
+
+        for terms in g_sandwich_list:
+            left_term = terms[0]
+            right_term = terms[1]
+            matrix_row_1 += (right_term * tau1 * left_term).matrix_to_vector()
+            matrix_row_2 += (right_term * tau2 * left_term).matrix_to_vector()
+
+        #Extract RHS vectors for each Pauli component
+        vector_row_1 = (rhs_matrix_1.trace(1)/2)[0]  # τ₁
+        vector_row_2 = (rhs_matrix_1.trace(2)/2)[0]  # τ₂
+        vector_row_3 = (rhs_matrix_2.trace(3)/2)[0]  # τ₃
+        vector_row_4 = (rhs_matrix_2.trace(0)/2)[0]  # τ₀
+
+        #Initialize with diagonal: g^R(t,t) = -Δ̂(t)
+        solution_tensor = diagonal_entry * NambuKeldyshTensor([1.0], pauli_channel=0)
+
+        #========== Backward sweep: t'=0 → -T_max ==========
+        for time in range(self.ntpoints-1, -1, -1):
+            #Normalization convolution: Σ_{t''=t'+δt}^{t-δt} ĝ^R(t,t'') ĝ^R(t'',t')
+            if time == self.ntpoints - 1:
+                #First iteration (t'=0): no intermediate points, convolution = 0
+                norm_convolution = np.array([0, 0, 0, 0])
+            else:
+                #solution_tensor[:-1]: New ĝ^R(t,t'') for t'' from current t' to t-δt (excl. diagonal)
+                #full_g_matrix[time+1:, time]: Old ĝ^R(t'',t') for t'' from t'+δt to latest
+                norm_convolution = -(solution_tensor[:-1] @ full_g_matrix[time+1:, time]).matrix_to_vector() * self.delta_t
+
+            # Phase 4: Source convolutions with vector potential (tex lines 80-81)
+            # Compute only if time < ntpoints-1 and A_history is not all zeros
+            if time < self.ntpoints - 1 and A_history is not None and not np.allclose(A_history, 0):
+                # Need tau3 and A_tensor for convolutions
+                tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+                A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
+
+                # Build weighted_gr = g^R(t,t'')·A(t'')·τ̂₃
+                weighted_gr = solution_tensor[:-1] * A_tensor[time+1:] * tau3
+
+                # First convolution: A(t)τ̂₃·[weighted_gr @ g^R(t'',t')]
+                first_conv = A_tensor[-1] * tau3 * (weighted_gr @ full_g_matrix[time+1:, time])
+
+                # Second convolution: [weighted_gr @ g^R(t'',t')]·A(t')τ̂₃
+                second_conv = (weighted_gr @ full_g_matrix[time+1:, time]) * A_tensor[time] * tau3
+
+                # Add to RHS: -iδt²[first - second]
+                source_A_correction = -1j * self.delta_t**2 * (first_conv - second_conv)
+
+                # Extract τ₁ and τ₂ components for evolution equation
+                source_A_vector = np.array([
+                    source_A_correction.trace(1)/ 2,# [0, time]   # τ₁ component
+                    source_A_correction.trace(2) / 2 #[0, time]   # τ₂ component
+                ])
+            else:
+                source_A_vector = np.array([0, 0])
+
+            #Build 4×4 linear system at current t' point
+            total_matrix = np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]])
+
+            #Diagonal coupling: {τ̂₃, ĝ^R(t,t)} appears in evolution equation
+            diagonal_components = solution_tensor[0].matrix_to_vector()
+
+            #Assemble RHS: [evolution RHS] + [diagonal coupling] + [normalization convolution] + [A source convolution]
+            #Diagonal coupling adds [g₂_diag, -g₁_diag, 0, 0] from anticommutator
+            #Normalization adds [0, 0, g₃_conv, g₀_conv] from convolution term
+            #A source convolution adds [A_τ₁, A_τ₂, 0, 0] from electromagnetic terms
+            total_vector = np.array([
+                vector_row_1[time] + source_A_vector[0],  # τ₁ with A correction
+                vector_row_2[time] + source_A_vector[1],  # τ₂ with A correction
+                vector_row_3[time],  # τ₃ (normalization, no A correction)
+                vector_row_4[time]   # τ₀ (normalization, no A correction)
+            ]) + np.array([diagonal_components[2], -diagonal_components[1], norm_convolution[3], norm_convolution[0]])
+
+            #Solve for Pauli components [g₁, g₂, g₃, g₀] at this t'
+            g_components = np.linalg.solve(total_matrix, total_vector)
+
+            #Prepend to solution (builds backward in time)
+            solution_tensor.append(g_components)
+
+        #Remove diagonal element (only needed for boundary condition)
+        return solution_tensor[:-1]
     #! DEPRACATED
     def gk_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, last_gr_row, full_ga_matrix, old_gk_matrix, g_sandwich_list = [], A_history = None):
         """
@@ -1718,7 +1914,98 @@ class UsadelKeldyshEvolution:
             solution_tensor.append_right(g_components)
 
         return solution_tensor
+    
+    def gk_diagonal_update_rule(self, diagonal_entry, solution_tensor, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_vector_1, rhs_vector_2, rhs_vector_history_1_list, rhs_vector_history_2_list,rhs_vector_factor_1_list, rhs_vector_factor_2_list, g_sandwich_matrices = []):
+        #* a function which updates the g based on the structure of the equation
+        trace_index_list = [0,3,1,2]
+        loop_start = 1
+        loop_end = self.ntpoints
+        loop_step = 1
+        solution_tensor_index = -1
 
+        #Define Pauli matrices for trace projection
+        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
+        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
+        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+        tau_vector = [tau0, tau1, tau2, tau3]
+
+        matrix_row_1 = (tau_vector[trace_index_list[0]] * left_matrix_1 + right_matrix_1 * tau_vector[trace_index_list[0]])
+        matrix_row_2 = (tau_vector[trace_index_list[1]] * left_matrix_1 + right_matrix_1 * tau_vector[trace_index_list[1]])
+        #Normalization constraint rows: τ₃, τ₀ traces
+        matrix_row_3 = (tau_vector[trace_index_list[2]] * left_matrix_2 + right_matrix_2 * tau_vector[trace_index_list[2]])
+        matrix_row_4 = (tau_vector[trace_index_list[3]] * left_matrix_2 + right_matrix_2 * tau_vector[trace_index_list[3]])
+
+        for terms in g_sandwich_matrices:
+            left_term = terms[0]
+            right_term = terms[1]
+            matrix_row_1 += (right_term * tau_vector[trace_index_list[0]] * left_term)
+            matrix_row_2 += (right_term * tau_vector[trace_index_list[1]] * left_term)
+
+        vector_row_1 = (rhs_vector_1.trace(trace_index_list[0])/2)[0]  # τ₁
+        vector_row_2 = (rhs_vector_1.trace(trace_index_list[1])/2)[0]  # τ₂
+        vector_row_3 = (rhs_vector_2.trace(trace_index_list[2])/2)[0]  # τ₃
+        vector_row_4 = (rhs_vector_2.trace(trace_index_list[3])/2)[0]  # τ₀
+
+        matrix_row_1 = matrix_row_1.matrix_to_vector()
+        matrix_row_2 = matrix_row_2.matrix_to_vector()
+        matrix_row_3 = matrix_row_3.matrix_to_vector()
+        matrix_row_4 = matrix_row_4.matrix_to_vector()
+
+        #TODO: have to check ranges and indices here, something looks fishy!
+        previous_solution = solution_tensor[solution_tensor_index]
+        #solution_string = solution_tensor[(self.ntpoints - solution_tensor_index) % self.ntpoints: self.ntpoints - (solution_tensor_index_2) % self.ntpoints]
+        #print(solution_tensor.data.shape)
+        #Normalization convolution: Σ_{t''=t'+δt}^{t-δt} ĝ^R(t,t'') ĝ^R(t'',t')
+        time = self.ntpoints
+        if time == loop_start:
+            #First two iterations (t'=0): no intermediate points, convolution = 0
+            convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
+            convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
+        else:
+            # Initialize to zero Nambu tensors
+            convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
+            convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
+
+            for terms in rhs_vector_history_1_list:
+                left_term = terms[0]
+                right_term = terms[1]
+                convolution_term_1 += (left_term * solution_tensor) @ right_term[:time, time] * self.delta_t
+
+            for terms in rhs_vector_factor_1_list:
+                left_term = terms[0]
+                right_term = terms[1]
+                convolution_term_1 += (left_term * previous_solution * right_term[time])
+
+            for terms in rhs_vector_history_2_list:
+                left_term = terms[0]
+                right_term = terms[1]
+                convolution_term_2 += (left_term * solution_tensor) @ right_term[:time, time] * self.delta_t
+
+            for terms in rhs_vector_factor_2_list:
+                left_term = terms[0]
+                right_term = terms[1]
+                convolution_term_2 += (left_term * previous_solution * right_term[time])
+
+
+            total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
+            #print('total_matrix',total_matrix.shape)
+            convolution_term_1_vec = convolution_term_1.matrix_to_vector()
+            convolution_term_2_vec = convolution_term_2.matrix_to_vector()
+            total_vector = np.array([vector_row_1[time],vector_row_2[time],vector_row_3[time], vector_row_4[time]]) + np.array([convolution_term_1_vec[trace_index_list[0]],convolution_term_1_vec[trace_index_list[1]],convolution_term_2_vec[trace_index_list[2]],convolution_term_2_vec[trace_index_list[3]]])
+            #print('total_vector',total_vector.shape)
+            g_components = np.linalg.solve(total_matrix, total_vector)
+            #Prepend to solution (builds backward in time)
+
+            solution_tensor.append_right(g_components)
+
+        #Remove diagonal element (only needed for boundary condition)
+        
+
+        return solution_tensor
+    
+    
+    #! DEPRACATED
     def gk_diagonal_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2,  last_gr_row, full_ga_matrix, old_gk_matrix, solution_tensor, g_sandwich_list = [], A_history = None):
         """
         Solve for diagonal element g^K(t,t).
@@ -1762,116 +2049,3 @@ class UsadelKeldyshEvolution:
 
         # Return as NambuKeldyshTensor (extract scalar)
         return NambuKeldyshTensor.vector_to_matrix(g_components)[-1]
-
-    def _evolve_state_by_one_timestep(self, state, A_external=None):
-        """
-        Evolve state by one timestep using Crank-Nicolson discretization.
-
-        Steps:
-        1. Initialize thermal distribution if needed
-        2. Update retarded Green's function g^R
-        3. Update Keldysh off-diagonal g^K(:, :-1)
-        4. Update Keldysh diagonal g^K(:, -1) separately using symmetry
-        5. Compute gap from new gk diagonal element
-        6. Return gap, current, and vector potential at new time
-
-        Args:
-            state: StateObject with current data
-            A_external: Optional external vector potential history
-
-        Returns:
-            gap_new: Gap value at new time t
-            current_new: Current at new time t (zero for now)
-            vector_potential_new: Vector potential at new time t
-
-        Calls:
-            - _compute_new_gr_row(state, A_external)
-            - _compute_new_gk_row(state, A_external)
-            - _compute_new_gk_diagonal(state, gk_new_offdiag, A_external)
-            - state.update_state_gr(), state.update_state_gk()
-        """
-        # Initialize thermal distribution if not already done
-        if not hasattr(self, 'thermal_dist'):
-            self.get_thermal_occupation(self.temperature)
-            self.get_thermal_integral(self.temperature)
-
-        # Step 1: Update retarded Green's function (shifts gr matrix)
-        new_gr_row, new_gr_diag = self._compute_new_gr_row(state, A_history=A_external)
-        state.update_state_gr(new_gr_row, new_gr_diag)
-
-        # Step 2: Compute Keldysh off-diagonal row (uses updated gr)
-        new_gk_row_offdiag, _ = self._compute_new_gk_row(state, A_history=A_external)
-
-        # Step 3: Update gk with placeholder diagonal (shifts gk matrix)
-        # Use old diagonal as placeholder - will be overwritten in step 5
-        placeholder_diag = state.gk[-1, -1]
-        state.update_state_gk(new_gk_row_offdiag, placeholder_diag)
-
-        # Step 4: Compute diagonal using SHIFTED gk row
-        # CRITICAL: Must compute diagonal AFTER matrix is shifted
-        new_gk_diag = self._compute_new_gk_diagonal(state, new_gk_row_offdiag, A_history=A_external)
-
-        # Step 5: Update ONLY the diagonal without shifting again
-        state.gk.update_diagonal_only(new_gk_diag, time_index=-1)
-
-        # Step 5: Extract observables
-        gap_history = state.get_gap_history()
-        gap_new = gap_history[-1]
-
-        # Current is zero for now (Stage 2 of project)
-        if A_external is None:
-            vector_potential_new = 0.0
-        else:
-            vector_potential_new = A_external[-1]
-
-        current_new = 0  # state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral)
-
-        return gap_new, current_new, vector_potential_new
-
-    def real_time_evolution(self, initial_state, num_timesteps, A_external=None):
-        """
-        Main real-time evolution loop.
-
-        Evolves state forward in time, extracting observables at each step.
-
-        Steps:
-        1. Initialize observables arrays
-        2. For each timestep:
-            a. Call _evolve_state_by_one_timestep()
-            b. Store returned gap and current values
-        3. Return evolved state and observable time series
-
-        Args:
-            initial_state: StateObject with equilibrium initial conditions
-            num_timesteps: Number of time steps to evolve
-            external_field: Optional time-dependent external field
-
-        Returns:
-            state: Final evolved StateObject
-            gaps: Array of gap values at each timestep
-            currents: Array of current values at each timestep
-
-        Calls:
-            - _evolve_state_by_one_timestep(state, time_index, external_field)
-        """
-        # Initialize arrays to track observables
-        gaps = []
-        currents = []
-        vector_potentials = []
-        
-        # Start with initial state
-        state = initial_state
-        
-        # Evolve over time with progress bar
-        for time_index in tqdm(range(num_timesteps), desc="Real-time evolution"):
-            # Evolve by one timestep and get observables
-            gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(
-                state, A_external
-            )
-            # Store observables
-            gaps += [gap_new]
-            currents  += [current_new]
-            vector_potentials += [vector_potential_new]
-
-        return state, np.array(gaps), np.array(currents), np.array(vector_potentials)#
-

@@ -197,15 +197,13 @@ class NambuKeldyshTensor:
         return NambuKeldyshTensor(result_data)
 
     def precise_convolution_left(self, other, other_integral, dt, other_index=-1):
-        #* we dont care about midpoint here, because the last element is zero anaywaya and the analytic term is the same since there is no truncation
+        #TODO: check this is implemented appropriately, are we subtracting the last term in the sum?
         """ 
         Compute regularized left convolution: self @ other (regularized).
 
         The regularized matrix (other) is on the right side.
         Regularization suppresses Gibbs oscillations from other.
 
-        NOTE: Trapezoidal boundary weighting (0.5 at endpoints) is automatically
-        handled by the @ operator. Both (self @ other) and (ones @ other) receive
         the same boundary treatment, so the cancellation in regularization works correctly.
 
         Formula:
@@ -239,10 +237,11 @@ class NambuKeldyshTensor:
         is_self_row = (self.data.shape[2] == 1)
 
         # Standard convolution (always uses full other)
-        result_std = (self @ other) * dt
+        #* midpoint rule, weighted last term by 1/2
+        result_std = (self @ other) * dt - 1/2 * (self[-1:,-1] * other[-1:,:]) * dt 
 
         # Factored term (non-analytic contribution)
-        result_fact = (self * (ones_tensor @ other)) * dt
+        result_fact = (self * (ones_tensor @ other)) * dt - 1/2 *  (self * (ones_tensor[-1:, -1] * other[-1:, :])) * dt 
 
         # For analytic term: use row of other_integral if self is a row
         if is_self_row:
@@ -260,11 +259,12 @@ class NambuKeldyshTensor:
 
         # Analytic term (using integral)
         result_anal = self * other_integral_for_reg
-        #! here we should by hand add the 1/2 factors since precise convolution is always done on known functions, so 1/2 midpoint factors can easily be added!
         # Combine: standard - factored + analytic
         return result_std - result_fact + result_anal
 
     def precise_convolution_right(self, other, other_integral, dt, self_index = -1):
+        #TODO: check the midpoint rule is implemented appropriately, are we subtracting the last term in the sum?
+
         """
         Compute regularized right convolution: other @ self (regularized).
 
@@ -303,9 +303,9 @@ class NambuKeldyshTensor:
 
         # Check if other is a row (shape: 2, 2, 1, N_t)
         is_other_row = (other.data.shape[2] == 1)
-
         # Standard convolution (always uses full self)
-        result_std = (other @ self) * dt
+        #* midpoint rule, weighted last term by 1/2
+        result_std = (other @ self) * dt - 1/2 * (other[-1:,-1:] * self[-1:,:]) * dt
 
         # For factored and analytic terms: use row of self if other is a row
         if is_other_row:
@@ -320,9 +320,9 @@ class NambuKeldyshTensor:
             self_for_reg = self[positive_index:positive_index+1, :]
         else:
             self_for_reg = self
-
         # Factored term (non-analytic contribution)
-        result_fact = ((other @ ones_tensor) * self_for_reg) * dt
+        #* midpoint rule, weighted last term by 1/2
+        result_fact = ((other @ ones_tensor) * self_for_reg) * dt - 1/2 * ((other[-1:, -1:] * ones_tensor[-1, :] * self_for_reg)) * dt
 
         # Analytic term (using integral)
         result_anal = other_integral * self_for_reg

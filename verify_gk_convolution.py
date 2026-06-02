@@ -57,9 +57,9 @@ def plot_gap_vs_time(time_grid, gap_eq, gap_evolved=None, filename='gap_evolutio
     ax2.set_xlim([time_grid[0], time_grid[-1]])
 
     plt.tight_layout()
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
-    print(f"  Saved: {filename}")
-    plt.close()
+    plt.show()
+    # plt.savefig(filename, dpi=150, bbox_inches='tight')
+    # print(f"  Saved: {filename}")
 
 
 def main():
@@ -204,9 +204,8 @@ def main():
         ax.set_xlim([time_grid[0], 0])
 
     plt.tight_layout()
-    plt.savefig('fdt_verification_last_row.png', dpi=150, bbox_inches='tight')
-    print("  Saved: fdt_verification_last_row.png")
-    plt.close()
+    plt.suptitle('Equilibrium State: FDT Verification', fontsize=14, fontweight='bold', y=1.00)
+    plt.show()
 
     # ========== Diagnostic: Near-Diagonal Error Analysis ==========
     print()
@@ -247,10 +246,9 @@ def main():
         ax.set_xlim([0, 50])
 
     plt.tight_layout()
-    plt.savefig('fdt_error_vs_diagonal_distance.png', dpi=150, bbox_inches='tight')
+    plt.suptitle('Equilibrium State: FDT Error vs Distance', fontsize=14, fontweight='bold', y=1.00)
+    plt.show()
     print()
-    print("  Saved: fdt_error_vs_diagonal_distance.png")
-    plt.close()
 
     # ========== Check FDT for Evolved State ==========
     print()
@@ -340,9 +338,8 @@ def main():
             ax.set_xlim([time_grid[0], 0])
 
         plt.tight_layout()
-        plt.savefig('fdt_verification_evolved_last_row.png', dpi=150, bbox_inches='tight')
-        print("  Saved: fdt_verification_evolved_last_row.png")
-        plt.close()
+        plt.suptitle('Evolved State: FDT Verification', fontsize=14, fontweight='bold', y=1.00)
+        plt.show()
 
     except FileNotFoundError:
         print("⚠ simulated_state.pkl not found - skipping evolved state FDT check")

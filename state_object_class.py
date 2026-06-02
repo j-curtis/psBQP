@@ -96,7 +96,7 @@ class StateObject:
           + 2F(t,t') A(t') τ₃ g'^A(t',t)
         ]
 
-        Uses precise_convolution for thermal terms (3 & 4) to suppress Gibbs oscillations.
+        Uses precise_convolution for thermal terms (3 & 4) to suppress errors
 
         Args:
             A_history: Vector potential A(t') - array of length N_t
@@ -134,11 +134,13 @@ class StateObject:
 
         # Term 1: ∫ dt' τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
         # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]
-        term1 = tau3 * (gr_row @ (A_tensor * tau3 * gk_col))[0,0] * self.dt 
+        #* midpoint rule subtraction
+        term1 = tau3 * (gr_row @ (A_tensor * tau3 * gk_col))[0,0] * self.dt - 1/2 * ( tau3 * (gr_row[0,-1] * (A_tensor[-1] * tau3 * gk_col[-1,0])))
 
         # Term 2: ∫ dt' τ₃ g'^K(t,t') A(t') τ₃ g'^A(t',t)
         # = τ₃ [g'^K(t,:) @ (A(:) τ₃ g'^A(:,t))]
-        term2 = tau3 * (gk_row @ (A_tensor * tau3 * ga_col))[0,0] * self.dt 
+        #* midpoint rule subtraction
+        term2 = tau3 * (gk_row @ (A_tensor * tau3 * ga_col))[0,0] * self.dt - 1/2 * ( tau3 * (gk_row[0,-1] * (A_tensor[-1] * tau3 * ga_col[-1,0])))
 
         # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
         # Multiply gr with A*tau3, then precise_convolution_left with F (regularized)
@@ -342,7 +344,6 @@ class StateObject:
 
         # Compute advanced Green's function
         ga = self._r2a()
-
 
         # Handle negative indexing
         N_t = self.gr.data.shape[2]

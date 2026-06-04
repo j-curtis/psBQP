@@ -259,7 +259,7 @@ class NambuKeldyshTensor:
         ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
         N_t = self.data.shape[-1]
 
-        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3)), pauli_channel=0)
+        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5)), pauli_channel=0)
 
 
         # Check if self is a row (shape: 2, 2, 1, N_t) - already validated above
@@ -267,8 +267,8 @@ class NambuKeldyshTensor:
 
         # Standard convolution (always uses full other)
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
-        first_endpoint_std = self[:,0:1] * other[0,:]
-        last_endpoint_std = self[:,-1:] * other[-1,:]
+        first_endpoint_std = self[:,0:1] * other[0:1,:]
+        last_endpoint_std = self[:,-1:] * other[-1:,:]
         result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
 
         # Factored term (non-analytic contribution)
@@ -295,7 +295,7 @@ class NambuKeldyshTensor:
         result_anal = self * other_integral_for_reg
         # Combine: standard - factored + analytic
         #* doesnt play a major role apart from diagonal element
-        return result_std + (- result_fact + result_anal) * filter_function
+        return (result_std + (- result_fact + result_anal)) * filter_function
 
 
     def precise_convolution_right(self, other, other_integral, dt, self_index = -1):
@@ -361,7 +361,7 @@ class NambuKeldyshTensor:
         N_t = other.data.shape[-1]
         N_tprime = self.data.shape[-1]
 
-        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3)), pauli_channel=0)
+        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5)), pauli_channel=0)
 
         # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')
         row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
@@ -371,7 +371,7 @@ class NambuKeldyshTensor:
         # Check if other is a row (shape: 2, 2, 1, N_t) - already validated above
         is_other_row = (other.data.shape[2] == 1)
         # Standard convolution (always uses full self)
-        first_endpoint_std = other[:,0:1] * self[0,:]
+        first_endpoint_std = other[:,0:1] * self[0:1,:]
         last_endpoint_std = other[:,:] * self.diagonal_time() #*last element is self(t't') actually!
         result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
@@ -389,7 +389,7 @@ class NambuKeldyshTensor:
             self_for_reg = self
         # Factored term (non-analytic contribution)
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
-        first_endpoint_fact = (other[:,0:1] * ones_tensor[0,:]) * self_for_reg
+        first_endpoint_fact = (other[:,0:1] * ones_tensor[0:1,:]) * self_for_reg
         last_endpoint_fact = (other[:,:]) * self_for_reg 
         result_fact = ((other @ ones_tensor) * self_for_reg) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact
 
@@ -397,7 +397,7 @@ class NambuKeldyshTensor:
         result_anal = -other_integral * self_for_reg
         #! tried subtracting different g but something went wrong, continuing with *0 for now
         # Combine: standard - factored + analytic
-        return result_std + ( - result_fact + result_anal) * filter_function
+        return (result_std + ( - result_fact + result_anal))* filter_function
 
     def _check_binary_shape_compatibility(self, other):
         """
@@ -801,7 +801,7 @@ class NambuKeldyshTensor:
         self.data = np.concatenate([new_entry.data, self.data], axis=2)
 
         # Update shape
-        self.data_shape = self.data.shape
+        self.shape = self.data.shape
 
     def append_right(self, vector):
         """
@@ -831,7 +831,7 @@ class NambuKeldyshTensor:
         self.data = np.concatenate([self.data, new_entry.data], axis=2)
 
         # Update shape
-        self.data_shape = self.data.shape
+        self.shape = self.data.shape
 
     def update_entries(self, new_upper_row, new_lower_column, new_diagonal):
         """
@@ -884,7 +884,7 @@ class NambuKeldyshTensor:
         self.data[:, :, Nt-1, Nt-1] = diag_data
 
         # Update shape (should be unchanged, but good practice)
-        self.data_shape = self.data.shape
+        self.shape = self.data.shape
 
     def update_diagonal_only(self, new_diagonal, time_index=-1):
         """

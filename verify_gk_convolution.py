@@ -159,6 +159,79 @@ def plot_normalization_checks(state, time_grid, thermal_dist, thermal_integral, 
         print(f"    {pauli_name}: max error = {max_err:.6e}")
 
 
+def plot_thermal_integrals(time_grid, thermal_dist, thermal_integral):
+    """
+    Plot integral of f(t,t'') vs t'' and thermal integral F(t,t') on the same plot.
+
+    Args:
+        time_grid: Array of time values
+        thermal_dist: Thermal distribution f(t,t') tensor
+        thermal_integral: Thermal integral F(t,t') tensor
+    """
+    print("\nPlotting thermal distribution integrals...")
+
+    # Extract tau_0 component (identity) from f and F
+    f_tau0 = thermal_dist.trace(0) / 2  # Shape: (Nt, Nt)
+    F_tau0 = thermal_integral.trace(0) / 2  # Shape: (Nt, Nt)
+
+    # Pick a time slice (e.g., last row: t = t_max)
+    t_idx = -1
+    f_row = f_tau0[t_idx, :]  # f(t_max, t'') vs t''
+    F_row = F_tau0[t_idx, :]  # F(t_max, t'') vs t''
+
+    # Compute cumulative integral of f numerically for comparison
+    dt = time_grid[1] - time_grid[0]
+    f_integral_numerical = np.zeros_like(f_row)
+    for i in range(len(f_row)):
+        # Integrate from beginning up to index i
+        f_integral_numerical[i] = np.sum(f_row[:i+1]) * dt
+
+    # Create plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left plot: f(t,t'') and its integral
+    ax1.plot(time_grid, np.real(f_row), 'b-', linewidth=2, label='f(t,t\'\') - Real', alpha=0.8)
+    ax1.plot(time_grid, np.imag(f_row), 'r-', linewidth=2, label='f(t,t\'\') - Imag', alpha=0.8)
+    ax1.plot(time_grid, np.real(f_integral_numerical), 'b--', linewidth=2,
+             label='∫f dt\'\' (numerical) - Real', alpha=0.6)
+    ax1.plot(time_grid, np.imag(f_integral_numerical), 'r--', linewidth=2,
+             label='∫f dt\'\' (numerical) - Imag', alpha=0.6)
+    ax1.set_xlabel('t\'\' (time)', fontsize=12)
+    ax1.set_ylabel('f(t,t\'\') and ∫f dt\'\'', fontsize=12)
+    ax1.set_title('Thermal Distribution f and its Integral', fontsize=13, fontweight='bold')
+    ax1.legend(fontsize=9, loc='best')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim([time_grid[0], time_grid[-1]])
+
+    # Right plot: Compare numerical integral with -F(t,t')
+    ax2.plot(time_grid, np.real(f_integral_numerical), 'b-', linewidth=2,
+             label='∫f dt\'\' (numerical) - Real', alpha=0.8)
+    ax2.plot(time_grid, -np.real(F_row), 'b--', linewidth=2,
+             label='-F(t,t\'\') (analytic) - Real', alpha=0.6)
+    ax2.plot(time_grid, np.imag(f_integral_numerical), 'r-', linewidth=2,
+             label='∫f dt\'\' (numerical) - Imag', alpha=0.8)
+    ax2.plot(time_grid, -np.imag(F_row), 'r--', linewidth=2,
+             label='-F(t,t\'\') (analytic) - Imag', alpha=0.6)
+    ax2.set_xlabel('t\'\' (time)', fontsize=12)
+    ax2.set_ylabel('Thermal Integral', fontsize=12)
+    ax2.set_title('Numerical vs -F(t,t\'\') Analytic Thermal Integral', fontsize=13, fontweight='bold')
+    ax2.legend(fontsize=9, loc='best')
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlim([time_grid[0], time_grid[-1]])
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print comparison statistics
+    print(f"  Comparing numerical ∫f with -F(t,t') (negative of analytic):")
+    diff_real = np.max(np.abs(np.real(f_integral_numerical) - (-np.real(F_row))))
+    diff_imag = np.max(np.abs(np.imag(f_integral_numerical) - (-np.imag(F_row))))
+    print(f"    Maximum difference (Real): {diff_real:.6e}")
+    print(f"    Maximum difference (Imag): {diff_imag:.6e}")
+    print(f"    -F(t,t'=t_max) at diagonal: {-F_row[-1]:.6f}")
+    print()
+
+
 def plot_fdt_check(state, time_grid, thermal_dist, thermal_integral, state_name='State', time_index=-1):
     """
     Plot FDT relation check: g^K vs (g^R @ f - f @ g^A).
@@ -301,19 +374,7 @@ def main():
     print(f"  BCS coupling: {evolution._get_BCS_coupling():.4f}")
     print()
 
-    # Extract equilibrium gap history
-    gap_eq_history = equilibrium_state.get_gap_history()
-    gap_eq = gap_eq_history[-1]
-    print(f"  Equilibrium gap: Δ = {np.real(gap_eq):.6f}")
-    print()
-
-    # Plot equilibrium gap evolution
-    print("Plotting equilibrium gap evolution...")
-    time_grid = evolution.time_grid
-    plot_gap_vs_time(time_grid, gap_eq_history, filename='gap_equilibrium.png')
-    print()
-
-    # ========== Generate Thermal Distribution and Integral ==========
+    # ========== Generate Thermal Distribution and Integral (BEFORE gap extraction) ==========
     print("Generating thermal distribution f(t,t') and integral F(t,t')...")
     evolution.get_thermal_occupation(system_parameters['temperature'])
     thermal_dist = evolution.thermal_dist
@@ -330,59 +391,20 @@ def main():
     print(f"  F(0) = {np.real(F_zero):.6f} (expected BCS value: {F_zero_expected:.6f})")
     print()
 
-    # ========== Plot Thermal Distribution Properties ==========
-    print("Plotting thermal distribution and integral properties...")
+    # ========== Plot Thermal Integrals ==========
+    time_grid = evolution.time_grid
+    plot_thermal_integrals(time_grid, thermal_dist, thermal_integral)
 
-    # Extract f(t,t') and F(t,t') data (tau0 component)
-    f_data = thermal_dist.trace(pauli_index=0) / 2.0  # Shape: (N_t, N_t)
-    F_data = thermal_integral.trace(pauli_index=0) / 2.0  # Shape: (N_t, N_t)
+    # ========== Extract and Plot Gap ==========
+    # Extract equilibrium gap history
+    gap_eq_history = equilibrium_state.get_gap_history()
+    gap_eq = gap_eq_history[-1]
+    print(f"  Equilibrium gap: Δ = {np.real(gap_eq):.6f}")
+    print()
 
-    # Compute sums: ∫ f(t,t') dt' and ∫ f(t,t') dt
-    dt = evolution.delta_t
-    sum_over_tprime = np.sum(f_data, axis=1) * dt  # Sum over t' for each t
-    sum_over_t = np.sum(f_data, axis=0) * dt  # Sum over t for each t'
-
-    # Extract last row of thermal integral: F(t=-1, t')
-    F_last_row = F_data[-1, :]
-
-    # Create single plot with real and imaginary parts
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Plot 1: Real parts
-    ax1.plot(time_grid, np.real(F_last_row), 'b-', linewidth=2, label='F(t=-1, t\')', alpha=0.8)
-    ax1.plot(time_grid, np.real(sum_over_tprime), 'r--', linewidth=2, label='∫ f(t,t\') dt\'', alpha=0.8)
-    ax1.plot(time_grid, np.real(sum_over_t), 'g-.', linewidth=2, label='∫ f(t,t\') dt', alpha=0.8)
-    ax1.set_xlabel("t'", fontsize=11)
-    ax1.set_ylabel("Real part", fontsize=11)
-    ax1.set_title("Thermal Integral - Real Part", fontsize=12, fontweight='bold')
-    ax1.legend(fontsize=10)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xlim([time_grid[0], time_grid[-1]])
-
-    # Plot 2: Imaginary parts
-    ax2.plot(time_grid, np.imag(F_last_row), 'b-', linewidth=2, label='F(t=-1, t\')', alpha=0.8)
-    ax2.plot(time_grid, np.imag(sum_over_tprime), 'r--', linewidth=2, label='∫ f(t,t\') dt\'', alpha=0.8)
-    ax2.plot(time_grid, np.imag(sum_over_t), 'g-.', linewidth=2, label='∫ f(t,t\') dt', alpha=0.8)
-    ax2.set_xlabel("t'", fontsize=11)
-    ax2.set_ylabel("Imaginary part", fontsize=11)
-    ax2.set_title("Thermal Integral - Imaginary Part", fontsize=12, fontweight='bold')
-    ax2.legend(fontsize=10)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xlim([time_grid[0], time_grid[-1]])
-
-    plt.tight_layout()
-    plt.show()
-
-    # Print statistics
-    print(f"  F(t=-1, t') statistics:")
-    print(f"    Real: min={np.min(np.real(F_last_row)):.6e}, max={np.max(np.real(F_last_row)):.6e}")
-    print(f"    Imag: min={np.min(np.imag(F_last_row)):.6e}, max={np.max(np.imag(F_last_row)):.6e}")
-    print(f"  ∫ f(t,t') dt' statistics:")
-    print(f"    Real: min={np.min(np.real(sum_over_tprime)):.6e}, max={np.max(np.real(sum_over_tprime)):.6e}")
-    print(f"    Imag: min={np.min(np.imag(sum_over_tprime)):.6e}, max={np.max(np.imag(sum_over_tprime)):.6e}")
-    print(f"  ∫ f(t,t') dt statistics:")
-    print(f"    Real: min={np.min(np.real(sum_over_t)):.6e}, max={np.max(np.real(sum_over_t)):.6e}")
-    print(f"    Imag: min={np.min(np.imag(sum_over_t)):.6e}, max={np.max(np.imag(sum_over_t)):.6e}")
+    # Plot equilibrium gap evolution
+    print("Plotting equilibrium gap evolution...")
+    plot_gap_vs_time(time_grid, gap_eq_history, filename='gap_equilibrium.png')
     print()
 
     # ========== Check FDT Using StateObject Method ==========

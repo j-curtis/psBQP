@@ -253,6 +253,7 @@ class UsadelKeldyshEvolution:
         # Store as NambuKeldyshTensor with two time axes (identity in Nambu space)
         self.thermal_dist = NambuKeldyshTensor(f_two_time, pauli_channel=0)
 
+#? maybe fix regularization here?
     def get_thermal_integral(self, temperature):
         """
         Compute cumulative integral of thermal distribution on finite time grid.
@@ -478,9 +479,9 @@ class UsadelKeldyshEvolution:
                 # 2. V_old contribution: (1/4)·L(t-δt)·[g(t-δt,t') + g(t-δt,t'+δt)]
                 #* g_last row is computed in the old time domain generally so we shift by -1 to bring it to the correct new t' basis, same for g_last_row.shift by correct index +-dt'
                 # Extract diagonal correction term (Type 1)
-                diagonal_term_factor_list.append((cn_factor * l_operator[-2], tau0 * expansion_tensor))
 
                 v_old_contribution = cn_factor * l_operator[-2] * (g_last_row.shift(-1, axis=1) + g_last_row.shift(shift_index - 1, axis=1))
+                diagonal_term_factor_list.append((cn_factor * l_operator[-2], tau0))
 
                 if rhs_vector is None:
                     rhs_vector = -v_old_contribution
@@ -508,9 +509,9 @@ class UsadelKeldyshEvolution:
                 #* g_last row is computed in the old time domain obviously so this assigment is fine, same for g_last_row.shift by correct index +-dt'
 
                 # Extract diagonal correction term (Type 2)
-                diagonal_term_factor_list.append((cn_factor * tau0, r_operator))
 
                 v_old_contribution = cn_factor * (g_last_row.shift(-1, axis=1) * r_operator + g_last_row.shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0))
+                diagonal_term_factor_list.append((cn_factor * tau0, r_operator[-1]))
 
                 if rhs_vector is None:
                     rhs_vector = -v_old_contribution
@@ -521,6 +522,7 @@ class UsadelKeldyshEvolution:
                 #* shifting here since we assume this. we will be reading matrix element at t' which corresponds to R(t'+dt')
                 rhs_vector_factor_list.append((-tau0, cn_factor * r_operator.shift(shift_index, axis=0)))
 
+            #? debug/fix the terms of type 3-7 especially with diagonal contributions 
             # ========== Type 3: Left convolution ∫_{-∞}^t L(t,t'')·g(t'',t') dt'' ==========
             elif type_num == 3:
                 #* assumes that the L operator is computed such that last element corresponds to (t,t) --must be like this !!!
@@ -564,6 +566,18 @@ class UsadelKeldyshEvolution:
                 # 3. V_crt_diag contribution: Boundary term only (δt/8)·L(t,t)·g(t, t'+shift)
                 rhs_vector_factor_list.append((-boundary_factor * l_operator[-1, -1], tau0 * expansion_tensor))
 
+                # # 4. Diagonal history corrections: Missing g_matrix[0] contributions
+                # # Line 549 uses g_matrix[1:-1] - missing first element at t_init
+                # diagonal_term_history_list.append((
+                #     interior_factor * l_operator[-2, 0],  # L(t-dt, t_init)
+                #     g_matrix[0].shift(-1, axis=1) + g_matrix[0].shift(shift_index-1, axis=1)
+                # ))
+                # # Line 554 uses g_matrix[1:] - missing first element at t_init
+                # diagonal_term_history_list.append((
+                #     interior_factor * l_operator[-1, 0],  # L(t, t_init)
+                #     g_matrix[0].shift(-1, axis=1) + g_matrix[0].shift(shift_index-1, axis=1)
+                # ))
+
             # ========== Type 4: Right convolution ∫_{-∞}^{t'} g(t,t'')·R(t'',t') dt'' ==========
             elif type_num == 4:
                 #* again, assuming R(t'',t') last element corresponds to (t, t)
@@ -592,7 +606,7 @@ class UsadelKeldyshEvolution:
                 #* the extra shift of -1 comes from the fact that g_last_row goes until t-dt, t-dt in both axis, so we need to shift by 1 to multiply g(t-dt, t-dt) with r(t-dt, t-dt)
 
                 # Extract diagonal correction term (Type 4)
-                diagonal_term_factor_list.append((boundary_factor * tau0, r_diagonal))
+                diagonal_term_factor_list.append((boundary_factor * tau0, r_diagonal[-1,-1]))
 
                 v_old_boundary_1 = boundary_factor * g_last_row.shift(-1, axis=1) * r_diagonal
                 v_old_boundary_2 = boundary_factor * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
@@ -641,7 +655,7 @@ class UsadelKeldyshEvolution:
 
                 # Extract diagonal correction terms (Type 5 - upper boundary)
                 left_op_upper = -boundary_factor * l_operator[-2] * (-g_diagonal[-2]) * m_operator[-2]
-                diagonal_term_factor_list.append((left_op_upper, r_operator))
+                #diagonal_term_factor_list.append((left_op_upper, r_operator[-1]))
 
                 v_old_upper_boundary = -boundary_factor * l_operator[-2] * (-g_diagonal[-2]) * m_operator[-2] * g_last_row.shift(-1, axis=1) * r_operator
                 v_old_upper_boundary_shift = -boundary_factor * l_operator[-2] * (-g_diagonal[-2]) * m_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)
@@ -652,7 +666,7 @@ class UsadelKeldyshEvolution:
                 # Extract diagonal correction terms (Type 5 - lower boundary)
                 left_op_lower = -boundary_factor * l_operator[-2]
                 right_op_lower = m_operator * (-g_diagonal) * r_operator
-                diagonal_term_factor_list.append((left_op_lower, right_op_lower))
+                #diagonal_term_factor_list.append((left_op_lower, right_op_lower[-1]))
 
                 v_old_lower_boundary = -boundary_factor * l_operator[-2] * g_last_row.shift(-1, axis=1) * m_operator * (-g_diagonal) * r_operator
                 v_old_lower_boundary_shift = -boundary_factor * l_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * m_operator.shift(shift_index, axis=0) * (-g_diagonal.shift(shift_index, axis=0)) * r_operator.shift(shift_index, axis=0)
@@ -718,6 +732,13 @@ class UsadelKeldyshEvolution:
                     m_operator.shift(shift_index, axis=0) * g_matrix.shift(-1, axis=0).shift(-1, axis=1).shift(shift_index, axis=1) * r_operator.shift(shift_index, axis=0)
                 ))
 
+                # # 6. Diagonal history correction: Missing g_matrix[0] contribution from line 676
+                # # Line 676 uses g_matrix[1:-1] - missing first element at t_init
+                # diagonal_term_history_list.append((
+                #     interior_factor * l_operator[-2] * g_last_row[:, 0] * m_operator[0],  # L(t-dt) * g_last(t_init) * M(t_init)
+                #     g_matrix[0].shift(-1, axis=1) * r_operator + g_matrix[0].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)
+                # ))
+
             # ========== Type 6: Mixed left-right ∫_{-∞}^t L(t,t'')·g(t'',t')·R(t') dt'' ==========
             elif type_num == 6:
                 # From LaTeX Eq. (Type 6, line ~487):
@@ -736,7 +757,7 @@ class UsadelKeldyshEvolution:
                 # 2a. Diagonal boundary terms: L(t-δt, t-δt)·g(t-δt, t')·R(t') (Eq. 505)
 
                 # Extract diagonal correction term (Type 6)
-                diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], r_operator))
+                #diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], r_operator))
 
                 v_old_boundary_1 = boundary_factor * l_operator[-2, -2] * g_last_row.shift(-1, axis=1) * r_operator
                 v_old_boundary_2 = boundary_factor * l_operator[-2, -2] * g_last_row.shift(-1, axis=1).shift(shift_index, axis=1) * r_operator.shift(shift_index, axis=0)
@@ -776,6 +797,18 @@ class UsadelKeldyshEvolution:
                 # 5. V_crt_conv = 0 (Eq. 504)
                 # Per line 513: all interior sums have t'' < t, so no V_crt_conv
 
+                # # 6. Diagonal history corrections: Missing g_matrix[0] contributions
+                # # Line 766 uses g_matrix[1:-1] - missing first element at t_init
+                # diagonal_term_history_list.append((
+                #     interior_factor * l_operator[-2, 0],  # L(t-dt, t_init)
+                #     g_matrix[0].shift(-1, axis=1) * r_operator + g_matrix[0].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)
+                # ))
+                # # Line 770 uses g_matrix[1:] - missing first element at t_init
+                # diagonal_term_history_list.append((
+                #     interior_factor * l_operator[-1, 0],  # L(t, t_init)
+                #     g_matrix[0].shift(-1, axis=1) * r_operator + g_matrix[0].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)
+                # ))
+
             # ========== Type 7: Mixed right-left L(t)·∫_{-∞}^{t'} g(t,t'')·R(t'',t') dt'' ==========
             elif type_num == 7:
                 # F(t,t') = L(t)·∫_{-∞}^{t'} g(t,t'')·R(t'',t') dt''
@@ -796,7 +829,7 @@ class UsadelKeldyshEvolution:
                 # 2a. Boundary terms at diagonal: L(t-δt)·g(t-δt, t')·R(t', t') (Eq. 564)
 
                 # Extract diagonal correction term (Type 7)
-                diagonal_term_factor_list.append((boundary_factor * l_operator[-2], r_diagonal))
+                #diagonal_term_factor_list.append((boundary_factor * l_operator[-2], r_diagonal))
 
                 v_old_boundary_1 = boundary_factor * l_operator[-2] * g_last_row.shift(-1, axis=1) * r_diagonal
                 v_old_boundary_2 = boundary_factor * l_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
@@ -931,6 +964,9 @@ class UsadelKeldyshEvolution:
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
         expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
 
+        diag_g_factor_list = []
+        diag_g_history_list = []
+
         gr = state.gr
         gk = state.gk
         ga = state._r2a()  # g^A = -(g^R)†
@@ -946,7 +982,8 @@ class UsadelKeldyshEvolution:
         gk_full = gk
         #* this assumes that gr_last_row has correct time index and not shifted t' index, midpoint rule automatically applied
         rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:]).shift(-1, axis = 1)
-        #! should also have a diagonal contribution here! at the last element explicitly
+        diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)]
+
         rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1) + gr_last_row.precise_convolution_left(self.thermal_dist, self.thermal_integral[-1:,:], self.delta_t, other_index=-1) * tau3)
         rhs_vector = rhs_term_1 
 
@@ -960,12 +997,11 @@ class UsadelKeldyshEvolution:
         # No sandwich terms for this constraint
         g_sandwich_matrices = []
 
-        return (left_matrix, right_matrix, rhs_vector,
-                rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices)
+        return (left_matrix, right_matrix, rhs_vector, rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices, diag_g_factor_list, diag_g_history_list)
 
     # ========== Real-Time Evolution ==========
 
-    def generalized_g_update_rule(self, g_type, diagonal_entry, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_vector_1, rhs_vector_2, rhs_vector_history_1_list, rhs_vector_history_2_list,rhs_vector_factor_1_list, rhs_vector_factor_2_list, g_sandwich_matrices = [], diagonal_term_factor_1_list=[], diagonal_term_factor_2_list=[]):
+    def generalized_g_update_rule(self, g_type, diagonal_entry, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_vector_1, rhs_vector_2, rhs_vector_history_1_list, rhs_vector_history_2_list,rhs_vector_factor_1_list, rhs_vector_factor_2_list, g_sandwich_matrices = [], diagonal_term_factor_1_list=[], diagonal_term_factor_2_list=[], diagonal_term_history_1_list=[], diagonal_term_history_2_list=[]):
         if g_type == 'r':
             trace_index_list = [1,2,3,0]
             loop_start = self.ntpoints - 2
@@ -1015,6 +1051,7 @@ class UsadelKeldyshEvolution:
         #* smallest error is given by a weird condition, this has to be understood better
         #* computing g(t,t') given all matrices and convolutions are defined w.r.t. (t,t') themselves.
         for time in range(loop_start, loop_end, loop_step):
+
             previous_solution = solution_tensor[solution_tensor_index]
             convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
             convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
@@ -1053,20 +1090,32 @@ class UsadelKeldyshEvolution:
             # ========== Diagonal correction for g^K ==========
             # Apply boundary terms that were zeroed by g_last_row.shift(-1, axis=1)
             # Only applies when computing diagonal element: time == loop_end - loop_step
+            #print(solution_tensor.shape)
             if g_type == 'k' and time == loop_end - loop_step:
                 # For g^K: loop_end=ntpoints, loop_step=1, so diagonal at time=ntpoints-1
                 # diagonal_entry holds g^K(t-δt, t-δt) which is the needed boundary value
-
                 for terms in diagonal_term_factor_1_list:
                     left_term = terms[0]
                     right_term = terms[1]
                     # Pattern: left_term * g_diagonal_current * right_term[time]
-                    convolution_term_1 += left_term * diagonal_entry * right_term[time]
+                    convolution_term_1 += left_term * tau3 * previous_solution.dagger() * tau3 * right_term
 
                 for terms in diagonal_term_factor_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    convolution_term_2 += left_term * diagonal_entry * right_term[time] 
+                    convolution_term_2 += left_term * tau3 * previous_solution.dagger() * tau3 * right_term
+
+                # NEW: Diagonal history convolution terms
+                # These involve convolution with the diagonal element from g_matrix[0]
+                for terms in diagonal_term_history_1_list:
+                    left_term = terms[0]
+                    right_term = terms[1]
+                    convolution_term_1 += left_term[-1,:-1] @ (tau3 * solution_tensor[1:].dagger() * tau3 * right_term)
+
+                for terms in diagonal_term_history_2_list:
+                    left_term = terms[0]
+                    right_term = terms[1]
+                    convolution_term_2 += left_term[-1,:-1] @ (tau3 * solution_tensor[1:].dagger() * tau3 * right_term)
 
             total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
             #print('total_matrix',total_matrix.shape)
@@ -1088,7 +1137,6 @@ class UsadelKeldyshEvolution:
             return solution_tensor[:-1]
         elif g_type == 'k':
             return solution_tensor
-
 
     def _compute_new_gr_row(self, state, A_history=None):
         """
@@ -1143,7 +1191,7 @@ class UsadelKeldyshEvolution:
              'type5_em_2': {'L': expansion_tensor,'M': A_tensor * tau3,'R': -1j * A_tensor * tau3}
             }  
 
-        L1, R1, V1, Vhist1, Vfact1, sandwich1, _, _ =  self.construct_discrete_operators(evolution_terms, state, gap_tensor, g_type='r')
+        L1, R1, V1, Vhist1, Vfact1, sandwich1, diag_factor_list, diag_hist_list =  self.construct_discrete_operators(evolution_terms, state, gap_tensor, g_type='r')
 
         # ========== 4. Add derivative corrections and source terms ==========
         gr_last_row = state.gr[-1:, :]
@@ -1187,7 +1235,11 @@ class UsadelKeldyshEvolution:
             rhs_vector_history_2_list=Vhist2,
             rhs_vector_factor_1_list=Vfact1,
             rhs_vector_factor_2_list=Vfact2,
-            g_sandwich_matrices=sandwich1
+            g_sandwich_matrices=sandwich1,
+            diagonal_term_factor_1_list=[],
+            diagonal_term_factor_2_list=[],
+            diagonal_term_history_1_list=[],
+            diagonal_term_history_2_list=[]
         )
         return gr_new, gr_diagonal_new 
 
@@ -1280,7 +1332,7 @@ class UsadelKeldyshEvolution:
             evolution_terms['type4_em_B1'] = {'R': R_em_conv_B1}
             evolution_terms['type4_em_B2'] = {'R': R_em_conv_B2}
 
-        L1, R1, V1, Vhist1, Vfact1, sandwich1, diag_factor_list, diag_hist_list = self.construct_discrete_operators(evolution_terms, state, gap_tensor, g_type='k')
+        L1, R1, V1, Vhist1, Vfact1, sandwich1, diag_factor_list_1, diag_hist_list_1 = self.construct_discrete_operators(evolution_terms, state, gap_tensor, g_type='k')
 
         # ========== 3. Add derivative corrections ==========
         gk_last_row = state.gk[-1:, :]
@@ -1301,6 +1353,8 @@ class UsadelKeldyshEvolution:
         v_old_deriv = ((1j/2) * tau3 * gk_last_row.shift(-1, axis=1) - (1j/2) * gk_last_row.shift(-1, axis=1) * tau3
                        + (1j/2) * tau3 * gk_last_row
                        + (1j/2) * gk_last_row * tau3)
+
+        diag_factor_list_1 += [((1j/2) * tau3, tau0), (tau0, -(1j/2) * tau3)]
 
         # ========== 4. Compute and add ALL source terms to V1 ==========
         # V1 already contains V_old from construct_discrete_operators
@@ -1324,6 +1378,8 @@ class UsadelKeldyshEvolution:
         #* careful with the - signs since they should be added, overall indexing here should be trivial 
         #* to minimize the number of convolutions, we can also group together different convoluted terms maybe?
 
+        #! check the t,t' indices here
+        #! vector potential terms need to be heavily checked!!  
         cn_factor = 1/4 * self.delta_t
         thermal_term = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
 
@@ -1432,10 +1488,9 @@ class UsadelKeldyshEvolution:
 
             V1 = V1 + em_thermal_conv2
         # ========== 5. Build Keldysh constraint operators ==========
-        L2, R2, V2, Vhist2, Vfact2, sandwich2 = self.get_gk_constraint(state, gap_tensor)
+        L2, R2, V2, Vhist2, Vfact2, sandwich2, diag_factor_list_2, diag_hist_list_2 = self.get_gk_constraint(state, gap_tensor)
 
         # ========== 6. Call unified solver with diagonal corrections ==========
-        # Boundary condition: g^K(t-δt, t-δt) for diagonal corrections
         gk_diagonal_boundary = state.gk[-1, 0]  # g^K(t-δt, t-δt)
 
         gk_new = self.generalized_g_update_rule(
@@ -1452,13 +1507,15 @@ class UsadelKeldyshEvolution:
             rhs_vector_factor_1_list=Vfact1,
             rhs_vector_factor_2_list=Vfact2,
             g_sandwich_matrices=sandwich1,
-            diagonal_term_factor_1_list=diag_factor_list,
-            diagonal_term_factor_2_list=diag_hist_list
+            diagonal_term_factor_1_list=diag_factor_list_1,
+            diagonal_term_factor_2_list=diag_factor_list_2,
+            diagonal_term_history_1_list=diag_hist_list_1,
+            diagonal_term_history_2_list=diag_hist_list_2
         )
 
         # Extract diagonal element from unified result
         gk_diagonal_new = gk_new[-1]
-        gk_diagonal_new = gk_last_row[-1,-1]
+        #gk_diagonal_new = gk_last_row[-1,-1]
         return gk_new[:-1], gk_diagonal_new
 
     def _evolve_state_by_one_timestep(self, state, A_external=None):

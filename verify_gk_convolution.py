@@ -62,6 +62,194 @@ def plot_gap_vs_time(time_grid, gap_eq, gap_evolved=None, filename='gap_evolutio
     # print(f"  Saved: {filename}")
 
 
+def plot_normalization_checks(state, time_grid, thermal_dist, thermal_integral, state_name='State', t1_idx=-1):
+    """
+    Plot g^R and g^K normalization checks for the last row.
+
+    Args:
+        state: StateObject with Green's functions
+        time_grid: Array of time values
+        thermal_dist: Thermal distribution f(t,t')
+        thermal_integral: Integral of thermal distribution F(t,t')
+        state_name: Name for plot title (e.g., 'Equilibrium', 'Evolved')
+        t1_idx: Time index to check (default -1 for last row)
+    """
+    print(f"\nChecking {state_name} normalization relations for last row (t1_idx={t1_idx})...")
+
+    # ========== g^R Normalization ==========
+    print("\n  Computing g^R normalization...")
+    gr_errors, gr_totals = state.check_gr_normalization(t1_idx)
+
+    # Extract Pauli components from totals
+    gr_tau0 = gr_totals[0, :]
+    gr_tau1 = gr_totals[1, :]
+    gr_tau2 = gr_totals[2, :]
+    gr_tau3 = gr_totals[3, :]
+
+    print(f"    Maximum g^R normalization error: {np.max(gr_errors):.6e}")
+
+    # ========== g^K Normalization ==========
+    print("\n  Computing g^K normalization...")
+    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(t1_idx, thermal_dist, thermal_integral)
+
+    # Extract Pauli components from totals
+    gk_tau0 = gk_totals[0, :]
+    gk_tau1 = gk_totals[1, :]
+    gk_tau2 = gk_totals[2, :]
+    gk_tau3 = gk_totals[3, :]
+
+    print(f"    Maximum g^K normalization error: {np.max(gk_errors):.6e}")
+
+    # ========== Plot g^R Normalization ==========
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    pauli_names = ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)']
+    gr_components = [gr_tau0, gr_tau1, gr_tau2, gr_tau3]
+
+    for ax, pauli_name, component in zip(axes.flat, pauli_names, gr_components):
+        # Plot real and imaginary parts
+        ax.plot(time_grid[:len(component)], np.real(component), 'b-', linewidth=2,
+                label='Real part', alpha=0.7)
+        ax.plot(time_grid[:len(component)], np.imag(component), 'r-', linewidth=2,
+                label='Imaginary part', alpha=0.7)
+
+        ax.set_xlabel("t₂ (time)", fontsize=10)
+        ax.set_ylabel(f'Normalization violation - {pauli_name}', fontsize=10)
+        ax.set_title(f'g^R Normalization: {pauli_name}', fontsize=11, fontweight='bold')
+        ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], 0])
+
+    plt.tight_layout()
+    plt.suptitle(f'{state_name} State: g^R Normalization Check (Last Row)',
+                 fontsize=14, fontweight='bold', y=1.00)
+    plt.show()
+
+    # ========== Plot g^K Normalization ==========
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    gk_components_list = [gk_tau0, gk_tau1, gk_tau2, gk_tau3]
+
+    for ax, pauli_name, component in zip(axes.flat, pauli_names, gk_components_list):
+        # Plot real and imaginary parts
+        ax.plot(time_grid, np.real(component), 'b-', linewidth=2,
+                label='Real part', alpha=0.7)
+        ax.plot(time_grid, np.imag(component), 'r-', linewidth=2,
+                label='Imaginary part', alpha=0.7)
+
+        ax.set_xlabel("t₂ (time)", fontsize=10)
+        ax.set_ylabel(f'Normalization violation - {pauli_name}', fontsize=10)
+        ax.set_title(f'g^K Normalization: {pauli_name}', fontsize=11, fontweight='bold')
+        ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], 0])
+
+    plt.tight_layout()
+    plt.suptitle(f'{state_name} State: g^K Normalization Check (Last Row)',
+                 fontsize=14, fontweight='bold', y=1.00)
+    plt.show()
+
+    # Print statistics
+    print(f"\n  g^R normalization errors by Pauli component:")
+    for pauli_name, component in zip(pauli_names, gr_components):
+        max_err = np.max(np.abs(component))
+        print(f"    {pauli_name}: max error = {max_err:.6e}")
+
+    print(f"\n  g^K normalization errors by Pauli component:")
+    for pauli_name, component in zip(pauli_names, gk_components_list):
+        max_err = np.max(np.abs(component))
+        print(f"    {pauli_name}: max error = {max_err:.6e}")
+
+
+def plot_fdt_check(state, time_grid, thermal_dist, thermal_integral, state_name='State', time_index=-1):
+    """
+    Plot FDT relation check: g^K vs (g^R @ f - f @ g^A).
+
+    Shows actual g^K, FDT prediction, and error for each Pauli component.
+
+    Args:
+        state: StateObject with Green's functions
+        time_grid: Array of time values
+        thermal_dist: Thermal distribution f(t,t')
+        thermal_integral: Integral of thermal distribution F(t,t')
+        state_name: Name for plot title (e.g., 'Equilibrium', 'Evolved')
+        time_index: Time index to check (default -1 for last row)
+    """
+    print(f"\n{state_name} State: FDT Check for row at time_index={time_index}")
+
+    # Compute FDT using precise convolution
+    gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(
+        thermal_dist,
+        thermal_integral,
+        time_index=time_index
+    )
+
+    print(f"  Maximum absolute error: {max_error:.6e}")
+
+    # Extract Pauli components
+    pauli_names = ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)']
+
+    # Create figure with 2x2 grid (one subplot per Pauli component)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    for pauli_idx, pauli_name in enumerate(pauli_names):
+        # Extract Pauli components using trace
+        gk_actual_pauli = gk_actual_row.trace(pauli_idx) / 2  # Shape: (1, Nt)
+        gk_fdt_pauli = gk_fdt_row.trace(pauli_idx) / 2
+        error_pauli = error_row.trace(pauli_idx) / 2
+
+        # Flatten to 1D arrays
+        gk_actual_pauli = gk_actual_pauli[0, :]
+        gk_fdt_pauli = gk_fdt_pauli[0, :]
+        error_pauli = error_pauli[0, :]
+
+        # Get subplot position (2x2 grid)
+        ax = axes.flat[pauli_idx]
+
+        # Plot actual g^K (solid lines)
+        ax.plot(time_grid, np.real(gk_actual_pauli), 'b-', linewidth=2,
+                label='Actual (Real)', alpha=0.8)
+        ax.plot(time_grid, np.imag(gk_actual_pauli), 'r-', linewidth=2,
+                label='Actual (Imag)', alpha=0.8)
+        # Plot FDT prediction (dashed lines)
+        ax.plot(time_grid, np.real(gk_fdt_pauli), 'b--', linewidth=2,
+                label='FDT (Real)', alpha=0.6)
+        ax.plot(time_grid, np.imag(gk_fdt_pauli), 'r--', linewidth=2,
+                label='FDT (Imag)', alpha=0.6)
+
+        ax.set_xlabel('Time t\'', fontsize=10)
+        ax.set_ylabel(f'g^K - {pauli_name}', fontsize=10)
+        ax.set_title(f'{pauli_name}', fontsize=11, fontweight='bold')
+        ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], time_grid[-1]])
+
+        # Compute max error for this component
+        max_err = np.max(np.abs(error_pauli))
+        max_val = np.max(np.abs(gk_actual_pauli))
+        rel_err = max_err / (max_val + 1e-10) * 100
+
+        # Add error info as text in corner
+        ax.text(0.02, 0.98, f'max err: {max_err:.2e}\nrel: {rel_err:.1f}%',
+                transform=ax.transAxes, fontsize=8,
+                verticalalignment='top', horizontalalignment='left',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+    plt.suptitle(f'{state_name} State: FDT Relation Check (Row at t={time_grid[time_index]:.3f})',
+                 fontsize=14, fontweight='bold', y=0.998)
+    plt.subplots_adjust(top=0.97)
+    plt.show()
+
+    # Print component-wise statistics
+    print(f"\n  FDT errors by Pauli component:")
+    for pauli_idx, pauli_name in enumerate(pauli_names):
+        gk_actual_pauli = gk_actual_row.trace(pauli_idx) / 2
+        error_pauli = error_row.trace(pauli_idx) / 2
+        max_err = np.max(np.abs(error_pauli))
+        max_val = np.max(np.abs(gk_actual_pauli))
+        rel_err = max_err / (max_val + 1e-10) * 100
+        print(f"    {pauli_name}: max|error| = {max_err:.6e}, relative = {rel_err:.2f}%")
+
+
 def main():
     print("="*70)
     print("Verify Equilibrium g^K - FDT Relation in Two-Time Domain")
@@ -142,6 +330,61 @@ def main():
     print(f"  F(0) = {np.real(F_zero):.6f} (expected BCS value: {F_zero_expected:.6f})")
     print()
 
+    # ========== Plot Thermal Distribution Properties ==========
+    print("Plotting thermal distribution and integral properties...")
+
+    # Extract f(t,t') and F(t,t') data (tau0 component)
+    f_data = thermal_dist.trace(pauli_index=0) / 2.0  # Shape: (N_t, N_t)
+    F_data = thermal_integral.trace(pauli_index=0) / 2.0  # Shape: (N_t, N_t)
+
+    # Compute sums: ∫ f(t,t') dt' and ∫ f(t,t') dt
+    dt = evolution.delta_t
+    sum_over_tprime = np.sum(f_data, axis=1) * dt  # Sum over t' for each t
+    sum_over_t = np.sum(f_data, axis=0) * dt  # Sum over t for each t'
+
+    # Extract last row of thermal integral: F(t=-1, t')
+    F_last_row = F_data[-1, :]
+
+    # Create single plot with real and imaginary parts
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Real parts
+    ax1.plot(time_grid, np.real(F_last_row), 'b-', linewidth=2, label='F(t=-1, t\')', alpha=0.8)
+    ax1.plot(time_grid, np.real(sum_over_tprime), 'r--', linewidth=2, label='∫ f(t,t\') dt\'', alpha=0.8)
+    ax1.plot(time_grid, np.real(sum_over_t), 'g-.', linewidth=2, label='∫ f(t,t\') dt', alpha=0.8)
+    ax1.set_xlabel("t'", fontsize=11)
+    ax1.set_ylabel("Real part", fontsize=11)
+    ax1.set_title("Thermal Integral - Real Part", fontsize=12, fontweight='bold')
+    ax1.legend(fontsize=10)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim([time_grid[0], time_grid[-1]])
+
+    # Plot 2: Imaginary parts
+    ax2.plot(time_grid, np.imag(F_last_row), 'b-', linewidth=2, label='F(t=-1, t\')', alpha=0.8)
+    ax2.plot(time_grid, np.imag(sum_over_tprime), 'r--', linewidth=2, label='∫ f(t,t\') dt\'', alpha=0.8)
+    ax2.plot(time_grid, np.imag(sum_over_t), 'g-.', linewidth=2, label='∫ f(t,t\') dt', alpha=0.8)
+    ax2.set_xlabel("t'", fontsize=11)
+    ax2.set_ylabel("Imaginary part", fontsize=11)
+    ax2.set_title("Thermal Integral - Imaginary Part", fontsize=12, fontweight='bold')
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlim([time_grid[0], time_grid[-1]])
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print statistics
+    print(f"  F(t=-1, t') statistics:")
+    print(f"    Real: min={np.min(np.real(F_last_row)):.6e}, max={np.max(np.real(F_last_row)):.6e}")
+    print(f"    Imag: min={np.min(np.imag(F_last_row)):.6e}, max={np.max(np.imag(F_last_row)):.6e}")
+    print(f"  ∫ f(t,t') dt' statistics:")
+    print(f"    Real: min={np.min(np.real(sum_over_tprime)):.6e}, max={np.max(np.real(sum_over_tprime)):.6e}")
+    print(f"    Imag: min={np.min(np.imag(sum_over_tprime)):.6e}, max={np.max(np.imag(sum_over_tprime)):.6e}")
+    print(f"  ∫ f(t,t') dt statistics:")
+    print(f"    Real: min={np.min(np.real(sum_over_t)):.6e}, max={np.max(np.real(sum_over_t)):.6e}")
+    print(f"    Imag: min={np.min(np.imag(sum_over_t)):.6e}, max={np.max(np.imag(sum_over_t)):.6e}")
+    print()
+
     # ========== Check FDT Using StateObject Method ==========
     print("Checking FDT relation using check_fdt() method...")
     print("Computing regularized FDT convolution for last time row...")
@@ -157,97 +400,18 @@ def main():
     print(f"  Maximum absolute error: {max_error:.6e}")
     print()
 
-    # ========== Compute Errors for Each Pauli Component ==========
-    print("Analyzing FDT errors for last row g^K(t_max, t')...")
-
-    time_grid = evolution.time_grid
-
-    # Compute errors for each Pauli component using trace method
-    print("\nLast row g^K(t_max, t') errors:")
-    for pauli_idx, pauli_name in enumerate(['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)']):
-        # Use trace to extract Pauli components
-        gk_actual_pauli = gk_actual_row.trace(pauli_idx) / 2
-        gk_fdt_pauli = gk_fdt_row.trace(pauli_idx) / 2
-        error_pauli = error_row.trace(pauli_idx) / 2
-
-        max_error_pauli = np.max(np.abs(error_pauli))
-        max_val = np.max(np.abs(gk_actual_pauli))
-        rel_error = max_error_pauli / (max_val + 1e-10)
-
-        print(f"  {pauli_name}: max|Δg^K| = {max_error_pauli:.6e}, relative = {rel_error*100:.2f}%")
-
-    # ========== Plot Last Row Elements ==========
-    print("\nPlotting last row g^K(t_max, t')...")
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-    for pauli_idx, (ax, pauli_name) in enumerate(zip(axes.flat, ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)'])):
-        # Extract Pauli components using trace method
-        gk_actual_pauli = gk_actual_row.trace(pauli_idx) / 2
-        gk_fdt_pauli = gk_fdt_row.trace(pauli_idx) / 2
-
-        # Plot real and imaginary parts
-        ax.plot(time_grid, np.real(gk_actual_pauli[0, :]), 'b-', linewidth=2,
-                label='g^K actual (Re)', alpha=0.7)
-        ax.plot(time_grid, np.real(gk_fdt_pauli[0, :]), 'r--', linewidth=1.5,
-                label='FDT prediction (Re)', alpha=0.7)
-        ax.plot(time_grid, np.imag(gk_actual_pauli[0, :]), 'c-', linewidth=2,
-                label='g^K actual (Im)', alpha=0.7)
-        ax.plot(time_grid, np.imag(gk_fdt_pauli[0, :]), 'm--', linewidth=1.5,
-                label='FDT prediction (Im)', alpha=0.7)
-
-        ax.set_xlabel("t' (time)", fontsize=10)
-        ax.set_ylabel(f'g^K(t_max, t\') - {pauli_name}', fontsize=10)
-        ax.set_title(f'Last Row: {pauli_name}', fontsize=11, fontweight='bold')
-        ax.legend(fontsize=8, loc='best')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim([time_grid[0], 0])
-
-    plt.tight_layout()
-    plt.suptitle('Equilibrium State: FDT Verification', fontsize=14, fontweight='bold', y=1.00)
-    plt.show()
-
-    # ========== Diagnostic: Near-Diagonal Error Analysis ==========
-    print()
-    print("="*70)
-    print("Near-Diagonal FDT Error Analysis")
-    print("="*70)
+    # ========== Plot FDT Check for Equilibrium ==========
+    print("Plotting FDT check for equilibrium state...")
+    plot_fdt_check(equilibrium_state, time_grid, thermal_dist, thermal_integral,
+                   state_name='Equilibrium', time_index=-1)
     print()
 
-    # Extract distance from diagonal
-    n_points = len(time_grid)
-    distances = np.abs(np.arange(n_points) - (n_points-1))
-
-    # Error for each Pauli component
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-    for pauli_idx, (ax, pauli_name) in enumerate(zip(axes.flat, ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)'])):
-        error_pauli = error_row.trace(pauli_idx) / 2
-        error_magnitude = np.abs(error_pauli[0, :])
-
-        # Plot on log scale
-        ax.semilogy(distances, error_magnitude, 'b.-', linewidth=2, markersize=4, label='FDT Error')
-        ax.axvline(x=1, color='r', linestyle='--', alpha=0.5, label='1 step off')
-        ax.axvline(x=2, color='g', linestyle='--', alpha=0.5, label='2 steps off')
-        ax.axvline(x=3, color='orange', linestyle='--', alpha=0.5, label='3 steps off')
-
-        # Print statistics
-        near_diag_mask = distances <= 3
-        far_diag_mask = distances > 10
-        near_error = np.mean(error_magnitude[near_diag_mask])
-        far_error = np.mean(error_magnitude[far_diag_mask])
-        print(f"{pauli_name}: near-diag error = {near_error:.6e}, far-diag error = {far_error:.6e}, ratio = {near_error/far_error:.1f}x")
-
-        ax.set_xlabel('Distance from diagonal (Δt units)', fontsize=10)
-        ax.set_ylabel(f'|FDT Error| - {pauli_name}', fontsize=10)
-        ax.set_title(f'FDT Error vs Distance: {pauli_name}', fontsize=11, fontweight='bold')
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim([0, 50])
-
-    plt.tight_layout()
-    plt.suptitle('Equilibrium State: FDT Error vs Distance', fontsize=14, fontweight='bold', y=1.00)
-    plt.show()
+    # ========== Check Equilibrium Normalization Relations ==========
+    print()
+    print("="*70)
+    print("Equilibrium State: Normalization Checks")
+    print("="*70)
+    plot_normalization_checks(equilibrium_state, time_grid, thermal_dist, thermal_integral, state_name='Equilibrium', t1_idx=-1)
     print()
 
     # ========== Check FDT for Evolved State ==========
@@ -297,49 +461,19 @@ def main():
         print(f"  Ratio (evolved/equilibrium): {max_error_evolved/max_error:.2f}x")
         print()
 
-        # Analyze errors for each Pauli component
-        print("Evolved state g^K(t_max, t') FDT errors:")
-        for pauli_idx, pauli_name in enumerate(['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)']):
-            gk_actual_pauli = gk_actual_evolved.trace(pauli_idx) / 2
-            gk_fdt_pauli = gk_fdt_evolved.trace(pauli_idx) / 2
-            error_pauli = error_evolved.trace(pauli_idx) / 2
+        # ========== Plot FDT Check for Evolved State ==========
+        print("Plotting FDT check for evolved state...")
+        plot_fdt_check(evolved_state, time_grid, thermal_dist, thermal_integral,
+                       state_name='Evolved', time_index=-1)
+        print()
 
-            max_error_pauli = np.max(np.abs(error_pauli))
-            max_val = np.max(np.abs(gk_actual_pauli))
-            rel_error = max_error_pauli / (max_val + 1e-10)
-
-            print(f"  {pauli_name}: max|Δg^K| = {max_error_pauli:.6e}, relative = {rel_error*100:.2f}%")
-
-        # ========== Plot Evolved State Last Row ==========
-        print("\nPlotting evolved state g^K(t_max, t')...")
-
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-        for pauli_idx, (ax, pauli_name) in enumerate(zip(axes.flat, ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)'])):
-            # Extract Pauli components using trace method
-            gk_actual_pauli = gk_actual_evolved.trace(pauli_idx) / 2
-            gk_fdt_pauli = gk_fdt_evolved.trace(pauli_idx) / 2
-
-            # Plot real and imaginary parts
-            ax.plot(time_grid, np.real(gk_actual_pauli[0, :]), 'b-', linewidth=2,
-                    label='g^K actual (Re)', alpha=0.7)
-            ax.plot(time_grid, np.real(gk_fdt_pauli[0, :]), 'r--', linewidth=1.5,
-                    label='FDT prediction (Re)', alpha=0.7)
-            ax.plot(time_grid, np.imag(gk_actual_pauli[0, :]), 'c-', linewidth=2,
-                    label='g^K actual (Im)', alpha=0.7)
-            ax.plot(time_grid, np.imag(gk_fdt_pauli[0, :]), 'm--', linewidth=1.5,
-                    label='FDT prediction (Im)', alpha=0.7)
-
-            ax.set_xlabel("t' (time)", fontsize=10)
-            ax.set_ylabel(f'g^K(t_max, t\') - {pauli_name}', fontsize=10)
-            ax.set_title(f'Evolved State Last Row: {pauli_name}', fontsize=11, fontweight='bold')
-            ax.legend(fontsize=8, loc='best')
-            ax.grid(True, alpha=0.3)
-            ax.set_xlim([time_grid[0], 0])
-
-        plt.tight_layout()
-        plt.suptitle('Evolved State: FDT Verification', fontsize=14, fontweight='bold', y=1.00)
-        plt.show()
+        # ========== Check Evolved State Normalization Relations ==========
+        print()
+        print("="*70)
+        print("Evolved State: Normalization Checks")
+        print("="*70)
+        plot_normalization_checks(evolved_state, time_grid, thermal_dist, thermal_integral, state_name='Evolved', t1_idx=-1)
+        print()
 
     except FileNotFoundError:
         print("⚠ simulated_state.pkl not found - skipping evolved state FDT check")

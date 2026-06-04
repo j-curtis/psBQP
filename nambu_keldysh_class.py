@@ -227,21 +227,55 @@ class NambuKeldyshTensor:
             # gr @ f with regularization on f
             result = gr_row.precise_convolution_left(f_thermal, f_integral, dt, other_index=-1)
         """
+        # ========== Input shape validation for midpoint rule ==========
+        # Check that self is a row: (2,2,1,N_t)
+        if self.data.ndim != 4 or self.data.shape[:3] != (2, 2, 1):
+            raise ValueError(
+                f"precise_convolution_left requires self to have shape (2,2,1,N_t) for proper midpoint rule.\n"
+                f"Got shape {self.data.shape}. The third dimension must be 1 (row tensor)."
+            )
+
+        # Check that other is a full matrix: (2,2,N_t,N_t')
+        if other.data.ndim != 4 or other.data.shape[:2] != (2, 2):
+            raise ValueError(
+                f"precise_convolution_left requires other to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
+                f"Got shape {other.data.shape}."
+            )
+
+        # Check contraction dimension compatibility: self.shape[-1] == other.shape[2]
+        N_t_self = self.data.shape[3]
+        N_t_other = other.data.shape[2]
+        if N_t_self != N_t_other:
+            raise ValueError(
+                f"Contraction dimension mismatch: self has N_t={N_t_self} but other has N_t={N_t_other}.\n"
+                f"Expected shapes: self=(2,2,1,{N_t_other}), other=(2,2,{N_t_other},N_t').\n"
+                f"Got: self={self.data.shape}, other={other.data.shape}"
+            )
+
         # Create ones tensor as a row vector (identity in Nambu space)
         # Shape: (2, 2, 1, N_t) where N_t is the last dimension of other
         # pauli_channel=0 automatically creates the (2,2) identity structure
         ones_data = np.ones((1, other.data.shape[-2]), dtype=complex)
         ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+        N_t = self.data.shape[-1]
 
-        # Check if self is a row (shape: 2, 2, 1, N_t)
+        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3)), pauli_channel=0)
+
+
+        # Check if self is a row (shape: 2, 2, 1, N_t) - already validated above
         is_self_row = (self.data.shape[2] == 1)
 
         # Standard convolution (always uses full other)
-        #* midpoint rule, weighted last term by 1/2
-        result_std = (self @ other) * dt - 1/2 * (self[-1:,-1] * other[-1:,:]) * dt 
+        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
+        first_endpoint_std = self[:,0:1] * other[0,:]
+        last_endpoint_std = self[:,-1:] * other[-1,:]
+        result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
 
         # Factored term (non-analytic contribution)
-        result_fact = (self * (ones_tensor @ other)) * dt - 1/2 *  (self * (ones_tensor[-1:, -1] * other[-1:, :])) * dt 
+        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
+        first_endpoint_fact = self * (ones_tensor[:,0:1] * other[0,:])
+        last_endpoint_fact = self * (ones_tensor[:,-1:] * other[-1,:])
+        result_fact = (self * (ones_tensor @ other)) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact 
 
         # For analytic term: use row of other_integral if self is a row
         if is_self_row:
@@ -260,11 +294,11 @@ class NambuKeldyshTensor:
         # Analytic term (using integral)
         result_anal = self * other_integral_for_reg
         # Combine: standard - factored + analytic
-        return result_std - result_fact + result_anal
+        #* doesnt play a major role apart from diagonal element
+        return result_std + (- result_fact + result_anal) * filter_function
+
 
     def precise_convolution_right(self, other, other_integral, dt, self_index = -1):
-        #TODO: check the midpoint rule is implemented appropriately, are we subtracting the last term in the sum?
-
         """
         Compute regularized right convolution: other @ self (regularized).
 
@@ -295,21 +329,54 @@ class NambuKeldyshTensor:
             # f @ ga with regularization on f
             result = ga.precise_convolution_right(f_thermal, f_integral, dt)
         """
-        # Create ones tensor as a column vector (identity in Nambu space)
-        # Shape: (2, 2, N_t, 1) where N_t is from other
-        # pauli_channel=0 automatically creates the (2,2) identity structure
-        ones_data = np.ones((other.data.shape[-1], 1), dtype=complex)
-        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+        # ========== Input shape validation for midpoint rule ==========
+        # Check that other is a row: (2,2,1,N_t)
+        if other.data.ndim != 4 or other.data.shape[:3] != (2, 2, 1):
+            raise ValueError(
+                f"precise_convolution_right requires other to have shape (2,2,1,N_t) for proper midpoint rule.\n"
+                f"Got shape {other.data.shape}. The third dimension must be 1 (row tensor)."
+            )
 
-        # Check if other is a row (shape: 2, 2, 1, N_t)
+        # Check that self is a full matrix: (2,2,N_t,N_t')
+        if self.data.ndim != 4 or self.data.shape[:2] != (2, 2):
+            raise ValueError(
+                f"precise_convolution_right requires self to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
+                f"Got shape {self.data.shape}."
+            )
+
+        # Check contraction dimension compatibility: other.shape[-1] == self.shape[2]
+        N_t_other = other.data.shape[3]
+        N_t_self = self.data.shape[2]
+        if N_t_other != N_t_self:
+            raise ValueError(
+                f"Contraction dimension mismatch: other has N_t={N_t_other} but self has N_t={N_t_self}.\n"
+                f"Expected shapes: other=(2,2,1,{N_t_self}), self=(2,2,{N_t_self},N_t').\n"
+                f"Got: other={other.data.shape}, self={self.data.shape}"
+            )
+
+        # Create ones tensor as a 2D matrix (identity in Nambu space)
+        # Shape: (2, 2, N_t, N_t') where ones_data[t, t'] = 1 if t < t', else 0
+        # This enforces causality: integration only up to each t'
+        # pauli_channel=0 automatically creates the (2,2) identity structure
+        N_t = other.data.shape[-1]
+        N_tprime = self.data.shape[-1]
+
+        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3)), pauli_channel=0)
+
+        # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')
+        row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
+        col_indices = np.arange(N_tprime)[np.newaxis, :]  # Shape (1, N_t')
+        ones_data = (row_indices <= col_indices).astype(complex)
+        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+        # Check if other is a row (shape: 2, 2, 1, N_t) - already validated above
         is_other_row = (other.data.shape[2] == 1)
         # Standard convolution (always uses full self)
-        #* midpoint rule, weighted last term by 1/2
-        result_std = (other @ self) * dt - 1/2 * (other[-1:,-1:] * self[-1:,:]) * dt
-
+        first_endpoint_std = other[:,0:1] * self[0,:]
+        last_endpoint_std = other[:,:] * self.diagonal_time() #*last element is self(t't') actually!
+        result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
         if is_other_row:
-            # Extract corresponding row from self
+            # Extract corresponding column from self
             # Handle negative indices properly to avoid empty slices
             N_t = self.data.shape[2]
             if self_index < 0:
@@ -317,18 +384,20 @@ class NambuKeldyshTensor:
                 positive_index = N_t + self_index
             else:
                 positive_index = self_index
-            self_for_reg = self[positive_index:positive_index+1, :]
+            self_for_reg = self.diagonal_time()
         else:
             self_for_reg = self
         # Factored term (non-analytic contribution)
-        #* midpoint rule, weighted last term by 1/2
-        result_fact = ((other @ ones_tensor) * self_for_reg) * dt - 1/2 * ((other[-1:, -1:] * ones_tensor[-1, :] * self_for_reg)) * dt
+        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
+        first_endpoint_fact = (other[:,0:1] * ones_tensor[0,:]) * self_for_reg
+        last_endpoint_fact = (other[:,:]) * self_for_reg 
+        result_fact = ((other @ ones_tensor) * self_for_reg) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact
 
         # Analytic term (using integral)
-        result_anal = other_integral * self_for_reg
-
+        result_anal = -other_integral * self_for_reg
+        #! tried subtracting different g but something went wrong, continuing with *0 for now
         # Combine: standard - factored + analytic
-        return result_std - result_fact + result_anal
+        return result_std + ( - result_fact + result_anal) * filter_function
 
     def _check_binary_shape_compatibility(self, other):
         """

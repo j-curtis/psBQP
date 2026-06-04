@@ -146,13 +146,13 @@ def main():
     grid_parameters = {
         'time_sampling': 1501,
         'time_duration': 2 * np.pi * 5,
-        'eta': 0.2
+        'eta': 0.25
     }
 
     system_parameters = {
         'critical_temperature': 1.0,
         'temperature': 0.3,
-        'eta': 0.2
+        'eta': 0.25
     }
 
     print("Grid parameters:")
@@ -195,7 +195,7 @@ def main():
 
     # Evolve from initial state for 200 steps
     simulated_state, gaps, currents, vector_potentials = evolution.real_time_evolution(
-        initial_state, num_timesteps= 100, A_external = vector_potential)
+        initial_state, num_timesteps= 300, A_external = vector_potential)
     print("Evolution complete!")
     print(f"  Final gap after 200 steps: {gaps[-1]:.6f}")
 

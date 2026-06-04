@@ -427,7 +427,7 @@ class UsadelKeldyshEvolution:
                         )
 
         # ========== End Shape Validation ==========
-    
+
         if g_type == 'r':
             g_matrix = state.gr
             shift_index = -1
@@ -477,11 +477,10 @@ class UsadelKeldyshEvolution:
 
                 # 2. V_old contribution: (1/4)·L(t-δt)·[g(t-δt,t') + g(t-δt,t'+δt)]
                 #* g_last row is computed in the old time domain generally so we shift by -1 to bring it to the correct new t' basis, same for g_last_row.shift by correct index +-dt'
-
                 # Extract diagonal correction term (Type 1)
                 diagonal_term_factor_list.append((cn_factor * l_operator[-2], tau0 * expansion_tensor))
 
-                v_old_contribution = cn_factor * l_operator[-2] * (g_last_row.shift(-1, axis=1) + g_last_row.shift(shift_index-1, axis=1))
+                v_old_contribution = cn_factor * l_operator[-2] * (g_last_row.shift(-1, axis=1) + g_last_row.shift(shift_index - 1, axis=1))
 
                 if rhs_vector is None:
                     rhs_vector = -v_old_contribution
@@ -548,7 +547,7 @@ class UsadelKeldyshEvolution:
                 #* the g_matrix starts from 1 since we assume that the g_matrix corresponds to old, so last element is t-dt and last element of L operator is t and then we remove one extra last element due to trapezoid rule
                 #! check this if its correct!
                 v_old_interior_1 = interior_factor * (l_operator[-2:-1, :-2] @ (g_matrix[1:-1, :].shift(-1, axis=1) + g_matrix[1:-1, :].shift(shift_index-1, axis=1)))
-
+                #! these terms where g is on the rhs should be added to convolution list!
                 # 2c. Interior sums from F(t, ·): L(t, :) @ g, sum to t-δt (Eq. 299-300)
                 # These ALSO go to V_old because all involve g(t'', ·) with t'' < t
                 #* this summation goes until t-dt so we sum over all elements since the last one corresponds to that time label, the g_matrix starts from 1 since we assume that the g_matrix corresponds to old
@@ -938,7 +937,7 @@ class UsadelKeldyshEvolution:
 
         left_matrix = tau3 * expansion_tensor + self.delta_t * gr[-1,-1] * expansion_tensor/2
 
-        right_matrix = -tau3 * expansion_tensor + self.delta_t * ga[-1,-1] * expansion_tensor/2
+        right_matrix = -tau3 * expansion_tensor + self.delta_t * ga.diagonal_time()/2
 
         # RHS vector (V_old): mixed convolution terms + gap sources
 
@@ -953,7 +952,7 @@ class UsadelKeldyshEvolution:
 
         # Term 2: δt·Σ g'^K(t,t'')·g'^A(t'',t') from t''=-∞ to t'-δt
         # This convolution is handled via history list: (tau0 * gk_current) @ ga 
-        #* actually this ga is now in good frame
+        #* this ga is now in good frame
         rhs_vector_history_list = [(-tau0 , ga * self.delta_t)]
         # No diagonal coupling terms
         rhs_vector_factor_list = []
@@ -1016,17 +1015,13 @@ class UsadelKeldyshEvolution:
         #* smallest error is given by a weird condition, this has to be understood better
         #* computing g(t,t') given all matrices and convolutions are defined w.r.t. (t,t') themselves.
         for time in range(loop_start, loop_end, loop_step):
-            #print(solution_tensor.shape)
             previous_solution = solution_tensor[solution_tensor_index]
-            #solution_string = solution_tensor[(self.ntpoints - solution_tensor_index) % self.ntpoints: self.ntpoints - (solution_tensor_index_2) % self.ntpoints]
-            #print(solution_tensor.data.shape)
-            #Normalization convolution: Σ_{t''=t'+δt}^{t-δt} ĝ^R(t,t'') ĝ^R(t'',t')
             convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
             convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
 
             for terms in rhs_vector_factor_1_list:
                 left_term = terms[0]
-                right_term = terms[1]
+                right_term = terms[1]   
                 convolution_term_1 += (left_term * previous_solution * right_term[time])
             
             for terms in rhs_vector_factor_2_list:
@@ -1071,7 +1066,7 @@ class UsadelKeldyshEvolution:
                 for terms in diagonal_term_factor_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    convolution_term_2 += left_term * diagonal_entry * right_term[time]
+                    convolution_term_2 += left_term * diagonal_entry * right_term[time] 
 
             total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
             #print('total_matrix',total_matrix.shape)
@@ -1089,7 +1084,7 @@ class UsadelKeldyshEvolution:
 
         #* extra append for the element that will be removed anyways
         if g_type == 'r':
-            solution_tensor.append(g_components)
+            solution_tensor.append([0,0,0,0])
             return solution_tensor[:-1]
         elif g_type == 'k':
             return solution_tensor
@@ -1116,7 +1111,7 @@ class UsadelKeldyshEvolution:
         # ========== 1. Extract physics parameters ==========
         gap_history = state.get_gap_history()
         # ! overwrite gap
-        gap_history = np.ones(np.size(gap_history))  * 1.523294
+        gap_history = np.ones(np.size(gap_history))  * 1.4563
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
         if A_history is None:
@@ -1172,7 +1167,6 @@ class UsadelKeldyshEvolution:
                        - (1j/2) * gr_last_row.shift(-2, axis=1) * tau3) 
 
         # Add all source terms to V1
-        #! problem is somehow double shifting!
         boundary_correction =  +1j * tau3 * state.gr[-1,-1] * NambuKeldyshTensor([np.append(np.zeros(self.ntpoints-1),[1.0])], pauli_channel=0).shift(-1, axis=1) #* correction due to delta jump condition term
         V1 = V1 + v_old_deriv + boundary_correction
 
@@ -1222,7 +1216,7 @@ class UsadelKeldyshEvolution:
 
         gap_history = state.get_gap_history()
         # ! overwrite gap
-        gap_history = np.ones(np.size(gap_history))  * 1.523294
+        gap_history = np.ones(np.size(gap_history))  * 1.4563
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
         if A_history is None:
@@ -1303,7 +1297,7 @@ class UsadelKeldyshEvolution:
 
         # V_old correction (both terms MINUS)
         # Keldysh: -(i/2)τ₃·g^K(t-δt,t') - (i/2)g^K(t-δt,t')·τ₃
-        #          -(i/2)τ₃·g^K(t-δt,t'-δt) - (i/2)g^K(t-δt,t'-δt)·τ₃  [MINUS on both]
+        #          -(i/2)τ₃·g^K(t-δt,t'-δt) - (i/2)g^K(t-δt,t'-δt)·τ₃
         v_old_deriv = ((1j/2) * tau3 * gk_last_row.shift(-1, axis=1) - (1j/2) * gk_last_row.shift(-1, axis=1) * tau3
                        + (1j/2) * tau3 * gk_last_row
                        + (1j/2) * gk_last_row * tau3)
@@ -1330,15 +1324,15 @@ class UsadelKeldyshEvolution:
         #* careful with the - signs since they should be added, overall indexing here should be trivial 
         #* to minimize the number of convolutions, we can also group together different convoluted terms maybe?
 
-        cn_factor = 1/4 
+        cn_factor = 1/4 * self.delta_t
         thermal_term = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
 
         for dt_prime_shift in [0, 1]:
             for dt_shift in [0,1]:
                 dt_end = None if dt_shift == 0 else -dt_shift
-                thermal_term += cn_factor * -2j * self.delta_t * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1).shift(dt_prime_shift, axis=1)
+                thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift).shift(dt_prime_shift, axis=1)
                 - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1).shift(dt_prime_shift, axis=1) * tau3)
-                thermal_term += cn_factor * -2 * (-1j * self.delta_t * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * self.delta_t * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
+                thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
 
         V1 = V1 + thermal_term
 
@@ -1442,7 +1436,7 @@ class UsadelKeldyshEvolution:
 
         # ========== 6. Call unified solver with diagonal corrections ==========
         # Boundary condition: g^K(t-δt, t-δt) for diagonal corrections
-        gk_diagonal_boundary = state.gk[-1, -1]  # g^K(t-δt, t-δt)
+        gk_diagonal_boundary = state.gk[-1, 0]  # g^K(t-δt, t-δt)
 
         gk_new = self.generalized_g_update_rule(
             g_type='k',
@@ -1564,339 +1558,3 @@ class UsadelKeldyshEvolution:
             vector_potentials += [vector_potential_new]
 
         return state, np.array(gaps), np.array(currents), np.array(vector_potentials)#
-
-    #! DEPRACATED
-    def gr_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, diagonal_entry, full_g_matrix, g_sandwich_list = [], A_history = None):
-        """
-        Solve for g^R(t, t') at all t' using backward sweep (tex Eq. 62 + 95).
-
-        The backward sweep from t'=0 down to t'=-T_max implicitly handles the forward
-        derivative term -iĝ^R(t,t'+δt)τ̂₃ because each iteration uses the solution
-        from the previous iteration (which computed the point at t'+δt).
-
-        Pauli trace projection reduces the 2×2 matrix equation to 4 scalar equations.
-        """
-        #Define Pauli matrices for trace projection
-        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
-        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
-        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
-        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-
-        #Build 4×4 system by projecting onto Pauli basis (exploits redundancy)
-        #Evolution equation rows: τ₁, τ₂ traces
-        matrix_row_1 = (tau1 * left_matrix_1 + right_matrix_1 * tau1).matrix_to_vector()
-        matrix_row_2 = (tau2 * left_matrix_1 + right_matrix_1 * tau2).matrix_to_vector()
-        #Normalization constraint rows: τ₃, τ₀ traces
-        matrix_row_3 = (tau3 * left_matrix_2 + right_matrix_2 * tau3).matrix_to_vector()
-        matrix_row_4 = (tau0 * left_matrix_2 + right_matrix_2 * tau0).matrix_to_vector()
-
-        for terms in g_sandwich_list:
-            left_term = terms[0]
-            right_term = terms[1]
-            matrix_row_1 += (right_term * tau1 * left_term).matrix_to_vector()
-            matrix_row_2 += (right_term * tau2 * left_term).matrix_to_vector()
-
-        #Extract RHS vectors for each Pauli component
-        vector_row_1 = (rhs_matrix_1.trace(1)/2)[0]  # τ₁
-        vector_row_2 = (rhs_matrix_1.trace(2)/2)[0]  # τ₂
-        vector_row_3 = (rhs_matrix_2.trace(3)/2)[0]  # τ₃
-        vector_row_4 = (rhs_matrix_2.trace(0)/2)[0]  # τ₀
-
-        #Initialize with diagonal: g^R(t,t) = -Δ̂(t)
-        solution_tensor = diagonal_entry * NambuKeldyshTensor([1.0], pauli_channel=0)
-
-        #========== Backward sweep: t'=0 → -T_max ==========
-        for time in range(self.ntpoints-1, -1, -1):
-            #Normalization convolution: Σ_{t''=t'+δt}^{t-δt} ĝ^R(t,t'') ĝ^R(t'',t')
-            if time == self.ntpoints - 1:
-                #First iteration (t'=0): no intermediate points, convolution = 0
-                norm_convolution = np.array([0, 0, 0, 0])
-            else:
-                #solution_tensor[:-1]: New ĝ^R(t,t'') for t'' from current t' to t-δt (excl. diagonal)
-                #full_g_matrix[time+1:, time]: Old ĝ^R(t'',t') for t'' from t'+δt to latest
-                norm_convolution = -(solution_tensor[:-1] @ full_g_matrix[time+1:, time]).matrix_to_vector() * self.delta_t
-
-            # Phase 4: Source convolutions with vector potential (tex lines 80-81)
-            # Compute only if time < ntpoints-1 and A_history is not all zeros
-            if time < self.ntpoints - 1 and A_history is not None and not np.allclose(A_history, 0):
-                # Need tau3 and A_tensor for convolutions
-                tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-                A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
-
-                # Build weighted_gr = g^R(t,t'')·A(t'')·τ̂₃
-                weighted_gr = solution_tensor[:-1] * A_tensor[time+1:] * tau3
-
-                # First convolution: A(t)τ̂₃·[weighted_gr @ g^R(t'',t')]
-                first_conv = A_tensor[-1] * tau3 * (weighted_gr @ full_g_matrix[time+1:, time])
-
-                # Second convolution: [weighted_gr @ g^R(t'',t')]·A(t')τ̂₃
-                second_conv = (weighted_gr @ full_g_matrix[time+1:, time]) * A_tensor[time] * tau3
-
-                # Add to RHS: -iδt²[first - second]
-                source_A_correction = -1j * self.delta_t**2 * (first_conv - second_conv)
-
-                # Extract τ₁ and τ₂ components for evolution equation
-                source_A_vector = np.array([
-                    source_A_correction.trace(1)/ 2,# [0, time]   # τ₁ component
-                    source_A_correction.trace(2) / 2 #[0, time]   # τ₂ component
-                ])
-            else:
-                source_A_vector = np.array([0, 0])
-
-            #Build 4×4 linear system at current t' point
-            total_matrix = np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]])
-
-            #Diagonal coupling: {τ̂₃, ĝ^R(t,t)} appears in evolution equation
-            diagonal_components = solution_tensor[0].matrix_to_vector()
-
-            #Assemble RHS: [evolution RHS] + [diagonal coupling] + [normalization convolution] + [A source convolution]
-            #Diagonal coupling adds [g₂_diag, -g₁_diag, 0, 0] from anticommutator
-            #Normalization adds [0, 0, g₃_conv, g₀_conv] from convolution term
-            #A source convolution adds [A_τ₁, A_τ₂, 0, 0] from electromagnetic terms
-            total_vector = np.array([
-                vector_row_1[time] + source_A_vector[0],  # τ₁ with A correction
-                vector_row_2[time] + source_A_vector[1],  # τ₂ with A correction
-                vector_row_3[time],  # τ₃ (normalization, no A correction)
-                vector_row_4[time]   # τ₀ (normalization, no A correction)
-            ]) + np.array([diagonal_components[2], -diagonal_components[1], norm_convolution[3], norm_convolution[0]])
-
-            #Solve for Pauli components [g₁, g₂, g₃, g₀] at this t'
-            g_components = np.linalg.solve(total_matrix, total_vector)
-
-            #Prepend to solution (builds backward in time)
-            solution_tensor.append(g_components)
-
-        #Remove diagonal element (only needed for boundary condition)
-        return solution_tensor[:-1]
-    #! DEPRACATED
-    def gk_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2, last_gr_row, full_ga_matrix, old_gk_matrix, g_sandwich_list = [], A_history = None):
-        """
-        Solve for g^K(t,t') via forward sweep in t' (tex Eq. 142 + 187-194).
-        Forward sweep implicitly provides g^K(t,t'-δt) needed in backward derivative.
-        Different Pauli projection than g^R: (τ₀,τ₃) for evolution, (τ₁,τ₂) for normalization.
-        """
-        # Define Pauli matrices
-        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
-        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
-        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
-        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-
-        # Build 4×4 system: evolution (τ₀,τ₃), normalization (τ₁,τ₂)
-        matrix_row_1 = (tau0 * left_matrix_1 + right_matrix_1 * tau0).matrix_to_vector()
-        matrix_row_2 = (tau3 * left_matrix_1 + right_matrix_1 * tau3).matrix_to_vector()
-        matrix_row_3 = (tau1 * left_matrix_2 + right_matrix_2 * tau1).matrix_to_vector()
-        matrix_row_4 = (tau2 * left_matrix_2 + right_matrix_2 * tau2).matrix_to_vector()
-
-        for terms in g_sandwich_list:
-            left_term = terms[0]
-            right_term = terms[1]
-            matrix_row_1 += (right_term * tau0 * left_term).matrix_to_vector()
-            matrix_row_2 += (right_term * tau3 * left_term).matrix_to_vector()
-
-        # Extract RHS Pauli components
-        vector_row_1 = (rhs_matrix_1.trace(0)/2)[0]  # τ₀
-        vector_row_2 = (rhs_matrix_1.trace(3)/2)[0]  # τ₃
-        vector_row_3 = (rhs_matrix_2.trace(1)/2)[0]  # τ₁
-        vector_row_4 = (rhs_matrix_2.trace(2)/2)[0]  # τ₂
-
-        # Initialize: g^K(t, t'=-T_max) from old state (thermal equilibrium boundary)
-        solution_tensor = old_gk_matrix[-1, 0:1]
-
-        # Forward sweep: t'=-T_max → 0
-        for time in range(1, self.ntpoints):
-            # Normalization convolution: Σ ĝ^R ĝ^K + Σ ĝ^K ĝ^A
-            # First sum: Σ_{t''=-∞}^{t-δt} ĝ^R(t,t'') ĝ^K(t'',t')
-            norm_convolution = -(last_gr_row[0,:-1] @ old_gk_matrix[1:,time]).matrix_to_vector() * self.delta_t
-
-            # Second sum: Σ_{t''=-∞}^{t'-δt} ĝ^K(t,t'') ĝ^A(t'',t'-δt)
-            # solution_tensor[1:] is new ĝ^K(t,t'') built so far (from -T_max up to current t'-δt)
-            if time > 1:
-                norm_convolution += -(solution_tensor[1:] @ full_ga_matrix[0:time-1, time-1]).matrix_to_vector() * self.delta_t
-
-            # Phase 7: Electromagnetic self-convolution terms (tex lines 172-175)
-            if time > 1 and A_history is not None and not np.allclose(A_history, 0):
-                tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-                A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
-                A_t = A_tensor[-1]
-
-                # Conv 1: A(t)τ̂₃·Σ g^R(t,t'')·A(t'')·τ̂₃·g^K(t'',t')
-                weighted_gk_1 = old_gk_matrix[1:, time] * A_tensor[1:] * tau3
-                conv1 = A_t * tau3 * (last_gr_row[0, :-1] @ weighted_gk_1)
-
-                # Conv 2: -Σ g^R(t,t'')·A(t'')·τ̂₃·g^K(t'',t')·A(t')τ̂₃
-                conv2 = (last_gr_row[0, :-1] @ weighted_gk_1) * A_tensor[time] * tau3
-
-                # Conv 3: A(t)τ̂₃·Σ g^K(t,t'')·A(t'')·τ̂₃·g^A(t'',t')
-                weighted_gk_3 = solution_tensor[1:] * A_tensor[1:time] * tau3
-                conv3 = A_t * tau3 * (weighted_gk_3 @ full_ga_matrix[0:time-1, time])
-
-                # Conv 4: -Σ g^K(t,t'')·A(t'')·τ̂₃·g^A(t'',t')·A(t')τ̂₃
-                conv4 = (weighted_gk_3 @ full_ga_matrix[0:time-1, time]) * A_tensor[time] * tau3
-
-                # Combine: -iδt²[conv1 - conv2 + conv3 - conv4]
-                source_A_correction = -1j * self.delta_t**2 * (conv1 - conv2 + conv3 - conv4)
-
-                # Extract τ₀ and τ₃ components for g^K evolution
-                source_A_vector = np.array([
-                    source_A_correction.trace(0)/2, #[0, time] / 2,  # τ₀ component
-                    source_A_correction.trace(3)/2 #[0, time] / 2   # τ₃ component
-                ])
-            else:
-                source_A_vector = np.array([0, 0])
-
-            # Assemble 4×4 system at current t'
-            total_matrix = np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]])
-
-            # Diagonal coupling: [τ̂₃, ĝ^K] from evolution equation
-            diagonal_components = solution_tensor[-1].matrix_to_vector()
-
-            # RHS = [evolution] + [diagonal coupling: i·g₃, i·g₀] + [normalization: g₁_conv, g₂_conv] + [A source: A_τ₀, A_τ₃]
-            total_vector = np.array([
-                vector_row_1[time] + source_A_vector[0],  # τ₀ with A correction
-                vector_row_2[time] + source_A_vector[1],  # τ₃ with A correction
-                vector_row_3[time],  # τ₁ (normalization)
-                vector_row_4[time]   # τ₂ (normalization)
-            ]) + np.array([1j * diagonal_components[3], 1j * diagonal_components[0], norm_convolution[1], norm_convolution[2]])
-
-            # Solve for [g₀, g₃, g₁, g₂] at this t'
-            g_components = np.linalg.solve(total_matrix, total_vector )
-
-            # Append to solution (builds forward in time)
-            solution_tensor.append_right(g_components)
-
-        return solution_tensor
-    
-    def gk_diagonal_update_rule(self, diagonal_entry, solution_tensor, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_vector_1, rhs_vector_2, rhs_vector_history_1_list, rhs_vector_history_2_list,rhs_vector_factor_1_list, rhs_vector_factor_2_list, g_sandwich_matrices = []):
-        #* a function which updates the g based on the structure of the equation
-        trace_index_list = [0,3,1,2]
-        loop_start = 1
-        loop_end = self.ntpoints
-        loop_step = 1
-        solution_tensor_index = -1
-
-        #Define Pauli matrices for trace projection
-        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
-        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
-        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
-        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-        tau_vector = [tau0, tau1, tau2, tau3]
-
-        matrix_row_1 = (tau_vector[trace_index_list[0]] * left_matrix_1 + right_matrix_1 * tau_vector[trace_index_list[0]])
-        matrix_row_2 = (tau_vector[trace_index_list[1]] * left_matrix_1 + right_matrix_1 * tau_vector[trace_index_list[1]])
-        #Normalization constraint rows: τ₃, τ₀ traces
-        matrix_row_3 = (tau_vector[trace_index_list[2]] * left_matrix_2 + right_matrix_2 * tau_vector[trace_index_list[2]])
-        matrix_row_4 = (tau_vector[trace_index_list[3]] * left_matrix_2 + right_matrix_2 * tau_vector[trace_index_list[3]])
-
-        for terms in g_sandwich_matrices:
-            left_term = terms[0]
-            right_term = terms[1]
-            matrix_row_1 += (right_term * tau_vector[trace_index_list[0]] * left_term)
-            matrix_row_2 += (right_term * tau_vector[trace_index_list[1]] * left_term)
-
-        vector_row_1 = (rhs_vector_1.trace(trace_index_list[0])/2)[0]  # τ₁
-        vector_row_2 = (rhs_vector_1.trace(trace_index_list[1])/2)[0]  # τ₂
-        vector_row_3 = (rhs_vector_2.trace(trace_index_list[2])/2)[0]  # τ₃
-        vector_row_4 = (rhs_vector_2.trace(trace_index_list[3])/2)[0]  # τ₀
-
-        matrix_row_1 = matrix_row_1.matrix_to_vector()
-        matrix_row_2 = matrix_row_2.matrix_to_vector()
-        matrix_row_3 = matrix_row_3.matrix_to_vector()
-        matrix_row_4 = matrix_row_4.matrix_to_vector()
-
-        #TODO: have to check ranges and indices here, something looks fishy!
-        previous_solution = solution_tensor[solution_tensor_index]
-        #solution_string = solution_tensor[(self.ntpoints - solution_tensor_index) % self.ntpoints: self.ntpoints - (solution_tensor_index_2) % self.ntpoints]
-        #print(solution_tensor.data.shape)
-        #Normalization convolution: Σ_{t''=t'+δt}^{t-δt} ĝ^R(t,t'') ĝ^R(t'',t')
-        time = self.ntpoints
-        if time == loop_start:
-            #First two iterations (t'=0): no intermediate points, convolution = 0
-            convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
-            convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
-        else:
-            # Initialize to zero Nambu tensors
-            convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
-            convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
-
-            for terms in rhs_vector_history_1_list:
-                left_term = terms[0]
-                right_term = terms[1]
-                convolution_term_1 += (left_term * solution_tensor) @ right_term[:time, time] * self.delta_t
-
-            for terms in rhs_vector_factor_1_list:
-                left_term = terms[0]
-                right_term = terms[1]
-                convolution_term_1 += (left_term * previous_solution * right_term[time])
-
-            for terms in rhs_vector_history_2_list:
-                left_term = terms[0]
-                right_term = terms[1]
-                convolution_term_2 += (left_term * solution_tensor) @ right_term[:time, time] * self.delta_t
-
-            for terms in rhs_vector_factor_2_list:
-                left_term = terms[0]
-                right_term = terms[1]
-                convolution_term_2 += (left_term * previous_solution * right_term[time])
-
-
-            total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
-            #print('total_matrix',total_matrix.shape)
-            convolution_term_1_vec = convolution_term_1.matrix_to_vector()
-            convolution_term_2_vec = convolution_term_2.matrix_to_vector()
-            total_vector = np.array([vector_row_1[time],vector_row_2[time],vector_row_3[time], vector_row_4[time]]) + np.array([convolution_term_1_vec[trace_index_list[0]],convolution_term_1_vec[trace_index_list[1]],convolution_term_2_vec[trace_index_list[2]],convolution_term_2_vec[trace_index_list[3]]])
-            #print('total_vector',total_vector.shape)
-            g_components = np.linalg.solve(total_matrix, total_vector)
-            #Prepend to solution (builds backward in time)
-
-            solution_tensor.append_right(g_components)
-
-        #Remove diagonal element (only needed for boundary condition)
-        
-
-        return solution_tensor
-    
-    
-    #! DEPRACATED
-    def gk_diagonal_update_rule(self, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_matrix_1, rhs_matrix_2,  last_gr_row, full_ga_matrix, old_gk_matrix, solution_tensor, g_sandwich_list = [], A_history = None):
-        """
-        Solve for diagonal element g^K(t,t).
-        Uses Keldysh symmetry: ĝ^K(t',t) = τ₃[ĝ^K(t,t')]†τ₃ (involution).
-        """
-        # Define Pauli matrices
-        tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
-        tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
-        tau2 = NambuKeldyshTensor(1.0, pauli_channel=2)
-        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-
-        # Build 4×4 system (same Pauli projection as off-diagonal)
-        matrix_row_1 = (tau0 * left_matrix_1 + right_matrix_1 * tau0).matrix_to_vector()
-        matrix_row_2 = (tau3 * left_matrix_1 + right_matrix_1 * tau3).matrix_to_vector()
-        matrix_row_3 = (tau1 * left_matrix_2 + right_matrix_2 * tau1).matrix_to_vector()
-        matrix_row_4 = (tau2 * left_matrix_2 + right_matrix_2 * tau2).matrix_to_vector()
-
-        # Extract RHS Pauli components at diagonal (t'=t)
-        vector_row_1 = (rhs_matrix_1.trace(0)/2)[0]
-        vector_row_2 = (rhs_matrix_1.trace(3)/2)[0]
-        vector_row_3 = (rhs_matrix_2.trace(1)/2)[0]
-        vector_row_4 = (rhs_matrix_2.trace(2)/2)[0]
-
-        # Normalization convolution for diagonal: Σ ĝ^R ĝ^K + Σ ĝ^K ĝ^A
-        # First sum: Σ_{t''=-∞}^{t-δt} ĝ^R(t,t'') ĝ^K(t'',t)
-        # Uses involution to get ĝ^K(t'',t) = τ₃[ĝ^K(t,t'')]†τ₃ from solution_tensor
-        # Second sum: Σ_{t''=-∞}^{t-δt} ĝ^K(t,t'') ĝ^A(t'',t)
-        norm_convolution = -(last_gr_row[0,:-1] @ (solution_tensor[1:].involution())).matrix_to_vector() * self.delta_t -(solution_tensor[1:] @ full_ga_matrix[0:-1, -1]).matrix_to_vector() * self.delta_t
-
-        # Assemble 4×4 system at diagonal point (t'=t, i.e., time=-1)
-        total_matrix = np.array([matrix_row_1[:, -1],matrix_row_2[:, -1],matrix_row_3[:, -1],matrix_row_4[:, -1]])
-
-        # Diagonal coupling from [τ̂₃, ĝ^K(t,t)]
-        diagonal_components = solution_tensor[-1].matrix_to_vector()
-
-        # RHS = [evolution] + [diagonal coupling] + [normalization convolution]
-        total_vector = np.array([vector_row_1, vector_row_2,vector_row_3,vector_row_4] ) +  np.array([1j * diagonal_components[3], 1j * diagonal_components[0], norm_convolution[1], norm_convolution[2]])
-
-        # Solve for [g₀, g₃, g₁, g₂] at diagonal
-        g_components = np.linalg.solve(total_matrix, total_vector)
-
-        # Return as NambuKeldyshTensor (extract scalar)
-        return NambuKeldyshTensor.vector_to_matrix(g_components)[-1]

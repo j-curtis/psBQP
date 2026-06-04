@@ -246,7 +246,7 @@ class EquilibriumSolver:
                 elif pauli_idx == 2: # tau_1, tau_2: 1/ω asymptotic     
                     # Choose regularization scale ω₀
                     # Use a characteristic energy (e.g., twice the gap or broadening)
-                    omega_10percent = np.max(omega_grid) * 5e-2
+                    omega_10percent = np.max(omega_grid) * 1e-2
                     omega_0 = np.abs(omega_10percent) / 2.0  # Regularization scale
                     C_decay = -1j*self.gap_0
                     C_prime = -1j*self.gap_0 * (-1j * self.system_parameters['eta'])

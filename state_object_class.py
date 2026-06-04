@@ -55,11 +55,12 @@ class StateObject:
         """
         ga = -self.gr.involution()
 
+        #* removed zeroing of the diagonal since it doesnt seem to be correct, however one has to be careful which g^a we are calling!
         # Zero out diagonal of g^A to break F(0) cancellation
-        diag_indices = np.diag_indices(ga.data.shape[2])
-        ga.data[:, :, diag_indices[0], diag_indices[1]] = 0.0
+        #diag_indices = np.diag_indices(ga.data.shape[2])
+        #ga.data[:, :, diag_indices[0], diag_indices[1]] = 0.0
 
-        return NambuKeldyshTensor(ga.data)
+        return ga #NambuKeldyshTensor(ga.data)
 
     # ========== State Properties ==========
 
@@ -134,13 +135,19 @@ class StateObject:
 
         # Term 1: ∫ dt' τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
         # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]
-        #* midpoint rule subtraction
-        term1 = tau3 * (gr_row @ (A_tensor * tau3 * gk_col))[0,0] * self.dt - 1/2 * ( tau3 * (gr_row[0,-1] * (A_tensor[-1] * tau3 * gk_col[-1,0])))
+        # Midpoint rule: subtract 1/2 weight from both endpoints
+        inner_1 = A_tensor * tau3 * gk_col
+        first_endpoint_1 = tau3 * (gr_row[:,0] * inner_1[0,:])[0,0]
+        last_endpoint_1 = tau3 * (gr_row[:,-1] * inner_1[-1,:])[0,0]
+        term1 = tau3 * (gr_row @ inner_1)[0,0] * self.dt - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
 
         # Term 2: ∫ dt' τ₃ g'^K(t,t') A(t') τ₃ g'^A(t',t)
         # = τ₃ [g'^K(t,:) @ (A(:) τ₃ g'^A(:,t))]
-        #* midpoint rule subtraction
-        term2 = tau3 * (gk_row @ (A_tensor * tau3 * ga_col))[0,0] * self.dt - 1/2 * ( tau3 * (gk_row[0,-1] * (A_tensor[-1] * tau3 * ga_col[-1,0])))
+        # Midpoint rule: subtract 1/2 weight from both endpoints
+        inner_2 = A_tensor * tau3 * ga_col
+        first_endpoint_2 = tau3 * (gk_row[:,0] * inner_2[0,:])[0,0]
+        last_endpoint_2 = tau3 * (gk_row[:,-1] * inner_2[-1,:])[0,0]
+        term2 = tau3 * (gk_row @ inner_2)[0,0] * self.dt - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
 
         # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
         # Multiply gr with A*tau3, then precise_convolution_left with F (regularized)
@@ -220,12 +227,11 @@ class StateObject:
         
     # ========== Consistency Checks ==========
 
-    #TODO: check this code and properties
     def check_gr_normalization(self, t1_idx):
         """
         Verify g^R normalization at fixed t₁ for all t₂.
 
-        Checks: ∫_{t₂+δt}^{t₁-δt} dt' g'^R(t₁,t') g'^R(t',t₂) + g'^R(t₁,t₂)τ₃ + τ₃ g'^R(t₁,t₂) = 0
+        Checks: ∫ dt' g'^R(t₁,t') g'^R(t',t₂) + g'^R(t₁,t₂)τ₃ + τ₃ g'^R(t₁,t₂) = 0
 
         Args:
             t1_idx: Index for t₁ time (supports negative indexing)
@@ -234,84 +240,135 @@ class StateObject:
             errors: np.ndarray of shape (N_t,) with error norm at each t₂
             totals: np.ndarray of shape (4, N_t) with Pauli components of total violation
         """
+        #* seems weird that the equilibrium breaks the convolutionn even at 0  -- diagonal is tau_2 only, meaning left+right = 0
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
         N_t = self.gr.data.shape[2]
         t1_pos = t1_idx if t1_idx >= 0 else N_t + t1_idx
 
-        errors = np.zeros(N_t)
+        # Extract row at t1
+        gr_row = self.gr[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
+
+        # Compute convolution for all t2 using matmul
+        convolution = (gr_row @ self.gr) * self.dt  # shape (2,2,1,Nt)
+
+        # Compute commutator terms for all t2
+        left_term = tau3 * gr_row  # shape (2,2,1,Nt)
+        right_term = gr_row * tau3  # shape (2,2,1,Nt)
+
+        # Total normalization violation for all t2
+        #* key thing here is that the first element needs to be seriously taken into account when doing the midpoint rule
+        total = convolution + left_term + right_term  - 1/2 * gr_row[-1:,t1_pos] * self.gr[-1:,:] * self.dt - 1/2 * gr_row[-1:,0:] * self.gr.diagonal_time() * self.dt # shape (2,2,1,Nt) 
+
+        # Compute errors
+        errors = np.sqrt(np.sum(np.abs(total.data)**2, axis=(0, 1)))[0, :]  # shape (Nt,)
+
+        # Extract Pauli components
         totals = np.zeros((4, N_t), dtype=complex)
-
-        for t2_pos in range(t1_pos + 1):
-            gr_t1_t2 = self.gr[t1_pos, t2_pos]
-
-            left_term = tau3 * gr_t1_t2
-            right_term = gr_t1_t2 * tau3
-
-            if t1_pos - t2_pos <= 1:
-                convolution = NambuKeldyshTensor(np.zeros((2, 2), dtype=complex))
-            else:
-                gr_row = self.gr[t1_pos:t1_pos+1, t2_pos+1:t1_pos]
-                gr_col = self.gr[t2_pos+1:t1_pos, t2_pos:t2_pos+1]
-                convolution = (gr_row @ gr_col)[0, 0] * self.dt
-
-            total = left_term + right_term + convolution
-            errors[t2_pos] = np.sqrt(np.sum(np.abs(total.data)**2))
-            totals[:, t2_pos] = total.matrix_to_vector().flatten()
+        for pauli_idx in range(4):
+            pauli_component = total.trace(pauli_idx) / 2  # shape (1, Nt)
+            totals[pauli_idx, :] = pauli_component[0, :]
 
         return errors, totals
 
-    #TODO check this code and properties
-    def check_keldysh_normalization(self, t1_idx):
+    def check_keldysh_normalization(self, t1_idx, thermal_dist, thermal_integral):
         """
         Verify FDT normalization constraint at fixed t₁ for all t₂.
 
-        Checks: ∫_{-∞}^{t₁} g'^R g'^K + ∫_{-∞}^{t₂} g'^K g'^A + [τ₃, g'^K] = 0
+        Checks: ∫ g^R g^K + ∫ g^K g^A + [τ₃, g^K] - ∫ (g^R @ f) + ∫ (f @ g^A)= 0
+
+        This relation comes from the FDT: g^K = g^R @ f - f @ g^A
 
         Args:
             t1_idx: Index for t₁ time (supports negative indexing)
+            thermal_dist: Thermal distribution f(t,t') - NambuKeldyshTensor
+            thermal_integral: Integral of thermal distribution F(t,t') - NambuKeldyshTensor
 
         Returns:
             errors: np.ndarray of shape (N_t,) with error norm at each t₂
             totals: np.ndarray of shape (4, N_t) with Pauli components of total violation
-            components: Dict with 'commutator', 'gr_gk_conv', 'gk_ga_conv' arrays (4, N_t)
+            components: Dict with 'commutator', 'gr_gk_conv', 'gk_ga_conv', 'thermal_gr', 'thermal_ga' arrays (4, N_t)
         """
+
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
         ga = self._r2a()
 
         N_t = self.gr.data.shape[2]
         t1_pos = t1_idx if t1_idx >= 0 else N_t + t1_idx
 
-        errors = np.zeros(N_t)
+        # Extract rows at t1
+        gr_row = self.gr[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
+        gk_row = self.gk[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
+
+        # Commutator term: [τ₃, g^K(t1, t2)] for all t2
+        commutator = tau3 * gk_row - gk_row * tau3  # shape (2,2,1,Nt)
+        
+        # First convolution: ∫ g^R(t1, t') g^K(t', t2) dt' for all t2
+        conv1 = (gr_row @ self.gk) * self.dt  # shape (2,2,1,Nt) #* goes up to t for t' so we sum over all of them from -infty to t, i.e. full matrix
+
+        # Apply midpoint rule to conv1
+        # Integration from t'=0 to t'=t1 for all t2
+        # First endpoint: gr[t1, 0] * gk[0, t2]
+        # Last endpoint: gr[t1, t1] * gk[t1, t2]
+        gr_t1_0 = self.gr[t1_pos, 0:1]  # shape (2,2)
+        gk_0_row = self.gk[0:1, :]  # shape (2,2,1,Nt)
+        first_endpoint_1 = gr_t1_0 * gk_0_row  # gr[t1, 0] * gk[0, t2]
+
+        gr_t1_t1 = self.gr[t1_pos, t1_pos:t1_pos+1]  # shape (2,2,1)
+        gk_t1_row = self.gk[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
+        last_endpoint_1 = gr_t1_t1 * gk_t1_row  # gr[t1, t1] * gk[t1, t2]
+
+        conv1 = conv1 - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
+
+        # Second convolution: ∫ g^K(t1, t') g^A(t', t2) dt' for all t2
+        conv2 = (gk_row @ ga) * self.dt  # shape (2,2,1,Nt) 
+        #* goes up to t', however what happens is that for elements with first element bigger than t', the integral is cut-off
+        #* this means that the 1/2 midpoint rule is different!!! 
+        #* not -1 --> this is also wrong in precise convolutions! --> one has to be careful with ga jump conditions
+        #* carefully compute the ga diagonal and which elements come in!!
+        # Apply midpoint rule to conv2
+        # Integration from t'=0 to t'=t2 for all t2
+        # First endpoint: gk[t1, 0] * ga[0, t2]
+        # Last endpoint: gk[t1, t2] * ga[t2, t2]
+        gk_t1_0 = self.gk[t1_pos, 0]  # shape (2,2)
+        ga_0_row = ga[0:1, :]  # shape (2,2,1,Nt)
+        first_endpoint_2 = gk_t1_0 * ga_0_row  # gk[t1, 0] * ga[0, t2]
+
+        # Extract diagonal elements of ga as row tensor
+        last_endpoint_2 = gk_row * ga.diagonal_time()  # gk[t1, t2] * ga[t2, t2] #* nothing changed since this is set to zero by default right now!
+
+        conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
+        
+        # Thermal terms from FDT: g^K = g^R @ f - f @ g^A
+        # Thermal term 1: gr_row @ (gr @ f) for all t2 at once
+        thermal_gr = gr_row.precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t1_pos) * tau3 * 2
+
+        # Thermal term 2: (f_row @ ga) @ ga for all t2 at once
+        f_row = thermal_dist[t1_pos:t1_pos+1, :]
+        F_row = thermal_integral[t1_pos:t1_pos+1, :]
+        thermal_ga = 2 * tau3 * ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t1_pos) 
+
+        # Add thermal corrections to convolutions
+        conv1 = conv1 + thermal_gr  # Subtract gr @ (gr @ f) term
+        conv2 = conv2 + thermal_ga  # Add (f @ ga) @ ga term
+
+        # Total normalization violation for all t2
+        total = commutator + conv1 + conv2  # shape (2,2,1,Nt)
+
+        # Compute errors
+        errors = np.sqrt(np.sum(np.abs(total.data)**2, axis=(0, 1)))[0, :]  # shape (Nt,)
+
+        # Extract Pauli components
         totals = np.zeros((4, N_t), dtype=complex)
         commutators = np.zeros((4, N_t), dtype=complex)
         conv1s = np.zeros((4, N_t), dtype=complex)
         conv2s = np.zeros((4, N_t), dtype=complex)
 
-        # g^R row is the same for all t2
-        gr_row = self.gr[t1_pos:t1_pos+1, :t1_pos+1]
-
-        for t2_pos in range(N_t):
-            gk_t1_t2 = self.gk[t1_pos, t2_pos]
-
-            commutator = tau3 * gk_t1_t2 - gk_t1_t2 * tau3
-
-            # First convolution: ∫_{-∞}^{t₁} dt' g'^R(t₁, t') g'^K(t', t₂)
-            gk_col = self.gk[:t1_pos+1, t2_pos:t2_pos+1]
-            conv1 = (gr_row @ gk_col)[0, 0] * self.dt
-
-            # Second convolution: ∫_{-∞}^{t₂} dt' g'^K(t₁, t') g'^A(t', t₂)
-            gk_row = self.gk[t1_pos:t1_pos+1, :t2_pos+1]
-            ga_col = ga[:t2_pos+1, t2_pos:t2_pos+1]
-            conv2 = (gk_row @ ga_col)[0, 0] * self.dt
-
-            total = commutator + conv1 + conv2
-
-            errors[t2_pos] = np.sqrt(np.sum(np.abs(total.data)**2))
-            totals[:, t2_pos] = total.matrix_to_vector().flatten()
-            commutators[:, t2_pos] = commutator.matrix_to_vector().flatten()
-            conv1s[:, t2_pos] = conv1.matrix_to_vector().flatten()
-            conv2s[:, t2_pos] = conv2.matrix_to_vector().flatten()
+        for pauli_idx in range(4):
+            totals[pauli_idx, :] = (total.trace(pauli_idx) / 2)[0, :]
+            commutators[pauli_idx, :] = (commutator.trace(pauli_idx) / 2)[0, :]
+            conv1s[pauli_idx, :] = (conv1.trace(pauli_idx) / 2)[0, :]
+            conv2s[pauli_idx, :] = (conv2.trace(pauli_idx) / 2)[0, :]
 
         return errors, totals, {
             'commutator': commutators,

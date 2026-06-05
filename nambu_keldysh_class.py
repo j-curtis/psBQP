@@ -394,7 +394,7 @@ class NambuKeldyshTensor:
         result_fact = ((other @ ones_tensor) * self_for_reg) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact
 
         # Analytic term (using integral)
-        result_anal = -other_integral * self_for_reg
+        result_anal = (- other_integral) * self_for_reg
         #! tried subtracting different g but something went wrong, continuing with *0 for now
         # Combine: standard - factored + analytic
         return (result_std + ( - result_fact + result_anal))* filter_function

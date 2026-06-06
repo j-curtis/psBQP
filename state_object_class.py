@@ -137,25 +137,26 @@ class StateObject:
         # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]
         # Midpoint rule: subtract 1/2 weight from both endpoints
         inner_1 = A_tensor * tau3 * gk_col
-        first_endpoint_1 = tau3 * (gr_row[:,0] * inner_1[0,:])[0,0]
-        last_endpoint_1 = tau3 * (gr_row[:,-1] * inner_1[-1,:])[0,0]
+        first_endpoint_1 = tau3 * (gr_row[:,0:1] * inner_1[0:1,:])[0,0]
+        last_endpoint_1 = tau3 * (gr_row[:,-1:] * inner_1[-1:,:])[0,0]
         term1 = tau3 * (gr_row @ inner_1)[0,0] * self.dt - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
 
         # Term 2: ∫ dt' τ₃ g'^K(t,t') A(t') τ₃ g'^A(t',t)
         # = τ₃ [g'^K(t,:) @ (A(:) τ₃ g'^A(:,t))]
         # Midpoint rule: subtract 1/2 weight from both endpoints
         inner_2 = A_tensor * tau3 * ga_col
-        first_endpoint_2 = tau3 * (gk_row[:,0] * inner_2[0,:])[0,0]
-        last_endpoint_2 = tau3 * (gk_row[:,-1] * inner_2[-1,:])[0,0]
+        first_endpoint_2 = tau3 * (gk_row[:,0:1] * inner_2[0:1,:])[0,0]
+        last_endpoint_2 = tau3 * (gk_row[:,-1:] * inner_2[-1:,:])[0,0]
         term2 = tau3 * (gk_row @ inner_2)[0,0] * self.dt - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
 
         # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
         # Multiply gr with A*tau3, then precise_convolution_left with F (regularized)
-        term3 = 2.0 * (A_tensor * tau3 * gr_row).precise_convolution_left(F_col, F_integral_col, self.dt, other_index=t_idx)[0,0]
+        #print((A_tensor * tau3 * gr_row).shape)
+        term3 = 2.0 * (tau3 * gr_row * A_tensor).precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t_idx)[0,0]
 
         # Term 4: ∫ dt' 2F(t,t') A(t') τ₃ g'^A(t',t)
         # Multiply ga with A*tau3, then precise_convolution_right with F (regularized)
-        term4 = 2.0 * (A_tensor * tau3 * ga_col).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=t_idx)[0,0]
+        term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=t_idx)[0,0]
 
         # Sum all terms and take Nambu trace
         total = term1 + term2 + term3 + term4
@@ -206,6 +207,7 @@ class StateObject:
 
         gk_row_data = new_gk_row
 
+        new_gk_diag = 1/2 * (new_gk_diag + new_gk_diag.involution())
         gk_column_data = gk_row_data.involution() 
 
         self.gk.update_entries(new_gk_row, gk_column_data, new_gk_diag)

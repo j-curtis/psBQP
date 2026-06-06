@@ -197,7 +197,6 @@ class NambuKeldyshTensor:
         return NambuKeldyshTensor(result_data)
 
     def precise_convolution_left(self, other, other_integral, dt, other_index=-1):
-        #TODO: check this is implemented appropriately, are we subtracting the last term in the sum?
         """ 
         Compute regularized left convolution: self @ other (regularized).
 
@@ -299,6 +298,7 @@ class NambuKeldyshTensor:
         result_anal = self * other_integral_for_reg
 
         # Combine: standard - factored + analytic
+        #print('left_convolution', (result_std + ( - result_fact + result_anal))[-1,-1])
         return (result_std + (- result_fact + result_anal))
 
 
@@ -402,6 +402,7 @@ class NambuKeldyshTensor:
         result_anal = (- other_integral) * self_for_reg
 
         # Combine: standard - factored + analytic
+        #print('right_convolution', (result_std + ( - result_fact + result_anal))[-1,-1])
         return (result_std + ( - result_fact + result_anal))
 
     def _check_binary_shape_compatibility(self, other):

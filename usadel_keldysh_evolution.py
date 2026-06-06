@@ -30,6 +30,8 @@ class UsadelKeldyshEvolution:
             sigma_scatterings: dict of scattering mechanisms and rates
         """
         # Store parameters
+        #* overwrite system_parameters_eta
+        grid_parameters['eta'] = system_parameters['eta']
         self.grid_parameters = grid_parameters
         self.system_parameters = system_parameters
         self.optimization_parameters = optimization_parameters
@@ -50,7 +52,6 @@ class UsadelKeldyshEvolution:
 
         self.critical_temperature = system_parameters['critical_temperature']
         self.temperature = system_parameters['temperature']
-
 
     # ========== Grid and Parameter Setup ==========
 
@@ -327,6 +328,7 @@ class UsadelKeldyshEvolution:
         #* to capture the last element, we will have to add some corrections to the last element, so the output should also have an additional, diagonal_transpose output
         #* in the evolution the diagonal_transpose_output shuold be used with final solution. basically take all the terms that have gk_last_row (t-dt,t') that gets zeroed out 
         #* then the extra term should be computed using this. simplest to do using AI to generate the diagonal_gk_correction_terms
+        
         """
         Construct discrete Crank-Nicolson operators from Type classifications.
 
@@ -1033,7 +1035,9 @@ class UsadelKeldyshEvolution:
                     elif g_type == 'k':
                         #* note, last right term is actually time t as last time index and last solution tensor is that as well? 
                         #* the sum goes until time which means last element is t'-dt' which it should be summed fulled last one is giving the diagonal
-                        convolution_term_1 += (left_term * solution_tensor[1:]) @ right_term[:time, time] 
+                        if time != loop_end - loop_step:
+                            #* in principle first solution corresponds to t, last time is n_points which ends with t-dt, as it should
+                            convolution_term_1 += (left_term * solution_tensor[1:]) @ right_term[:time, time] 
 
                 for terms in rhs_vector_history_2_list:
                     left_term = terms[0]
@@ -1041,8 +1045,9 @@ class UsadelKeldyshEvolution:
                     if g_type == 'r':
                         convolution_term_2 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time]  
                     elif g_type == 'k':
+                        if time != loop_end - loop_step:
                         #* in principle first solution corresponds to t, last time is n_points which ends with t-dt, as it should
-                        convolution_term_2 += (left_term * solution_tensor[1:]) @ right_term[:time, time]
+                            convolution_term_2 += (left_term * solution_tensor[1:]) @ right_term[:time, time]
 
             # ========== Diagonal correction for g^K ==========
             # Apply boundary terms that were zeroed by g_last_row.shift(-1, axis=1)
@@ -1054,24 +1059,24 @@ class UsadelKeldyshEvolution:
                     left_term = terms[0]
                     right_term = terms[1]
                     # Pattern: left_term * g_diagonal_current * right_term[time]
-                    convolution_term_1 += left_term * tau3 * previous_solution.dagger() * tau3 * right_term
+                    convolution_term_1 += left_term *  previous_solution.involution() * right_term
 
                 for terms in diagonal_term_factor_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    convolution_term_2 += left_term * tau3 * previous_solution.dagger() * tau3 * right_term
+                    convolution_term_2 += left_term * previous_solution.involution() * right_term
 
                 # NEW: Diagonal history convolution terms
                 # These involve convolution with the diagonal element from g_matrix[0]
                 for terms in diagonal_term_history_1_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    convolution_term_1 += left_term[-1,:-1] @ (tau3 * solution_tensor[1:].dagger() * tau3 * right_term)
+                    convolution_term_1 += left_term[-1,:-1] @ (solution_tensor[1:].involution() * right_term)
 
                 for terms in diagonal_term_history_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    convolution_term_2 += left_term[-1,:-1] @ (tau3 * solution_tensor[1:].dagger() * tau3 * right_term)
+                    convolution_term_2 += left_term[-1,:-1] @ (solution_tensor[1:].involution()* right_term)
 
             total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
             #print('total_matrix',total_matrix.shape)
@@ -1356,7 +1361,7 @@ class UsadelKeldyshEvolution:
 
         # Extract diagonal element from unified result
         gk_diagonal_new = gk_new[-1]
-        gk_diagonal_new = state.gk[-1,-1]
+        #gk_diagonal_new = state.gk[-1,-1]
         return gk_new[:-1], gk_diagonal_new
 
     def _evolve_state_by_one_timestep(self, state, A_external=None):
@@ -1406,53 +1411,93 @@ class UsadelKeldyshEvolution:
         else:
             vector_potential_new = A_external[-1]
 
-        current_new = 0  # state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral)
+        current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral)
 
         return gap_new, current_new, vector_potential_new
 
-    def real_time_evolution(self, initial_state, num_timesteps, A_external=None):
+    def update_vector_potential(self, old_vector_potential, driving_field):
+        """
+        Update vector potential using sliding window approach.
+
+        Appends new driving field value and removes oldest value to maintain
+        constant history length N_t.
+
+        Args:
+            old_vector_potential: Current vector potential array (length N_t)
+            driving_field: Time-dependent driving field array (length num_timesteps) or None
+            time_index: Current timestep index
+
+        Returns:
+            new_vector_potential: Updated array (length N_t)
+        """
+        if driving_field is None:
+            # No driving - return zeros
+            return old_vector_potential
+
+        # Get new field value at this timestep
+        new_field_value = driving_field
+
+        # Sliding window: remove first element, append new value
+        new_vector_potential = np.append(old_vector_potential[1:], new_field_value)
+
+        return new_vector_potential
+
+    def real_time_evolution(self, initial_state, num_timesteps, driving_field=None):
         """
         Main real-time evolution loop.
 
-        Evolves state forward in time, extracting observables at each step.
+        Evolves state forward in time using sliding window for vector potential.
+        At each timestep, the driving field value is appended to the vector potential
+        history and the oldest value is removed.
 
         Steps:
-        1. Initialize observables arrays
+        1. Initialize A_external as zeros (size N_t from initial_state)
         2. For each timestep:
-            a. Call _evolve_state_by_one_timestep()
-            b. Store returned gap and current values
+            a. Update A_external using sliding window with new driving_field value
+            b. Call _evolve_state_by_one_timestep() with updated A_external
+            c. Store returned gap and current values
         3. Return evolved state and observable time series
 
         Args:
             initial_state: StateObject with equilibrium initial conditions
             num_timesteps: Number of time steps to evolve
-            external_field: Optional time-dependent external field
+            driving_field: Optional time-dependent driving field array (length num_timesteps)
+                           If None, zero driving field is used. Can be:
+                           - None: No driving (A_external remains zeros)
+                           - 1D array (length num_timesteps): Time-dependent field values
 
         Returns:
             state: Final evolved StateObject
-            gaps: Array of gap values at each timestep
-            currents: Array of current values at each timestep
+            gaps: Array of gap values at each timestep (length num_timesteps)
+            currents: Array of current values at each timestep (length num_timesteps)
+            vector_potentials: Array of vector potential values at each timestep (length num_timesteps)
 
         Calls:
-            - _evolve_state_by_one_timestep(state, time_index, external_field)
+            - update_vector_potential(A_external, driving_field, time_index)
+            - _evolve_state_by_one_timestep(state, A_external)
         """
         # Initialize arrays to track observables
         gaps = []
         currents = []
         vector_potentials = []
-        
+
+        # Initialize A_external as zeros (history window)
+        # Size N_t from initial_state's time grid
+        N_t = initial_state.gr.data.shape[2]
+        A_external = np.zeros(N_t, dtype=complex)
+
         # Start with initial state
         state = initial_state
-        
+
         # Evolve over time with progress bar
         for time_index in tqdm(range(num_timesteps), desc="Real-time evolution"):
+            # Update vector potential using sliding window
+            A_external = self.update_vector_potential(A_external, driving_field[time_index])
             # Evolve by one timestep and get observables
-            gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(
-                state, A_external
-            )
+            gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
             # Store observables
             gaps += [gap_new]
             currents  += [current_new]
             vector_potentials += [vector_potential_new]
 
-        return state, np.array(gaps), np.array(currents), np.array(vector_potentials)#
+        return state, np.array(gaps), np.array(currents), np.array(vector_potentials)

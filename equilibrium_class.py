@@ -483,13 +483,6 @@ class EquilibriumSolver:
         # Verify using formula (for debugging)
         # Note: linspace with n_omega points uses n_omega-1 intervals
         dtau_formula = 2*np.pi / (d_omega * (n_omega - 1))
-        if not np.allclose(dtau_fft, dtau_formula, rtol=1e-6):
-            print(f"WARNING: Tau spacing mismatch!")
-            print(f"  From grid: {dtau_fft:.10e}, From formula: {dtau_formula:.10e}")
-            print(f"  d_omega = {d_omega:.10e}")
-            print(f"  n_omega = {n_omega}")
-            print(f"  tau range = {tau_grid_actual[0]:.6f} to {tau_grid_actual[-1]:.6f}")
-            print(f"  Difference: {abs(dtau_fft - dtau_formula):.10e}")
 
         # Compute tau indices by finding nearest neighbor in tau_grid_actual
         # Use searchsorted to find insertion points, then check which neighbor is closer

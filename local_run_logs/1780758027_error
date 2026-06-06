@@ -1,0 +1,7 @@
+Log file created at Sat Jun  6 17:10:35 2026
+
+
+
+The simulation was INTERRUPTED by the following ERROR:
+
+IndexError('index 1 is out of bounds for axis 3 with size 1')

@@ -10,6 +10,11 @@ from nambu_keldysh_class import NambuKeldyshTensor
 from state_object_class import StateObject
 from usadel_keldysh_evolution import UsadelKeldyshEvolution
 
+# Configure matplotlib to use LaTeX rendering
+plt.rcParams['text.usetex'] = True
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.sans-serif'] = ['Helvetica', 'Arial']
+plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath} \usepackage{amssymb} \usepackage{sfmath}'
 
 # ============================================================================
 # Data Loading and Parameter Extraction
@@ -96,11 +101,23 @@ def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analys
     gr_errors, gr_totals = state.check_gr_normalization(t1_idx=-1)
     gk_errors, gk_totals, _ = state.check_keldysh_normalization(-1, evolution.thermal_dist, evolution.thermal_integral)
 
-    if save_plot:
-        _plot_normalization(gr_totals, 'gr', evolution.time_grid, save_dir, timestamp)
-        _plot_normalization(gk_totals, 'gk', evolution.time_grid, save_dir, timestamp)
+    # Compute max error per Pauli channel from totals
+    # gr_totals and gk_totals have shape (4, N_t) for 4 Pauli components
+    gr_max_errors_per_channel = np.zeros(4)
+    gk_max_errors_per_channel = np.zeros(4)
 
-    return {'gr_max_error': np.max(gr_errors), 'gk_max_error': np.max(gk_errors), 'gr_totals': gr_totals, 'gk_totals': gk_totals}
+    for pauli_idx in range(4):
+        # For gr: τ0 should integrate to 1, others to 0
+        expected_value = 1.0 if pauli_idx == 0 else 0.0
+        gr_max_errors_per_channel[pauli_idx] = np.max(np.abs(gr_totals[pauli_idx, :] - expected_value))
+
+        # For gk: compute error from the totals
+        gk_max_errors_per_channel[pauli_idx] = np.max(np.abs(gk_totals[pauli_idx, :]))
+
+    _plot_normalization(gr_totals, 'gr', evolution.time_grid, save_plot, save_dir, timestamp)
+    _plot_normalization(gk_totals, 'gk', evolution.time_grid, save_plot, save_dir, timestamp)
+
+    return {'gr_max_error': gr_max_errors_per_channel, 'gk_max_error': gk_max_errors_per_channel, 'gr_totals': gr_totals, 'gk_totals': gk_totals}
 
 
 def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
@@ -127,10 +144,17 @@ def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
 
     gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(evolution.thermal_dist, evolution.thermal_integral, time_index=-1)
 
-    if save_plot:
-        _plot_fdt(gk_actual_row, gk_fdt_row, error_row, evolution.time_grid, save_dir, timestamp)
+    # Compute max error per Pauli channel
+    max_errors_per_channel = np.zeros(4)
+    for pauli_idx in range(4):
+        error_pauli = error_row.trace(pauli_idx) / 2
+        if error_pauli.ndim == 2:
+            error_pauli = error_pauli[0, :]
+        max_errors_per_channel[pauli_idx] = np.max(np.abs(error_pauli))
 
-    return {'max_error': max_error, 'gk_actual': gk_actual_row, 'gk_fdt': gk_fdt_row, 'error': error_row}
+    _plot_fdt(gk_actual_row, gk_fdt_row, error_row, evolution.time_grid, save_plot, save_dir, timestamp)
+
+    return {'max_error': max_errors_per_channel, 'gk_actual': gk_actual_row, 'gk_fdt': gk_fdt_row, 'error': error_row}
 
 
 def check_time_translational_invariance(timestamp, job_index, num_rows=10, threshold=1e-8, save_plot=False, save_dir='analysis_plots'):
@@ -146,7 +170,7 @@ def check_time_translational_invariance(timestamp, job_index, num_rows=10, thres
         save_dir: Directory for plots
 
     Returns:
-        dict: {'max_diff_gr': float, 'max_diff_gk': float, 'passed': bool, 'threshold': float}
+        dict: {'max_diff_gr': array, 'max_diff_gk': array, 'passed': bool, 'threshold': float}
     """
     input_kwargs, save_data = load_job_data(timestamp, job_index)
     state = save_data['final_state']
@@ -158,31 +182,40 @@ def check_time_translational_invariance(timestamp, job_index, num_rows=10, thres
     max_diff_gr, max_diff_gk = np.max(max_diffs_gr), np.max(max_diffs_gk)
     passed = (max_diff_gr < threshold) and (max_diff_gk < threshold)
 
-    if save_plot:
-        _plot_time_translation(max_diffs_gr, max_diffs_gk, num_rows, threshold, save_dir, timestamp)
+    _plot_time_translation(state.gr, state.gk, time_grid, num_rows, threshold, save_plot, save_dir, timestamp)
 
-    return {'max_diff_gr': max_diff_gr, 'max_diff_gk': max_diff_gk, 'passed': passed, 'threshold': threshold}
+    return {'max_diff_gr': max_diffs_gr, 'max_diff_gk': max_diffs_gk, 'passed': passed, 'threshold': threshold}
 
 
 def _compute_time_translation_diffs(tensor, num_rows):
-    """Compute time-translation invariance differences for a tensor."""
+    """
+    Compute time-translation invariance differences for a tensor.
+
+    Compares each row shifted by -i with the reference (last row shifted by -1).
+    For time-translation invariance: g(t_i, t') shifted by -i should equal g(t_j, t') shifted by -j.
+    """
     max_diffs = []
+
+    # Reference: last row shifted by -1
+    row_ref = tensor[-1, :]
+    row_ref_shifted = row_ref.shift(-1, axis=0)
+
     for i in range(1, num_rows + 1):
         row_i = tensor[-i, :]
-        row_prev = tensor[-(i+1), :]
-        row_prev_shifted = row_prev.shift(-1, axis=0)
+        row_i_shifted = row_i.shift(-i, axis=0)
 
         max_diff = 0.0
         for pauli_idx in range(4):
-            comp_i = row_i.trace(pauli_idx) / 2
-            comp_prev = row_prev_shifted.trace(pauli_idx) / 2
+            comp_i = row_i_shifted.trace(pauli_idx) / 2
+            comp_ref = row_ref_shifted.trace(pauli_idx) / 2
             if comp_i.ndim == 2:
                 comp_i = comp_i[0, :]
-                comp_prev = comp_prev[0, :]
+                comp_ref = comp_ref[0, :]
+            # Skip first few points to avoid edge effects from shifting
             if len(comp_i) > 10:
                 comp_i = comp_i[10:]
-                comp_prev = comp_prev[10:]
-            diff = np.max(np.abs(comp_i - comp_prev))
+                comp_ref = comp_ref[10:]
+            diff = np.max(np.abs(comp_i - comp_ref))
             max_diff = max(max_diff, diff)
         max_diffs.append(max_diff)
     return max_diffs
@@ -260,8 +293,8 @@ def plot_tensor_comparison(tensor1, tensor2, x_values, title, row_index=-1, save
     row1 = tensor1[row_index, :]
     row2 = tensor2[row_index, :]
 
-    pauli_labels = ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)']
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    pauli_labels = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
 
     for pauli_idx in range(4):
         comp1 = row1.trace(pauli_index=pauli_idx) / 2
@@ -287,16 +320,14 @@ def plot_tensor_comparison(tensor1, tensor2, x_values, title, row_index=-1, save
 
         ax.axvline(max_x, color='gray', linestyle=':', linewidth=1.5, alpha=0.6, label='Max deviation')
 
-        ax.set_xlabel('Time t\'', fontsize=10)
+        ax.set_xlabel(r"$t'$", fontsize=10)
         ax.set_ylabel(f'{pauli_labels[pauli_idx]}', fontsize=10)
-        ax.set_title(f'{pauli_labels[pauli_idx]}', fontsize=11, fontweight='bold')
+        ax.set_title(f'{pauli_labels[pauli_idx]}', fontsize=11)
         ax.legend(fontsize=8, loc='best')
         ax.grid(True, alpha=0.3)
         ax.set_xlim([x_values[0], x_values[-1]])
 
     plt.tight_layout()
-    plt.suptitle(title, fontsize=14, fontweight='bold', y=1.00)
-    plt.subplots_adjust(top=0.97)
 
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
@@ -341,13 +372,13 @@ def plot_gap(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
         print(f"  {key}: {value}")
     print(f"{'='*60}\n")
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(times, np.real(gaps), 'b-', linewidth=2, label='Real(Δ)')
-    ax.plot(times, np.imag(gaps), 'r-', linewidth=2, label='Imag(Δ)')
-    ax.plot(times, np.abs(gaps), 'k--', linewidth=1.5, label='|Δ|', alpha=0.5)
-    ax.set_xlabel('Time t', fontsize=12)
-    ax.set_ylabel('Gap Δ(t)', fontsize=12)
-    ax.set_title(f'Gap vs Time (job {job_index})', fontsize=14, fontweight='bold')
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(times, np.real(gaps), 'b-', linewidth=2, label=r'Real($\Delta$)')
+    ax.plot(times, np.imag(gaps), 'r-', linewidth=2, label=r'Imag($\Delta$)')
+    ax.plot(times, np.abs(gaps), 'k--', linewidth=1.5, label=r'$|\Delta|$', alpha=0.5)
+    ax.set_xlabel(r'Time $t$', fontsize=12)
+    ax.set_ylabel(r'Gap $\Delta(t)$', fontsize=12)
+    ax.set_title(f'Gap vs Time (job {job_index})', fontsize=13)
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
@@ -356,9 +387,8 @@ def plot_gap(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, f'gap_vs_time_{timestamp}_job{job_index}.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
+
+    plt.show()
 
 
 def plot_current(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
@@ -391,13 +421,13 @@ def plot_current(timestamp, job_index, save_plot=False, save_dir='analysis_plots
         print(f"  {key}: {value}")
     print(f"{'='*60}\n")
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(times, np.real(currents), 'b-', linewidth=2, label='Real(J)')
-    ax.plot(times, np.imag(currents), 'r-', linewidth=2, label='Imag(J)')
-    ax.plot(times, np.abs(currents), 'k--', linewidth=1.5, label='|J|', alpha=0.5)
-    ax.set_xlabel('Time t', fontsize=12)
-    ax.set_ylabel('Current J(t)', fontsize=12)
-    ax.set_title(f'Current vs Time (job {job_index})', fontsize=14, fontweight='bold')
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(times, np.real(currents), 'b-', linewidth=2, label=r'Real($J$)')
+    ax.plot(times, np.imag(currents), 'r-', linewidth=2, label=r'Imag($J$)')
+    ax.plot(times, np.abs(currents), 'k--', linewidth=1.5, label=r'$|J|$', alpha=0.5)
+    ax.set_xlabel(r'Time $t$', fontsize=12)
+    ax.set_ylabel(r'Current $J(t)$', fontsize=12)
+    ax.set_title(f'Current vs Time (job {job_index})', fontsize=13)
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
@@ -406,9 +436,8 @@ def plot_current(timestamp, job_index, save_plot=False, save_dir='analysis_plots
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, f'current_vs_time_{timestamp}_job{job_index}.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
+
+    plt.show()
 
 
 def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots'):
@@ -463,11 +492,17 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
     gap_means = gap_means[sort_idx]
     gap_errors = gap_errors[sort_idx]
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    max_idx = np.argmax(np.abs(gap_means))
+    max_gap = np.abs(gap_means[max_idx])
+    max_param = parameter_values[max_idx]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
     ax.errorbar(parameter_values, np.abs(gap_means), yerr=gap_errors, fmt='o-', capsize=5, linewidth=2, markersize=8)
+    ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7, label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
     ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=12)
-    ax.set_ylabel('Equilibrated Gap |Δ|', fontsize=12)
-    ax.set_title(f'Equilibrated Gap vs {parameter.replace("_", " ").title()}', fontsize=14, fontweight='bold')
+    ax.set_ylabel(r'Equilibrated Gap $|\Delta|$', fontsize=12)
+    ax.set_title(f'Equilibrated Gap vs {parameter.replace("_", " ").title()}' + '\n' + f'Max $|\\Delta|$ = {max_gap:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}', fontsize=12)
+    ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -475,11 +510,11 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, f'gap_vs_{parameter}.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
 
-    return {'parameter_values': parameter_values, 'gap_means': gap_means, 'gap_errors': gap_errors}
+    plt.show()
+
+    return {'parameter_values': parameter_values, 'gap_means': gap_means, 'gap_errors': gap_errors,
+            'max_gap': max_gap, 'max_parameter': max_param}
 
 
 def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots'):
@@ -534,11 +569,17 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
     current_means = current_means[sort_idx]
     current_errors = current_errors[sort_idx]
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    max_idx = np.argmax(np.abs(current_means))
+    max_current = np.abs(current_means[max_idx])
+    max_param = parameter_values[max_idx]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
     ax.errorbar(parameter_values, np.abs(current_means), yerr=current_errors, fmt='o-', capsize=5, linewidth=2, markersize=8)
+    ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7, label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
     ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=12)
-    ax.set_ylabel('Equilibrated Current |J|', fontsize=12)
-    ax.set_title(f'Equilibrated Current vs {parameter.replace("_", " ").title()}', fontsize=14, fontweight='bold')
+    ax.set_ylabel(r'Equilibrated Current $|J|$', fontsize=12)
+    ax.set_title(f'Equilibrated Current vs {parameter.replace("_", " ").title()}' + '\n' + f'Max $|J|$ = {max_current:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}', fontsize=12)
+    ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -546,46 +587,47 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, f'current_vs_{parameter}.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
 
-    return {'parameter_values': parameter_values, 'current_means': current_means, 'current_errors': current_errors}
+    plt.show()
+
+    return {'parameter_values': parameter_values, 'current_means': current_means, 'current_errors': current_errors,
+            'max_current': max_current, 'max_parameter': max_param}
 
 
 # ============================================================================
 # Internal Plotting Functions
 # ============================================================================
 
-def _plot_normalization(totals, gf_type, time_grid, save_dir, timestamp):
+def _plot_normalization(totals, gf_type, time_grid, save_plot, save_dir, timestamp):
     """Plot normalization check for gr or gk."""
-    pauli_names = ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)']
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    pauli_names = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
 
     for pauli_idx in range(4):
         ax = axes.flat[pauli_idx]
         component = totals[pauli_idx, :]
         ax.plot(time_grid, np.real(component), 'b-', linewidth=2, label='Real', alpha=0.7)
         ax.plot(time_grid, np.imag(component), 'r-', linewidth=2, label='Imag', alpha=0.7)
-        ax.set_xlabel("t₂", fontsize=10)
+        ax.set_xlabel(r"$t_2$", fontsize=10)
         ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
-        ax.set_title(f'g^{gf_type.upper()}: {pauli_names[pauli_idx]}', fontsize=11, fontweight='bold')
+        ax.set_title(f'$g^{{{gf_type}}}$: {pauli_names[pauli_idx]}', fontsize=11)
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([time_grid[0], 0])
 
     plt.tight_layout()
-    plt.suptitle(f'g^{gf_type.upper()} Normalization (timestamp {timestamp})', fontsize=14, fontweight='bold', y=1.00)
-    plt.subplots_adjust(top=0.97)
-    os.makedirs(save_dir, exist_ok=True)
-    plt.savefig(os.path.join(save_dir, f'norm_{gf_type}_{timestamp}.png'), dpi=150, bbox_inches='tight')
-    plt.close()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'norm_{gf_type}_{timestamp}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()
 
 
-def _plot_fdt(gk_actual, gk_fdt, error, time_grid, save_dir, timestamp):
+def _plot_fdt(gk_actual, gk_fdt, error, time_grid, save_plot, save_dir, timestamp):
     """Plot FDT comparison."""
-    pauli_names = ['τ₀ (I)', 'τ₁ (X)', 'τ₂ (Y)', 'τ₃ (Z)']
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    pauli_names = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
 
     for pauli_idx in range(4):
         gk_actual_pauli = gk_actual.trace(pauli_idx) / 2
@@ -603,9 +645,9 @@ def _plot_fdt(gk_actual, gk_fdt, error, time_grid, save_dir, timestamp):
         ax.plot(time_grid, np.real(gk_fdt_pauli), 'b--', linewidth=2, label='FDT (Real)', alpha=0.6)
         ax.plot(time_grid, np.imag(gk_fdt_pauli), 'r--', linewidth=2, label='FDT (Imag)', alpha=0.6)
 
-        ax.set_xlabel('Time t\'', fontsize=10)
+        ax.set_xlabel(r"$t'$", fontsize=10)
         ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
-        ax.set_title(f'{pauli_names[pauli_idx]}', fontsize=11, fontweight='bold')
+        ax.set_title(f'{pauli_names[pauli_idx]}', fontsize=11)
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([time_grid[0], time_grid[-1]])
@@ -616,41 +658,83 @@ def _plot_fdt(gk_actual, gk_fdt, error, time_grid, save_dir, timestamp):
         ax.text(0.02, 0.98, f'max err: {max_err:.2e}\nrel: {rel_err:.1f}%', transform=ax.transAxes, fontsize=8, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
     plt.tight_layout()
-    plt.suptitle(f'FDT Check (timestamp {timestamp})', fontsize=14, fontweight='bold', y=0.998)
-    plt.subplots_adjust(top=0.97)
 
-    os.makedirs(save_dir, exist_ok=True)
-    plt.savefig(os.path.join(save_dir, f'fdt_{timestamp}.png'), dpi=150, bbox_inches='tight')
-    plt.close()
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'fdt_{timestamp}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()
 
 
-def _plot_time_translation(max_diffs_gr, max_diffs_gk, num_rows, threshold, save_dir, timestamp):
-    """Plot time-translation invariance check."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    row_indices = np.arange(1, num_rows + 1)
+def _plot_time_translation(gr_tensor, gk_tensor, time_grid, num_rows, threshold, save_plot, save_dir, timestamp):
+    """Plot time-translation invariance check by overlaying last num_rows rows."""
+    from matplotlib import cm
 
-    ax1.plot(row_indices, max_diffs_gr, 'bo-', linewidth=2, markersize=8, label='Max difference')
-    ax1.axhline(threshold, color='red', linestyle='--', linewidth=2, label=f'Threshold ({threshold:.0e})')
-    ax1.set_xlabel('Row index from last', fontsize=12)
-    ax1.set_ylabel('Max difference', fontsize=12)
-    ax1.set_title('g^R Time Translation Invariance', fontsize=13, fontweight='bold')
-    ax1.legend(fontsize=10)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_yscale('log')
+    pauli_names = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
 
-    ax2.plot(row_indices, max_diffs_gk, 'ro-', linewidth=2, markersize=8, label='Max difference')
-    ax2.axhline(threshold, color='red', linestyle='--', linewidth=2, label=f'Threshold ({threshold:.0e})')
-    ax2.set_xlabel('Row index from last', fontsize=12)
-    ax2.set_ylabel('Max difference', fontsize=12)
-    ax2.set_title('g^K Time Translation Invariance', fontsize=13, fontweight='bold')
-    ax2.legend(fontsize=10)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_yscale('log')
+    # Create colormap (darkest blue = most recent time = largest index)
+    blues = cm.get_cmap('Blues', num_rows + 2)
+
+    # Plot g^R (real part only)
+    fig_gr, axes_gr = plt.subplots(2, 2, figsize=(10, 7))
+    for pauli_idx in range(4):
+        ax = axes_gr.flat[pauli_idx]
+
+        for i in range(1, num_rows + 1):
+            row = gr_tensor[-i, :].shift(i, axis=0)
+            comp = row.trace(pauli_idx) / 2
+            if comp.ndim == 2:
+                comp = comp[0, :]
+
+            # Darker color for more recent times (larger i)
+            color = blues(num_rows + 2 - i)
+            label = f'$t = {time_grid[-i]:.2f}$' if i <= 5 else None
+            ax.plot(time_grid, np.real(comp), '-', color=color, linewidth=1.5, alpha=0.8, label=label)
+
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
+        ax.set_title(f'$g^r$: {pauli_names[pauli_idx]} (Real)', fontsize=11)
+        if pauli_idx == 0:
+            ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], time_grid[-1]])
 
     plt.tight_layout()
-    plt.suptitle(f'Time Translation Invariance (timestamp {timestamp})', fontsize=14, fontweight='bold', y=1.00)
-    plt.subplots_adjust(top=0.94)
 
-    os.makedirs(save_dir, exist_ok=True)
-    plt.savefig(os.path.join(save_dir, f'tti_{timestamp}.png'), dpi=150, bbox_inches='tight')
-    plt.close()
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'tti_gr_{timestamp}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+    # Plot g^K (imaginary part only)
+    fig_gk, axes_gk = plt.subplots(2, 2, figsize=(10, 7))
+    for pauli_idx in range(4):
+        ax = axes_gk.flat[pauli_idx]
+
+        for i in range(1, num_rows + 1):
+            row = gk_tensor[-i, :].shift(i, axis=0)
+            comp = row.trace(pauli_idx) / 2
+            if comp.ndim == 2:
+                comp = comp[0, :]
+
+            # Darker color for more recent times (larger i)
+            color = blues(num_rows + 2 - i)
+            label = f'$t = {time_grid[-i]:.2f}$' if i <= 5 else None
+            ax.plot(time_grid, np.imag(comp), '-', color=color, linewidth=1.5, alpha=0.8, label=label)
+
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
+        ax.set_title(f'$g^k$: {pauli_names[pauli_idx]} (Imag)', fontsize=11)
+        if pauli_idx == 0:
+            ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], time_grid[-1]])
+
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'tti_gk_{timestamp}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()

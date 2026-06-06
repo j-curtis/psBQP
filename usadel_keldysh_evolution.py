@@ -372,6 +372,7 @@ class UsadelKeldyshEvolution:
         #                       type 5: L,M,R -- (2,2,ntpoints) each
         #                       type 6: L -- (2,2,ntpoints,ntpoints) R -- (2,2,ntpoints)
         #                       type 7: L -- (2,2,ntpoints) R -- (2,2,ntpoints,ntpoints)
+        #                       type 8: L -- (2,2,ntpoints) R -- (2,2,ntpoints)
 
         # ========== Shape Validation ==========
         # Validate all term shapes before processing
@@ -387,7 +388,8 @@ class UsadelKeldyshEvolution:
                 4: {'R': two_time_shape},
                 5: {'L': single_time_shape, 'M': single_time_shape, 'R': single_time_shape},
                 6: {'L': two_time_shape, 'R': single_time_shape},
-                7: {'L': single_time_shape, 'R': two_time_shape}
+                7: {'L': single_time_shape, 'R': two_time_shape},
+                8: {'L': single_time_shape, 'R': single_time_shape}
             }
 
             for term_name, term_spec in terms_dict.items():
@@ -399,7 +401,7 @@ class UsadelKeldyshEvolution:
 
                 # Check if type is valid
                 if type_num not in type_shape_requirements:
-                    raise ValueError(f"Unknown type number {type_num} in term '{term_name}'. Valid types: 1-7")
+                    raise ValueError(f"Unknown type number {type_num} in term '{term_name}'. Valid types: 1-8")
 
                 # Get expected shapes for this type
                 expected_shapes = type_shape_requirements[type_num]
@@ -534,7 +536,7 @@ class UsadelKeldyshEvolution:
                 interior_factor = self.delta_t / 4.0 * self.delta_t
 
                 # 1. Operator contribution: M_L = (δt/8)·L(t,t)
-                left_contribution = boundary_factor * l_operator[-1, -1]
+                left_contribution = boundary_factor * l_operator[-1, :]
                 if left_matrix is None:
                     left_matrix = left_contribution
                 else:
@@ -604,7 +606,7 @@ class UsadelKeldyshEvolution:
                 v_old_boundary_1 = boundary_factor * g_last_row.shift(-1, axis=1) * r_diagonal
                 v_old_boundary_2 = boundary_factor * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
 
-                diagonal_term_factor_list.append((boundary_factor * tau0, r_diagonal[-1,-1]))
+                diagonal_term_factor_list.append((boundary_factor * tau0, r_diagonal[-1]))
 
                 # 2b. Interior sums: (δt/4)·Σ_{t''} g(t-δt, t'')·R(t'', t')
                 # Four interior convolutions total (2 for V_old, 2 for V_crt):
@@ -627,7 +629,7 @@ class UsadelKeldyshEvolution:
                 # Two more interior convolutions for current time (use full R)
                 #* the convolution with this term should take approriately such that the last term here is going against the new 1 off diagonal element!
 
-                rhs_vector_history_list.append((-interior_factor * tau0 * expansion_tensor, r_operator + r_operator.shift(shift_index, axis=1)))
+                rhs_vector_history_list.append((-interior_factor * tau0, r_operator + r_operator.shift(shift_index, axis=1)))
 
             # ========== Type 5: Bilinear convolution L·∫_{t'}^t g·M·g dt''·R ==========
             elif type_num == 5:
@@ -715,17 +717,11 @@ class UsadelKeldyshEvolution:
                 # Pre-compute effective operator: M(t'')·g(t'',t')·R(t')
                 # Then convolution: g(t,t'') @ [M·g·R](t'',t')
                 #* we need to shift the g_matrix operator because the time indicies are shifted by 1 in the passed g_matrix in t' we also shift the other axis since we want the operator to have the proper time indexing w.r.t. new time indices
-                rhs_vector_history_list.append((
-                    -interior_factor * l_operator[-1],
-                    m_operator * g_matrix.shift(-1, axis=0).shift(-1, axis=1) * r_operator
-                ))
+                rhs_vector_history_list.append(( -interior_factor * l_operator[-1], m_operator * g_matrix.shift(-1, axis=0).shift(-1, axis=1) * r_operator + m_operator.shift(shift_index, axis=0) * g_matrix.shift(-1, axis=0).shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)))
 
                 # Term 2: δt/4 L(t) Σ_{t''=t'+2δt}^{t-δt} g(t,t'')·M(t'')·g(t'',t'+δt)·R(t'+δt)
                 # Pre-compute effective operator with shifted t': M(t'')·g(t'',t'+δt)·R(t'+δt)
-                rhs_vector_history_list.append((
-                    -interior_factor * l_operator[-1],
-                    m_operator.shift(shift_index, axis=0) * g_matrix.shift(-1, axis=0).shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)
-                ))
+
 
             # ========== Type 6: Mixed left-right ∫_{-∞}^t L(t,t'')·g(t'',t')·R(t') dt'' ==========
             elif type_num == 6:
@@ -791,10 +787,7 @@ class UsadelKeldyshEvolution:
                 interior_factor = self.delta_t / 4.0 * self.delta_t
 
                 # Extract diagonal R(t', t') for boundary terms and sandwich
-                if r_operator.data.ndim == 4:
-                    r_diagonal = r_operator.diagonal_time()  # Extract R(t', t')
-                else:
-                    r_diagonal = r_operator
+                r_diagonal = r_operator.diagonal_time()  # Extract R(t', t')
 
                 # 1. No M_L or M_R
                 # 2. V_old contribution
@@ -808,10 +801,9 @@ class UsadelKeldyshEvolution:
                 # 2b. Boundary terms at initial time: L(t-δt)·g(t-δt, t_init)·R(t_init, t') (Eq. 565)
             
                 # 2c. Interior sums: (δt/4)·L(t-δt)·Σ_{t''=t_init+δt}^{t'} g(t-δt, t'')·R(t'', t') (Eq. 566-567)
-                v_old_interior_1 = interior_factor * l_operator[-2] * (g_last_row[:,1:] @ r_operator[:-1])
-                v_old_interior_2 = interior_factor * l_operator[-2] * (g_last_row[:,1:].shift(shift_index, axis=1) @ r_operator[:-1].shift(shift_index, axis=1))
+                v_old_interior_1 = interior_factor * l_operator[-2] * (g_last_row[:,1:] @ (r_operator[:-1] +  r_operator[:-1].shift(shift_index, axis=1)))
 
-                v_old_contribution = (v_old_boundary_1 + v_old_boundary_2 + v_old_interior_1 + v_old_interior_2)
+                v_old_contribution = (v_old_boundary_1 + v_old_boundary_2 + v_old_interior_1)
 
                 if rhs_vector is None:
                     rhs_vector = -v_old_contribution
@@ -830,14 +822,42 @@ class UsadelKeldyshEvolution:
 
                 # 5. V_crt_conv: Initial boundary + interior sums (Eq. 561-563)
                 # Initial time boundary terms (Eq. 561):
-                # δt/8 L(t)·g(t,t_init)·R(t_init,t')
-                # δt/8 L(t)·g(t,t_init)·R(t_init,t'+δt)
-                rhs_vector_history_list.append((-boundary_factor * l_operator[-1], r_operator + r_operator.shift(shift_index, axis=1)))
 
                 # Interior sums (Eq. 562-563):
                 # δt/4 L(t) Σ_{t''=t_init+δt}^{t'-δt} g(t,t'')·R(t'',t')
                 # δt/4 L(t) Σ_{t''=t_init+δt}^{t'} g(t,t'')·R(t'',t'+δt)
-                rhs_vector_history_list.append((-interior_factor * l_operator[-1] * expansion_tensor, r_operator + r_operator.shift(shift_index, axis=1)))
+                rhs_vector_history_list.append((-interior_factor * l_operator[-1], r_operator + r_operator.shift(shift_index, axis=1)))
+
+            # ========== Type 8: Bilinear coupling L(t)·g(t,t')·R(t') ==========
+            elif type_num == 8:
+                # F(t,t') = L(t)·g(t,t')·R(t')
+                # L is single-time L(t), R is single-time R(t')
+                # No convolution, just direct bilinear product
+                l_operator = term_spec['L']  # Shape: (2, 2, Nt) for single-time
+                r_operator = term_spec['R']  # Shape: (2, 2, Nt) for single-time
+                cn_factor = 1.0 / 4.0 * self.delta_t
+
+                # 1. Sandwich matrix: (1/4)·L(t) acting on g·R(t')
+                # This handles the bilinear coupling at current time t
+                left_sandwich = cn_factor * l_operator[-1]
+                right_sandwich = r_operator
+                g_sandwich_matrices.append((left_sandwich, right_sandwich))
+
+                # 2. V_crt_diag: (1/4)·L(t)·g(t,t'+δt)·R(t'+δt)
+                # Couples to the shifted diagonal element
+                rhs_vector_factor_list.append(( -cn_factor * l_operator[-1],r_operator.shift(shift_index, axis=0)))
+
+                # 3. V_old: (1/4)·L(t-δt)·[g(t-δt,t')·R(t') + g(t-δt,t'+δt)·R(t'+δt)]
+                # Pre-computed contribution from old time
+                v_old_contribution = cn_factor * l_operator[-2] * (g_last_row.shift(-1, axis=1) * r_operator + g_last_row.shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0) )
+
+                # 4. Diagonal correction for g^K diagonal element
+                diagonal_term_factor_list.append((cn_factor * l_operator[-2], r_operator[-1]))
+
+                if rhs_vector is None:
+                    rhs_vector = -v_old_contribution
+                else:
+                    rhs_vector = rhs_vector - v_old_contribution
 
         #* Return tuple matching generalized_gr_update_rule signature
         # shape of tuples should be:
@@ -1031,6 +1051,7 @@ class UsadelKeldyshEvolution:
                     right_term = terms[1]
                     if g_type == 'r':
                         #* last element in right_term corresponds to time t actually so it should be summed with solution tensor last element
+
                         convolution_term_1 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time] 
                     elif g_type == 'k':
                         #* note, last right term is actually time t as last time index and last solution tensor is that as well? 
@@ -1142,15 +1163,15 @@ class UsadelKeldyshEvolution:
         # NOTE: delta_t factor is applied later in construct_discrete_operators
 
         evolution_terms = {
-            'type1_gap': {'L': -1j * gap_tensor}, 
+            'type1_gap': {'L': -1j * gap_tensor},
             'type2_gap': {'R': 1j * gap_tensor},
             'type1_damping': {'L': 1j * self.eta * tau3 * expansion_tensor},
             'type2_damping': {'R': -1j * self.eta * tau3 * expansion_tensor},
             'type1_em_local': {'L': 1j * A2_t * tau3 * expansion_tensor},
             'type2_em_local': {'R': -1j * (A_tensor * A_tensor) * tau3},
-            'type1_em_cross': {'L': +1j * A_t * A_tensor * tau3},
-            'type2_em_cross': {'R': -1j * A_t * A_tensor * tau3},
-            'type5_em_1': {'L': 1j * A_t * tau3 * expansion_tensor,'M': A_tensor * tau3, 'R': expansion_tensor}, 
+            'type8_em_cross': {'L': +1j * A_t * tau3 * expansion_tensor, 'R': A_tensor},
+            'type8_em_cross2': {'L': -1j * A_t *  expansion_tensor, 'R': A_tensor * tau3},
+            'type5_em_1': {'L': 1j * A_t * tau3 * expansion_tensor,'M': A_tensor * tau3, 'R': expansion_tensor},
              'type5_em_2': {'L': -1j *expansion_tensor,'M': A_tensor * tau3,'R': A_tensor * tau3}
             }  
 
@@ -1233,6 +1254,9 @@ class UsadelKeldyshEvolution:
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
+        gk_last_row = state.gk[-1:, :]
+        gr_last_row = state.gr[-1:, :]
+
         gap_history = state.get_gap_history()
         #gap_history = np.ones(np.size(gap_history))  * 1.4563  #overwrite gap
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
@@ -1250,28 +1274,27 @@ class UsadelKeldyshEvolution:
         # NOTE: delta_t factor is applied later in construct_discrete_operators
         evolution_terms = {
             'type1_gap': {'L': -1j * gap_tensor},
-            'type2_gap': {'R': 1j * gap_tensor}, 
+            'type2_gap': {'R': 1j * gap_tensor},
             'type1_damping': {'L': 1j * self.eta * tau3 * expansion_tensor},
-            'type2_damping': {'R': 1j * self.eta * tau3 * expansion_tensor}, 
+            'type2_damping': {'R': 1j * self.eta * tau3 * expansion_tensor},
             'type1_em_local': {'L': 1j * A2_t * tau3 * expansion_tensor},
-            'type2_em_local': {'R': 1j * (A_tensor * A_tensor) * tau3}, 
-            'type1_em_cross': {'L': -1j * A_t * A_tensor * tau3},
-            'type2_em_cross': {'R': -1j * A_t * A_tensor * tau3},
+            'type2_em_local': {'R': 1j * (A_tensor * A_tensor) * tau3},
+            'type8_em_cross': {'L': -1j * A_t * expansion_tensor, 'R': A_tensor * tau3},
+            'type8_em_cross': {'L': -1j * A_t * expansion_tensor * tau3, 'R': A_tensor},
         }
 
         if A_history is not None and not np.allclose(A_history, 0):
 
-            evolution_terms['type3_em1'] = {'L': 1j * A_t * tau3 * gr_last_row * A_tensor * tau3}
-            evolution_terms['type6_em2'] = {'L': 1j * gr_last_row * A_tensor * tau3, 'R': A_tensor * tau3}
+            evolution_terms['type3_em1'] = {'L': 1j * A_t * tau3 * state.gr * A_tensor * tau3}
+            evolution_terms['type6_em2'] = {'L': 1j * state.gr * A_tensor * tau3, 'R': A_tensor * tau3}
 
             evolution_terms['type4_em1'] = {'R': -1j * A_tensor * tau3 * ga * A_tensor * tau3}
-            evolution_terms['type7_em2'] = {'L': 1j * A_t * tau3, 'R': A_tensor * tau3 * ga}
+            evolution_terms['type7_em2'] = {'L': 1j * A_t * tau3 * expansion_tensor, 'R': A_tensor * tau3 * ga}
 
 
         L1, R1, V1, Vhist1, Vfact1, sandwich1, diag_factor_list_1, diag_hist_list_1 = self.construct_discrete_operators(evolution_terms, state, gap_tensor, g_type='k')
 
         # ========== 3. Add derivative corrections ==========
-        gk_last_row = state.gk[-1:, :]
 
         # M_L correction: +(i/2)τ₃
         L1 = L1 + (1j/2) * tau3 * expansion_tensor
@@ -1344,7 +1367,7 @@ class UsadelKeldyshEvolution:
                     term2_left = -2j * (gr[-1-dt_shift:dt_end, :] * A_tensor[-1-dt_shift] * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
                     term1and2_right = -2j * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3).precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift).shift(dt_prime_shift, axis=1)
 
-                    em_thermal_conv+= cn_factor * self.dt * (term1_left + term2_left + term1and2_right)
+                    em_thermal_conv1 += cn_factor * self.delta_t * (term1_left + term2_left + term1and2_right)
 
             V1 = V1 + em_thermal_conv1
 
@@ -1484,7 +1507,11 @@ class UsadelKeldyshEvolution:
         # Initialize A_external as zeros (history window)
         # Size N_t from initial_state's time grid
         N_t = initial_state.gr.data.shape[2]
-        A_external = np.zeros(N_t, dtype=complex)
+        if driving_field is None:
+            A_external = np.zeros(N_t, dtype=complex)
+        else:
+            A_external = np.ones(N_t, dtype=complex) * driving_field[0]
+        
 
         # Start with initial state
         state = initial_state

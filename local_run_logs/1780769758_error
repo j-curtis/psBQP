@@ -1,0 +1,7 @@
+Log file created at Sat Jun  6 20:16:09 2026
+
+
+
+The simulation was INTERRUPTED by the following ERROR:
+
+TypeError("evolve_keldysh_state() got an unexpected keyword argument 'vector_potential'")

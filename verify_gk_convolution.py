@@ -161,7 +161,11 @@ def plot_normalization_checks(state, time_grid, thermal_dist, thermal_integral, 
 
 def plot_thermal_integrals(time_grid, thermal_dist, thermal_integral):
     """
-    Plot integral of f(t,t'') vs t'' and thermal integral F(t,t') on the same plot.
+    Plot integrals of f(t,t'') and f(t'',t') vs t'' along with thermal integral F(t,t').
+
+    Properly accounts for integration limits:
+    - ∫dt'' f(t,t'') integrates from -T_max up to t' (respects causality for each t')
+    - ∫dt'' f(t'',t') integrates from -T_max up to t (fixed upper limit)
 
     Args:
         time_grid: Array of time values
@@ -174,61 +178,123 @@ def plot_thermal_integrals(time_grid, thermal_dist, thermal_integral):
     f_tau0 = thermal_dist.trace(0) / 2  # Shape: (Nt, Nt)
     F_tau0 = thermal_integral.trace(0) / 2  # Shape: (Nt, Nt)
 
-    # Pick a time slice (e.g., last row: t = t_max)
+    # Pick last row: t = 0 (end of time grid)
     t_idx = -1
-    f_row = f_tau0[t_idx, :]  # f(t_max, t'') vs t''
-    F_row = F_tau0[t_idx, :]  # F(t_max, t'') vs t''
+    t_value = time_grid[t_idx]
 
-    # Compute cumulative integral of f numerically for comparison
+    F_row = F_tau0[t_idx, :]  # F(t, t'') vs t''
+
+    # Time step
     dt = time_grid[1] - time_grid[0]
-    f_integral_numerical = np.zeros_like(f_row)
-    for i in range(len(f_row)):
-        # Integrate from beginning up to index i
-        f_integral_numerical[i] = np.sum(f_row[:i+1]) * dt
+    Nt = len(time_grid)
 
-    # Create plot
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    # ========== Use NambuKeldyshTensor convolution operations ==========
+    # Extract f as a row for the last time: f(t, t') with t = t_idx
+    # Convert negative index to positive to avoid slicing issues
+    t_idx_pos = Nt + t_idx if t_idx < 0 else t_idx
+    f_row_tensor = thermal_dist[t_idx_pos:t_idx_pos+1, :]  # Shape: (2, 2, 1, Nt)
 
-    # Left plot: f(t,t'') and its integral
-    ax1.plot(time_grid, np.real(f_row), 'b-', linewidth=2, label='f(t,t\'\') - Real', alpha=0.8)
-    ax1.plot(time_grid, np.imag(f_row), 'r-', linewidth=2, label='f(t,t\'\') - Imag', alpha=0.8)
-    ax1.plot(time_grid, np.real(f_integral_numerical), 'b--', linewidth=2,
-             label='∫f dt\'\' (numerical) - Real', alpha=0.6)
-    ax1.plot(time_grid, np.imag(f_integral_numerical), 'r--', linewidth=2,
-             label='∫f dt\'\' (numerical) - Imag', alpha=0.6)
-    ax1.set_xlabel('t\'\' (time)', fontsize=12)
-    ax1.set_ylabel('f(t,t\'\') and ∫f dt\'\'', fontsize=12)
-    ax1.set_title('Thermal Distribution f and its Integral', fontsize=13, fontweight='bold')
-    ax1.legend(fontsize=9, loc='best')
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xlim([time_grid[0], time_grid[-1]])
+    # Create ones tensor as a row vector (all ones)
+    # Shape: (2, 2, 1, Nt) - identity in Nambu space
+    ones_row_data = np.ones((1, Nt), dtype=complex)
+    ones_row = NambuKeldyshTensor(ones_row_data, pauli_channel=0)
 
-    # Right plot: Compare numerical integral with -F(t,t')
-    ax2.plot(time_grid, np.real(f_integral_numerical), 'b-', linewidth=2,
-             label='∫f dt\'\' (numerical) - Real', alpha=0.8)
-    ax2.plot(time_grid, -np.real(F_row), 'b--', linewidth=2,
-             label='-F(t,t\'\') (analytic) - Real', alpha=0.6)
-    ax2.plot(time_grid, np.imag(f_integral_numerical), 'r-', linewidth=2,
-             label='∫f dt\'\' (numerical) - Imag', alpha=0.8)
-    ax2.plot(time_grid, -np.imag(F_row), 'r--', linewidth=2,
-             label='-F(t,t\'\') (analytic) - Imag', alpha=0.6)
-    ax2.set_xlabel('t\'\' (time)', fontsize=12)
-    ax2.set_ylabel('Thermal Integral', fontsize=12)
-    ax2.set_title('Numerical vs -F(t,t\'\') Analytic Thermal Integral', fontsize=13, fontweight='bold')
-    ax2.legend(fontsize=9, loc='best')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xlim([time_grid[0], time_grid[-1]])
+    # Create causality matrix: ones_data[i, j] = 1 if i <= j, else 0
+    # This enforces integration up to each t'
+    row_indices = np.arange(Nt)[:, np.newaxis]  # Shape (Nt, 1)
+    col_indices = np.arange(Nt)[np.newaxis, :]  # Shape (1, Nt)
+    ones_causal_data = (row_indices <= col_indices).astype(complex)
+    ones_causal = NambuKeldyshTensor(ones_causal_data, pauli_channel=0)
+
+    # Create filter function to suppress early-time artifacts
+    # Zero out first 1/5 of time points (same as in precise_convolution_left)
+    filter_data = np.append(np.zeros(Nt//5), np.ones(Nt - Nt//5))
+    filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
+
+    # Compute convolutions using @ operator
+    # 1. ones @ f: integrates over first index (sums columns)
+    # This gives ∫dt'' f(t'',t') for each t'
+    # Apply filter to suppress early-time artifacts
+    ones_at_f_filtered = (ones_row @ thermal_dist) * filter_function
+    ones_at_f = ones_at_f_filtered * dt
+    f_col_integral_trace = ones_at_f.trace(0) / 2  # Extract tau_0 component
+    # Handle shape: could be (1, Nt) or (Nt,)
+    if f_col_integral_trace.ndim == 2:
+        f_col_integral_conv = f_col_integral_trace[0, :]  # Flatten to 1D
+    elif f_col_integral_trace.ndim == 1:
+        f_col_integral_conv = f_col_integral_trace  # Already 1D
+    else:
+        # Unexpected shape
+        f_col_integral_conv = f_col_integral_trace.flatten()
+
+    # 2. f @ ones_causal: integrates with causality (respects t <= t')
+    # This gives ∫_{-T_max}^{t'} dt'' f(t,t'') for each t'
+    f_at_ones = (f_row_tensor @ ones_causal) * dt
+    f_row_integral_trace = f_at_ones.trace(0) / 2  # Extract tau_0 component
+    # Handle shape: could be (1, Nt) or (Nt,)
+    if f_row_integral_trace.ndim == 2:
+        f_row_integral_conv = f_row_integral_trace[0, :]  # Flatten to 1D
+    elif f_row_integral_trace.ndim == 1:
+        f_row_integral_conv = f_row_integral_trace  # Already 1D
+    else:
+        # Unexpected shape
+        f_row_integral_conv = f_row_integral_trace.flatten()
+
+    # Create single plot with all integrals
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+
+    # Plot f @ ones_causal: ∫_{-T_max}^{t'} dt'' f(t,t'') with causality
+    ax.plot(time_grid, np.real(f_row_integral_conv), 'b-', linewidth=2,
+            label='f @ ones_causal (∫ up to t\') - Real', alpha=0.8)
+    ax.plot(time_grid, np.imag(f_row_integral_conv), 'b--', linewidth=2,
+            label='f @ ones_causal (∫ up to t\') - Imag', alpha=0.8)
+
+    # Plot ones @ f: ∫_{-T_max}^{t} dt'' f(t'',t') (full column sum)
+    # Make red lines THICKER to be more visible
+    ax.plot(time_grid, np.real(f_col_integral_conv), 'r-', linewidth=4,
+            label='ones @ f (∫ all t\'\') - Real', alpha=0.9)
+    ax.plot(time_grid, np.imag(f_col_integral_conv), 'r--', linewidth=4,
+            label='ones @ f (∫ all t\'\') - Imag', alpha=0.9)
+
+    # Plot -F(t,t') (analytic thermal integral)
+    # F(t,t') = ∫_{-∞}^{t-t'} f(τ) dτ in the code
+    # But on finite grid: F(t,t') = ∫_{-T_max-t'}^{t-t'} f(τ) dτ + corrections
+    ax.plot(time_grid, -np.real(F_row), 'g-', linewidth=2,
+            label='-F(t,t\') (analytic) - Real', alpha=0.7)
+    ax.plot(time_grid, -np.imag(F_row), 'g--', linewidth=2,
+            label='-F(t,t\') (analytic) - Imag', alpha=0.7)
+
+    ax.set_xlabel('t\' (time)', fontsize=12)
+    ax.set_ylabel('Thermal Integrals', fontsize=12)
+    ax.set_title(f'Thermal Distribution Integrals (t = {t_value:.3f})',
+                 fontsize=13, fontweight='bold')
+    ax.legend(fontsize=9, loc='best')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([time_grid[0], time_grid[-1]])
 
     plt.tight_layout()
     plt.show()
 
     # Print comparison statistics
-    print(f"  Comparing numerical ∫f with -F(t,t') (negative of analytic):")
-    diff_real = np.max(np.abs(np.real(f_integral_numerical) - (-np.real(F_row))))
-    diff_imag = np.max(np.abs(np.imag(f_integral_numerical) - (-np.imag(F_row))))
-    print(f"    Maximum difference (Real): {diff_real:.6e}")
-    print(f"    Maximum difference (Imag): {diff_imag:.6e}")
-    print(f"    -F(t,t'=t_max) at diagonal: {-F_row[-1]:.6f}")
+    print(f"  Convolution operations:")
+    print(f"    f @ ones_causal: ∫_{'{-T_max}'}^{'{t\'}'} dt'' f(t,t'') (respects causality)")
+    print(f"    ones @ f: ∫_{'{-T_max}'}^{'{t}'} dt'' f(t'',t') = {t_value:.3f} (full column sum)")
+    print(f"\n  Comparing convolution integrals with -F(t,t'):")
+
+    diff_row_real = np.max(np.abs(np.real(f_row_integral_conv) - (-np.real(F_row))))
+    diff_row_imag = np.max(np.abs(np.imag(f_row_integral_conv) - (-np.imag(F_row))))
+    print(f"    f @ ones_causal vs -F(t,t'):")
+    print(f"      Maximum difference (Real): {diff_row_real:.6e}")
+    print(f"      Maximum difference (Imag): {diff_row_imag:.6e}")
+
+    diff_col_real = np.max(np.abs(np.real(f_col_integral_conv) - (-np.real(F_row))))
+    diff_col_imag = np.max(np.abs(np.imag(f_col_integral_conv) - (-np.imag(F_row))))
+    print(f"    ones @ f vs -F(t,t'):")
+    print(f"      Maximum difference (Real): {diff_col_real:.6e}")
+    print(f"      Maximum difference (Imag): {diff_col_imag:.6e}")
+
+    print(f"\n    Note: F is computed from -∞ with corrections, causing discrepancy at boundaries")
+    print(f"    -F(t,t'=t) at diagonal: {-F_row[-1]:.6f}")
     print()
 
 

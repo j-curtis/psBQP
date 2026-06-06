@@ -70,7 +70,7 @@ class StateObject:
 
         Uses the gap equation: Δ(t) = λ Tr[τ₋ g^K(t,t)]
         where τ₋ = (τ₁ - iτ₂)/2 is the lowering operator.
-        
+
         Returns:
             np.ndarray: Gap values Δ(t) at each time point
         """
@@ -318,6 +318,7 @@ class StateObject:
         gk_t1_row = self.gk[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
         last_endpoint_1 = gr_t1_t1 * gk_t1_row  # gr[t1, t1] * gk[t1, t2]
 
+        #! the midpoint rule could be breaking associativity of the convolution, check analytically
         conv1 = conv1 - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
 
         # Second convolution: ∫ g^K(t1, t') g^A(t', t2) dt' for all t2

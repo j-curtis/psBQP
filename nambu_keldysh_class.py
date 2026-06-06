@@ -257,10 +257,12 @@ class NambuKeldyshTensor:
         # pauli_channel=0 automatically creates the (2,2) identity structure
         ones_data = np.ones((1, other.data.shape[-2]), dtype=complex)
         ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+
+        # Create filter function to suppress early-time artifacts
+        # Zero out first 1/5 of time points
         N_t = self.data.shape[-1]
-
-        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5)), pauli_channel=0)
-
+        filter_data = np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5))
+        filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
 
         # Check if self is a row (shape: 2, 2, 1, N_t) - already validated above
         is_self_row = (self.data.shape[2] == 1)
@@ -271,11 +273,13 @@ class NambuKeldyshTensor:
         last_endpoint_std = self[:,-1:] * other[-1:,:]
         result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
 
-        # Factored term (non-analytic contribution)
+        # Factored term (non-analytic contribution) - APPLY FILTER to ones_tensor @ other
+        # Filter suppresses early-time artifacts in the factorized convolution
+        ones_at_other_filtered = (ones_tensor @ other) * filter_function
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
         first_endpoint_fact = self * (ones_tensor[:,0:1] * other[0,:])
         last_endpoint_fact = self * (ones_tensor[:,-1:] * other[-1,:])
-        result_fact = (self * (ones_tensor @ other)) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact 
+        result_fact = (self * ones_at_other_filtered) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact * 0 #* zero from filter function
 
         # For analytic term: use row of other_integral if self is a row
         if is_self_row:
@@ -283,7 +287,7 @@ class NambuKeldyshTensor:
             # Handle negative indices properly to avoid empty slices
             N_t = other_integral.data.shape[2]
             if other_index < 0:
-                # Convert negative index to positive
+                # Convert negative index to positiveo
                 positive_index = N_t + other_index
             else:
                 positive_index = other_index
@@ -293,9 +297,9 @@ class NambuKeldyshTensor:
 
         # Analytic term (using integral)
         result_anal = self * other_integral_for_reg
+
         # Combine: standard - factored + analytic
-        #* doesnt play a major role apart from diagonal element
-        return (result_std + (- result_fact + result_anal)) * filter_function
+        return (result_std + (- result_fact + result_anal))
 
 
     def precise_convolution_right(self, other, other_integral, dt, self_index = -1):
@@ -361,7 +365,8 @@ class NambuKeldyshTensor:
         N_t = other.data.shape[-1]
         N_tprime = self.data.shape[-1]
 
-        filter_function = NambuKeldyshTensor(np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5)), pauli_channel=0)
+        filter_data = np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5))
+        filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
 
         # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')
         row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
@@ -390,14 +395,14 @@ class NambuKeldyshTensor:
         # Factored term (non-analytic contribution)
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
         first_endpoint_fact = (other[:,0:1] * ones_tensor[0:1,:]) * self_for_reg
-        last_endpoint_fact = (other[:,:]) * self_for_reg 
-        result_fact = ((other @ ones_tensor) * self_for_reg) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact
+        last_endpoint_fact = (other[:,:]) * self_for_reg
+        result_fact = ((other @ ones_tensor) * self_for_reg) * filter_function * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact *0 
 
         # Analytic term (using integral)
         result_anal = (- other_integral) * self_for_reg
-        #! tried subtracting different g but something went wrong, continuing with *0 for now
+
         # Combine: standard - factored + analytic
-        return (result_std + ( - result_fact + result_anal))* filter_function
+        return (result_std + ( - result_fact + result_anal))
 
     def _check_binary_shape_compatibility(self, other):
         """

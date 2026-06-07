@@ -187,6 +187,76 @@ def check_time_translational_invariance(timestamp, job_index, num_rows=10, thres
     return {'max_diff_gr': max_diffs_gr, 'max_diff_gk': max_diffs_gk, 'passed': passed, 'threshold': threshold}
 
 
+def check_state_evolution(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
+    """
+    Compare state evolution between initial (t=0, index 0) and final (t=-1, index -1) times.
+
+    Extracts rows at earliest and latest times for both g^R and g^K, then computes
+    differences across all 4 Pauli components to show how much the state has evolved.
+
+    Args:
+        timestamp: Timestamp to analyze
+        job_index: Job index
+        save_plot: Whether to save plots (default False)
+        save_dir: Directory for plots
+
+    Returns:
+        dict: {
+            'gr_max_diff': array (4,) - max difference per Pauli component for g^R
+            'gk_max_diff': array (4,) - max difference per Pauli component for g^K
+            'gr_initial': NambuKeldyshTensor - g^R at earliest time
+            'gr_final': NambuKeldyshTensor - g^R at latest time
+            'gk_initial': NambuKeldyshTensor - g^K at earliest time
+            'gk_final': NambuKeldyshTensor - g^K at latest time
+        }
+    """
+    input_kwargs, save_data = load_job_data(timestamp, job_index)
+    state = save_data['final_state']
+    time_grid = np.linspace(-state.T_max, 0, state.gr.data.shape[2])
+
+    # Extract rows at initial (index 0) and final (index -1) times
+    gr_initial = state.gr[0, :]  # t = -T_max (earliest)
+    gr_final = state.gr[-1, :]   # t = 0 (latest)
+    gk_initial = state.gk[0, :]
+    gk_final = state.gk[-1, :]
+
+    # Compute differences for each Pauli component
+    gr_max_diff = np.zeros(4)
+    gk_max_diff = np.zeros(4)
+
+    for pauli_idx in range(4):
+        # g^R differences
+        gr_init_pauli = gr_initial.trace(pauli_idx) / 2
+        gr_final_pauli = gr_final.trace(pauli_idx) / 2
+        if gr_init_pauli.ndim == 2:
+            gr_init_pauli = gr_init_pauli[0, :]
+            gr_final_pauli = gr_final_pauli[0, :]
+        gr_diff = np.abs(gr_final_pauli - gr_init_pauli)
+        gr_max_diff[pauli_idx] = np.max(gr_diff)
+
+        # g^K differences
+        gk_init_pauli = gk_initial.trace(pauli_idx) / 2
+        gk_final_pauli = gk_final.trace(pauli_idx) / 2
+        if gk_init_pauli.ndim == 2:
+            gk_init_pauli = gk_init_pauli[0, :]
+            gk_final_pauli = gk_final_pauli[0, :]
+        gk_diff = np.abs(gk_final_pauli - gk_init_pauli)
+        gk_max_diff[pauli_idx] = np.max(gk_diff)
+
+    # Plot comparison
+    _plot_state_evolution(gr_initial, gr_final, gk_initial, gk_final,
+                         time_grid, save_plot, save_dir, timestamp)
+
+    return {
+        'gr_max_diff': gr_max_diff,
+        'gk_max_diff': gk_max_diff,
+        'gr_initial': gr_initial,
+        'gr_final': gr_final,
+        'gk_initial': gk_initial,
+        'gk_final': gk_final
+    }
+
+
 def _compute_time_translation_diffs(tensor, num_rows):
     """
     Compute time-translation invariance differences for a tensor.
@@ -342,105 +412,175 @@ def plot_tensor_comparison(tensor1, tensor2, x_values, title, row_index=-1, save
 # Gap and Current Plotting Functions
 # ============================================================================
 
-def plot_gap(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
+def plot_gap(timestamp, job_index=None, save_plot=False, save_dir='analysis_plots'):
     """
-    Plot gap vs time for a specific job.
+    Plot gap vs time for all jobs or a specific job.
 
     Displays input parameters before plotting.
 
     Args:
         timestamp: Timestamp folder name
-        job_index: Job index
+        job_index: Job index (default None plots all jobs in folder)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
     """
-    input_kwargs, save_data = load_job_data(timestamp, job_index)
-    gaps = save_data['gaps']
-
-    if 'times' in save_data:
-        times = save_data['times']
+    # Determine which jobs to plot
+    if job_index is None:
+        job_no = io.recover_job_no(timestamp=timestamp)
+        job_indices = range(job_no)
+        plot_all = True
     else:
-        state = save_data['final_state']
-        N_t = len(gaps)
-        dt = state.dt
-        times = np.linspace(0, N_t * dt, N_t)
+        job_indices = [job_index]
+        plot_all = False
 
-    print(f"\n{'='*60}")
-    print(f"Input Parameters (timestamp={timestamp}, job_index={job_index}):")
-    print(f"{'='*60}")
-    for key, value in input_kwargs.items():
-        print(f"  {key}: {value}")
-    print(f"{'='*60}\n")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(times, np.real(gaps), 'b-', linewidth=2, label=r'Real($\Delta$)')
-    ax.plot(times, np.imag(gaps), 'r-', linewidth=2, label=r'Imag($\Delta$)')
-    ax.plot(times, np.abs(gaps), 'k--', linewidth=1.5, label=r'$|\Delta|$', alpha=0.5)
-    ax.set_xlabel(r'Time $t$', fontsize=12)
-    ax.set_ylabel(r'Gap $\Delta(t)$', fontsize=12)
-    ax.set_title(f'Gap vs Time (job {job_index})', fontsize=13)
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
+    for job_idx in job_indices:
+        input_kwargs, save_data = load_job_data(timestamp, job_idx)
+        gaps = save_data['gaps']
+
+        if 'times' in save_data:
+            times = save_data['times']
+        else:
+            state = save_data['final_state']
+            N_t = len(gaps)
+            dt = state.dt
+            times = np.linspace(0, N_t * dt, N_t)
+
+        print(f"\n{'='*60}")
+        print(f"Input Parameters (timestamp={timestamp}, job_index={job_idx}):")
+        print(f"{'='*60}")
+        for key, value in input_kwargs.items():
+            print(f"  {key}: {value}")
+        print(f"{'='*60}\n")
+
+        label = f'Job {job_idx}' if plot_all else None
+        # Plot Real part
+        axes[0].plot(times, np.real(gaps), linewidth=2, label=label, alpha=0.7)
+        # Plot Imag part
+        axes[1].plot(times, np.imag(gaps), linewidth=2, label=label, alpha=0.7)
+        # Plot Magnitude
+        axes[2].plot(times, np.abs(gaps), linewidth=2, label=label, alpha=0.7)
+
+    # Configure axes
+    title_suffix = 'All Jobs' if plot_all else f'Job {job_index}'
+
+    axes[0].set_xlabel(r'Time $t$', fontsize=12)
+    axes[0].set_ylabel(r'Re($\Delta(t)$)', fontsize=12)
+    axes[0].set_title(f'Real($\Delta$) - {title_suffix}', fontsize=13)
+    if plot_all:
+        axes[0].legend(fontsize=9)
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].set_xlabel(r'Time $t$', fontsize=12)
+    axes[1].set_ylabel(r'Im($\Delta(t)$)', fontsize=12)
+    axes[1].set_title(f'Imag($\Delta$) - {title_suffix}', fontsize=13)
+    if plot_all:
+        axes[1].legend(fontsize=9)
+    axes[1].grid(True, alpha=0.3)
+
+    axes[2].set_xlabel(r'Time $t$', fontsize=12)
+    axes[2].set_ylabel(r'$|\Delta(t)|$', fontsize=12)
+    axes[2].set_title(f'$|\Delta|$ - {title_suffix}', fontsize=13)
+    if plot_all:
+        axes[2].legend(fontsize=9)
+    axes[2].grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'gap_vs_time_{timestamp}_job{job_index}.png'), dpi=150, bbox_inches='tight')
+        job_str = f'job{job_index}' if job_index is not None else 'all_jobs'
+        plt.savefig(os.path.join(save_dir, f'gap_vs_time_{timestamp}_{job_str}.png'), dpi=150, bbox_inches='tight')
 
     plt.show()
 
 
-def plot_current(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
+def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_plots'):
     """
-    Plot current vs time for a specific job.
+    Plot current vs time for all jobs or a specific job.
 
     Displays input parameters before plotting.
 
     Args:
         timestamp: Timestamp folder name
-        job_index: Job index
+        job_index: Job index (default None plots all jobs in folder)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
     """
-    input_kwargs, save_data = load_job_data(timestamp, job_index)
-    currents = save_data['currents']
-
-    if 'times' in save_data:
-        times = save_data['times']
+    # Determine which jobs to plot
+    if job_index is None:
+        job_no = io.recover_job_no(timestamp=timestamp)
+        job_indices = range(job_no)
+        plot_all = True
     else:
-        state = save_data['final_state']
-        N_t = len(currents)
-        dt = state.dt
-        times = np.linspace(0, N_t * dt, N_t)
+        job_indices = [job_index]
+        plot_all = False
 
-    print(f"\n{'='*60}")
-    print(f"Input Parameters (timestamp={timestamp}, job_index={job_index}):")
-    print(f"{'='*60}")
-    for key, value in input_kwargs.items():
-        print(f"  {key}: {value}")
-    print(f"{'='*60}\n")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(times, np.real(currents), 'b-', linewidth=2, label=r'Real($J$)')
-    ax.plot(times, np.imag(currents), 'r-', linewidth=2, label=r'Imag($J$)')
-    ax.plot(times, np.abs(currents), 'k--', linewidth=1.5, label=r'$|J|$', alpha=0.5)
-    ax.set_xlabel(r'Time $t$', fontsize=12)
-    ax.set_ylabel(r'Current $J(t)$', fontsize=12)
-    ax.set_title(f'Current vs Time (job {job_index})', fontsize=13)
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
+    for job_idx in job_indices:
+        input_kwargs, save_data = load_job_data(timestamp, job_idx)
+        currents = save_data['currents']
+
+        if 'times' in save_data:
+            times = save_data['times']
+        else:
+            state = save_data['final_state']
+            N_t = len(currents)
+            dt = state.dt
+            times = np.linspace(0, N_t * dt, N_t)
+
+        print(f"\n{'='*60}")
+        print(f"Input Parameters (timestamp={timestamp}, job_index={job_idx}):")
+        print(f"{'='*60}")
+        for key, value in input_kwargs.items():
+            print(f"  {key}: {value}")
+        print(f"{'='*60}\n")
+
+        label = f'Job {job_idx}' if plot_all else None
+        # Plot Real part
+        axes[0].plot(times, np.real(currents), linewidth=2, label=label, alpha=0.7)
+        # Plot Imag part
+        axes[1].plot(times, np.imag(currents), linewidth=2, label=label, alpha=0.7)
+        # Plot Magnitude
+        axes[2].plot(times, np.abs(currents), linewidth=2, label=label, alpha=0.7)
+
+    # Configure axes
+    title_suffix = 'All Jobs' if plot_all else f'Job {job_index}'
+
+    axes[0].set_xlabel(r'Time $t$', fontsize=12)
+    axes[0].set_ylabel(r'Re($J(t)$)', fontsize=12)
+    axes[0].set_title(f'Real($J$) - {title_suffix}', fontsize=13)
+    if plot_all:
+        axes[0].legend(fontsize=9)
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].set_xlabel(r'Time $t$', fontsize=12)
+    axes[1].set_ylabel(r'Im($J(t)$)', fontsize=12)
+    axes[1].set_title(f'Imag($J$) - {title_suffix}', fontsize=13)
+    if plot_all:
+        axes[1].legend(fontsize=9)
+    axes[1].grid(True, alpha=0.3)
+
+    axes[2].set_xlabel(r'Time $t$', fontsize=12)
+    axes[2].set_ylabel(r'$|J(t)|$', fontsize=12)
+    axes[2].set_title(f'$|J|$ - {title_suffix}', fontsize=13)
+    if plot_all:
+        axes[2].legend(fontsize=9)
+    axes[2].grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'current_vs_time_{timestamp}_job{job_index}.png'), dpi=150, bbox_inches='tight')
+        job_str = f'job{job_index}' if job_index is not None else 'all_jobs'
+        plt.savefig(os.path.join(save_dir, f'current_vs_time_{timestamp}_{job_str}.png'), dpi=150, bbox_inches='tight')
 
     plt.show()
 
 
-def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots'):
+def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False):
     """
     Plot equilibrated gap vs parameter for multiple timestamps.
 
@@ -452,16 +592,23 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
         n_average: Number of final timesteps to average (default 100)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
+        combine_timestamps: If True, combine all timestamps into single curve (default False)
 
     Returns:
         dict: {'parameter_values': array, 'gap_means': array, 'gap_errors': array}
     """
-    parameter_values = []
-    gap_means = []
-    gap_errors = []
+    # Store data per timestamp for separate plotting
+    timestamp_data = {}
+    all_parameter_values = []
+    all_gap_means = []
+    all_gap_errors = []
 
     for timestamp in timestamps:
         job_no = io.recover_job_no(timestamp=timestamp)
+
+        parameter_values = []
+        gap_means = []
+        gap_errors = []
 
         for job_idx in range(job_no):
             input_kwargs, save_data = load_job_data(timestamp, job_idx)
@@ -472,6 +619,8 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
 
             gap_means.append(gap_eq)
             gap_errors.append(gap_std)
+            all_gap_means.append(gap_eq)
+            all_gap_errors.append(gap_std)
 
             if parameter == 'temperature':
                 param_value = input_kwargs['system_parameters']['temperature']
@@ -482,27 +631,54 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
                 raise ValueError(f"Unknown parameter: {parameter}")
 
             parameter_values.append(param_value)
+            all_parameter_values.append(param_value)
 
-    parameter_values = np.array(parameter_values)
-    gap_means = np.array(gap_means)
-    gap_errors = np.array(gap_errors)
+        # Sort data for this timestamp
+        if len(parameter_values) > 0:
+            sort_idx = np.argsort(parameter_values)
+            timestamp_data[timestamp] = {
+                'parameter_values': np.array(parameter_values)[sort_idx],
+                'gap_means': np.array(gap_means)[sort_idx],
+                'gap_errors': np.array(gap_errors)[sort_idx]
+            }
 
-    sort_idx = np.argsort(parameter_values)
-    parameter_values = parameter_values[sort_idx]
-    gap_means = gap_means[sort_idx]
-    gap_errors = gap_errors[sort_idx]
+    # Convert to arrays for combined analysis
+    all_parameter_values = np.array(all_parameter_values)
+    all_gap_means = np.array(all_gap_means)
+    all_gap_errors = np.array(all_gap_errors)
 
-    max_idx = np.argmax(np.abs(gap_means))
-    max_gap = np.abs(gap_means[max_idx])
-    max_param = parameter_values[max_idx]
+    if len(all_parameter_values) > 0:
+        max_idx = np.argmax(np.abs(all_gap_means))
+        max_gap = np.abs(all_gap_means[max_idx])
+        max_param = all_parameter_values[max_idx]
+    else:
+        max_gap = 0
+        max_param = 0
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.errorbar(parameter_values, np.abs(gap_means), yerr=gap_errors, fmt='o-', capsize=5, linewidth=2, markersize=8)
-    ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7, label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    if combine_timestamps:
+        # Old behavior: combine all into single curve
+        sort_idx = np.argsort(all_parameter_values)
+        ax.errorbar(all_parameter_values[sort_idx], np.abs(all_gap_means[sort_idx]),
+                   yerr=all_gap_errors[sort_idx], fmt='o-', capsize=5,
+                   linewidth=2, markersize=8, label='All data')
+    else:
+        # New behavior: plot each timestamp separately
+        for i, (timestamp, data) in enumerate(timestamp_data.items()):
+            label = f'{timestamp}' if len(timestamps) > 1 else 'Data'
+            ax.errorbar(data['parameter_values'], np.abs(data['gap_means']),
+                       yerr=data['gap_errors'], fmt='o-', capsize=5,
+                       linewidth=2, markersize=8, label=label, alpha=0.7)
+
+    ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
+              label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
     ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=12)
     ax.set_ylabel(r'Equilibrated Gap $|\Delta|$', fontsize=12)
-    ax.set_title(f'Equilibrated Gap vs {parameter.replace("_", " ").title()}' + '\n' + f'Max $|\\Delta|$ = {max_gap:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}', fontsize=12)
-    ax.legend(fontsize=10)
+    ax.set_title(f'Equilibrated Gap vs {parameter.replace("_", " ").title()}' + '\n' +
+                f'Max $|\\Delta|$ = {max_gap:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}',
+                fontsize=12)
+    ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -513,11 +689,12 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
 
     plt.show()
 
-    return {'parameter_values': parameter_values, 'gap_means': gap_means, 'gap_errors': gap_errors,
-            'max_gap': max_gap, 'max_parameter': max_param}
+    return {'parameter_values': all_parameter_values, 'gap_means': all_gap_means,
+            'gap_errors': all_gap_errors, 'max_gap': max_gap, 'max_parameter': max_param,
+            'timestamp_data': timestamp_data}
 
 
-def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots'):
+def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False):
     """
     Plot equilibrated current vs parameter for multiple timestamps.
 
@@ -529,16 +706,23 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
         n_average: Number of final timesteps to average (default 100)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
+        combine_timestamps: If True, combine all timestamps into single curve (default False)
 
     Returns:
         dict: {'parameter_values': array, 'current_means': array, 'current_errors': array}
     """
-    parameter_values = []
-    current_means = []
-    current_errors = []
+    # Store data per timestamp for separate plotting
+    timestamp_data = {}
+    all_parameter_values = []
+    all_current_means = []
+    all_current_errors = []
 
     for timestamp in timestamps:
         job_no = io.recover_job_no(timestamp=timestamp)
+
+        parameter_values = []
+        current_means = []
+        current_errors = []
 
         for job_idx in range(job_no):
             input_kwargs, save_data = load_job_data(timestamp, job_idx)
@@ -549,6 +733,8 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
 
             current_means.append(current_eq)
             current_errors.append(current_std)
+            all_current_means.append(current_eq)
+            all_current_errors.append(current_std)
 
             if parameter == 'temperature':
                 param_value = input_kwargs['system_parameters']['temperature']
@@ -559,27 +745,54 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
                 raise ValueError(f"Unknown parameter: {parameter}")
 
             parameter_values.append(param_value)
+            all_parameter_values.append(param_value)
 
-    parameter_values = np.array(parameter_values)
-    current_means = np.array(current_means)
-    current_errors = np.array(current_errors)
+        # Sort data for this timestamp
+        if len(parameter_values) > 0:
+            sort_idx = np.argsort(parameter_values)
+            timestamp_data[timestamp] = {
+                'parameter_values': np.array(parameter_values)[sort_idx],
+                'current_means': np.array(current_means)[sort_idx],
+                'current_errors': np.array(current_errors)[sort_idx]
+            }
 
-    sort_idx = np.argsort(parameter_values)
-    parameter_values = parameter_values[sort_idx]
-    current_means = current_means[sort_idx]
-    current_errors = current_errors[sort_idx]
+    # Convert to arrays for combined analysis
+    all_parameter_values = np.array(all_parameter_values)
+    all_current_means = np.array(all_current_means)
+    all_current_errors = np.array(all_current_errors)
 
-    max_idx = np.argmax(np.abs(current_means))
-    max_current = np.abs(current_means[max_idx])
-    max_param = parameter_values[max_idx]
+    if len(all_parameter_values) > 0:
+        max_idx = np.argmax(np.abs(all_current_means))
+        max_current = np.abs(all_current_means[max_idx])
+        max_param = all_parameter_values[max_idx]
+    else:
+        max_current = 0
+        max_param = 0
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.errorbar(parameter_values, np.abs(current_means), yerr=current_errors, fmt='o-', capsize=5, linewidth=2, markersize=8)
-    ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7, label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    if combine_timestamps:
+        # Old behavior: combine all into single curve
+        sort_idx = np.argsort(all_parameter_values)
+        ax.errorbar(all_parameter_values[sort_idx], np.abs(all_current_means[sort_idx]),
+                   yerr=all_current_errors[sort_idx], fmt='o-', capsize=5,
+                   linewidth=2, markersize=8, label='All data')
+    else:
+        # New behavior: plot each timestamp separately
+        for i, (timestamp, data) in enumerate(timestamp_data.items()):
+            label = f'{timestamp}' if len(timestamps) > 1 else 'Data'
+            ax.errorbar(data['parameter_values'], np.abs(data['current_means']),
+                       yerr=data['current_errors'], fmt='o-', capsize=5,
+                       linewidth=2, markersize=8, label=label, alpha=0.7)
+
+    ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
+              label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
     ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=12)
     ax.set_ylabel(r'Equilibrated Current $|J|$', fontsize=12)
-    ax.set_title(f'Equilibrated Current vs {parameter.replace("_", " ").title()}' + '\n' + f'Max $|J|$ = {max_current:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}', fontsize=12)
-    ax.legend(fontsize=10)
+    ax.set_title(f'Equilibrated Current vs {parameter.replace("_", " ").title()}' + '\n' +
+                f'Max $|J|$ = {max_current:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}',
+                fontsize=12)
+    ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -590,8 +803,9 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
 
     plt.show()
 
-    return {'parameter_values': parameter_values, 'current_means': current_means, 'current_errors': current_errors,
-            'max_current': max_current, 'max_parameter': max_param}
+    return {'parameter_values': all_parameter_values, 'current_means': all_current_means,
+            'current_errors': all_current_errors, 'max_current': max_current, 'max_parameter': max_param,
+            'timestamp_data': timestamp_data}
 
 
 # ============================================================================
@@ -736,5 +950,111 @@ def _plot_time_translation(gr_tensor, gk_tensor, time_grid, num_rows, threshold,
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, f'tti_gk_{timestamp}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+
+def _plot_state_evolution(gr_initial, gr_final, gk_initial, gk_final, time_grid, save_plot, save_dir, timestamp):
+    """
+    Plot state evolution comparison between initial and final times.
+
+    Shows overlay of initial (t=0, dashed) and final (t=-1, solid) states
+    for all 4 Pauli components of both g^R and g^K.
+    """
+    pauli_names = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+
+    # Plot g^R evolution
+    fig_gr, axes_gr = plt.subplots(2, 2, figsize=(10, 7))
+    for pauli_idx in range(4):
+        # Extract Pauli components
+        gr_init_pauli = gr_initial.trace(pauli_idx) / 2
+        gr_final_pauli = gr_final.trace(pauli_idx) / 2
+
+        if gr_init_pauli.ndim == 2:
+            gr_init_pauli = gr_init_pauli[0, :]
+            gr_final_pauli = gr_final_pauli[0, :]
+
+        ax = axes_gr.flat[pauli_idx]
+
+        # Plot initial state (dashed)
+        ax.plot(time_grid, np.real(gr_init_pauli), 'b--', linewidth=2, label='Initial (Real)', alpha=0.7)
+        ax.plot(time_grid, np.imag(gr_init_pauli), 'r--', linewidth=2, label='Initial (Imag)', alpha=0.7)
+
+        # Plot final state (solid)
+        ax.plot(time_grid, np.real(gr_final_pauli), 'b-', linewidth=2, label='Final (Real)', alpha=0.8)
+        ax.plot(time_grid, np.imag(gr_final_pauli), 'r-', linewidth=2, label='Final (Imag)', alpha=0.8)
+
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
+        ax.set_title(f'$g^R$: {pauli_names[pauli_idx]}', fontsize=11)
+        ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], time_grid[-1]])
+
+        # Add max difference annotation
+        diff = np.abs(gr_final_pauli - gr_init_pauli)
+        max_diff = np.max(diff)
+        max_diff_idx = np.argmax(diff)
+        max_diff_time = time_grid[max_diff_idx]
+
+        ax.axvline(max_diff_time, color='gray', linestyle=':', linewidth=1.5, alpha=0.5)
+        ax.text(0.02, 0.98, f'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
+               transform=ax.transAxes, fontsize=8, verticalalignment='top',
+               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.suptitle(f'$g^R$ State Evolution: Initial (t=0) vs Final (t=-1)', fontsize=12)
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'state_evolution_gr_{timestamp}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+    # Plot g^K evolution
+    fig_gk, axes_gk = plt.subplots(2, 2, figsize=(10, 7))
+    for pauli_idx in range(4):
+        # Extract Pauli components
+        gk_init_pauli = gk_initial.trace(pauli_idx) / 2
+        gk_final_pauli = gk_final.trace(pauli_idx) / 2
+
+        if gk_init_pauli.ndim == 2:
+            gk_init_pauli = gk_init_pauli[0, :]
+            gk_final_pauli = gk_final_pauli[0, :]
+
+        ax = axes_gk.flat[pauli_idx]
+
+        # Plot initial state (dashed)
+        ax.plot(time_grid, np.real(gk_init_pauli), 'b--', linewidth=2, label='Initial (Real)', alpha=0.7)
+        ax.plot(time_grid, np.imag(gk_init_pauli), 'r--', linewidth=2, label='Initial (Imag)', alpha=0.7)
+
+        # Plot final state (solid)
+        ax.plot(time_grid, np.real(gk_final_pauli), 'b-', linewidth=2, label='Final (Real)', alpha=0.8)
+        ax.plot(time_grid, np.imag(gk_final_pauli), 'r-', linewidth=2, label='Final (Imag)', alpha=0.8)
+
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
+        ax.set_title(f'$g^K$: {pauli_names[pauli_idx]}', fontsize=11)
+        ax.legend(fontsize=8, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], time_grid[-1]])
+
+        # Add max difference annotation
+        diff = np.abs(gk_final_pauli - gk_init_pauli)
+        max_diff = np.max(diff)
+        max_diff_idx = np.argmax(diff)
+        max_diff_time = time_grid[max_diff_idx]
+
+        ax.axvline(max_diff_time, color='gray', linestyle=':', linewidth=1.5, alpha=0.5)
+        ax.text(0.02, 0.98, f'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
+               transform=ax.transAxes, fontsize=8, verticalalignment='top',
+               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.suptitle(f'$g^K$ State Evolution: Initial (t=0) vs Final (t=-1)', fontsize=12)
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'state_evolution_gk_{timestamp}.png'), dpi=150, bbox_inches='tight')
 
     plt.show()

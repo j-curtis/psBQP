@@ -73,7 +73,10 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     else:
         #* generating initial state will be different
         evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
-        initial_state, _, _ = evolution.generate_initial_state(Q=0.0)
+        Q_0 = 0.0
+        if driving_field is not None:
+            Q_0 = driving_field[0]           
+        initial_state, _, _ = evolution.generate_initial_state(Q=Q_0)
 
     # Prepare driving field
     # Note: driving_field should have length num_timesteps (one value per evolution step)

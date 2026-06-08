@@ -2,9 +2,12 @@
 Real-time Keldysh evolution worker function for demler_tools framework.
 """
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import numpy as np
 import pickle
-import os
 import sys
 
 from demler_tools.file_manager import path_management
@@ -15,7 +18,7 @@ from state_object_class import StateObject
 from usadel_keldysh_evolution import UsadelKeldyshEvolution
 
 
-def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, driving_field=None):
+def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, driving_field=None, save_full_state=True):
     """
     Evolve Keldysh Green's functions in real time.
 
@@ -30,15 +33,32 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
                        - None: No driving (zero field)
                        - Scalar: Constant driving field applied at each step
                        - Array (length num_timesteps): Time-dependent field values
+        save_full_state: If True, save full time history. If False, save only final timestep (default: True)
 
     Returns:
         0 on success
     """
+    # Detect which machine we're running on
+    if 'SLURM_JOB_ID' in os.environ:
+        running_machine = 'cluster_euler'
+        path_management.initialize_minimalistic(project_name='psBQP-keldysh', crt_controlling_machine='cluster_euler')
+    else:
+        running_machine = 'laptop'
+        path_management.initialize(project_name='psBQP-keldysh')
+
     # Load or generate initial state
     if initial_state_timestamp is not None:
-        path_management.initialize(project_name='psBQP-keldysh')
-        initial_state_dir = path_management.default_simulation_data_path(running_machine='laptop')
-        state_file = os.path.join(initial_state_dir, str(initial_state_timestamp), f'sr_{initial_state_index}')
+        # Try loading from main simulation path first
+        initial_state_dir = path_management.default_simulation_data_path(running_machine=running_machine)
+        state_file = os.path.join(initial_state_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index))
+
+        # If file not found, try autoarchive location
+        if not os.path.exists(state_file):
+            archive_dir = path_management.default_autoarchive_path(running_machine=running_machine)
+            state_file = os.path.join(archive_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index))
+
+            if not os.path.exists(state_file):
+                raise FileNotFoundError(f"Initial state file not found in simulation path or archives: {initial_state_timestamp}")
 
         with open(state_file, 'rb') as f:
             initial_data = pickle.load(f)
@@ -113,6 +133,25 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         driving_field=prepared_driving_field
     )
 
+    # Reduce state to last timestep if requested (memory optimization)
+    if not save_full_state:
+        from nambu_keldysh_class import NambuKeldyshTensor
+
+        # Extract only the last time slice from gr and gk
+        # Data shape is typically [..., N_omega, N_t] where N_t is time axis
+        gr_last = NambuKeldyshTensor(final_state.gr.data[..., -1:])
+        gk_last = NambuKeldyshTensor(final_state.gk.data[..., -1:])
+
+        # Create reduced state with only last timestep
+        reduced_state = StateObject(
+            gr=gr_last,
+            gk=gk_last,
+            bcs_coupling_constant=final_state.bcs_coupling_constant,
+            grid_params={'time_duration': final_state.T_max, 'time_sampling': 1, 'dt': final_state.dt}
+        )
+        
+        final_state = reduced_state
+
     # Save results
     result_data = {
         'final_state': final_state,
@@ -126,3 +165,36 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         pickle.dump(result_data, f)
 
     return 0
+
+
+# ===============================================================================================
+# Cluster backend interface (for demler_tools)
+# ===============================================================================================
+
+def run_1_point(input_directory, point_index):
+    """Run a single simulation point from the cluster arguments."""
+    # Load calculation arguments
+    args_file = os.path.join(input_directory, 'inputs', 'calculation_arguments')
+    with open(args_file, 'rb') as f:
+        args_array, kwargs_array = pickle.load(f)
+
+    # Get current kwargs
+    crt_kwargs = kwargs_array[point_index] if kwargs_array else {}
+
+    # Run the solver
+    return evolve_keldysh_state(**crt_kwargs)
+
+
+if __name__ == "__main__":
+    """Entry point for cluster execution."""
+    import sys
+
+    # Parse command-line arguments
+    calculation_type = sys.argv[1]
+
+    if calculation_type == 'main_simulation':
+        input_directory = sys.argv[2]
+        point_index = int(sys.argv[3])
+
+        # Run the simulation
+        run_1_point(input_directory=input_directory, point_index=point_index)

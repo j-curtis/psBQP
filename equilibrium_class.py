@@ -4,9 +4,16 @@ Handles all equilibrium calculations including gap equations and self-consistenc
 Wrapper around the old equilibrium code.
 """
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import numpy as np
 import jax
 import jax.numpy as jnp
+
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 
 from nambu_keldysh_class import NambuKeldyshTensor
 from state_object_class import StateObject

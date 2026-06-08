@@ -1,0 +1,7 @@
+Log file created at Mon Jun  8 11:24:58 2026
+
+
+
+The simulation was INTERRUPTED by the following ERROR:
+
+ModuleNotFoundError("No module named 'jax'")

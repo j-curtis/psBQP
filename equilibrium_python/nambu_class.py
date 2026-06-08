@@ -1,7 +1,14 @@
 from dataclasses import dataclass
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import jax.numpy as jnp
 from jax import tree_util
-import jax 
+import jax
+
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu") 
 import custom_optimizer
 import numpy as np
 #jax.config.update("jax_disable_jit", True)

@@ -16,10 +16,17 @@
 
 from abc import ABC, abstractmethod
 
-from nambu_class import NambuTensor 
+from nambu_class import NambuTensor
+
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["JAX_PLATFORMS"] = "cpu"
 
 import jax
 import jax.numpy as jnp
+
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 from jax import tree_util
 from custom_optimizer import custom_jax_trapz as custom_integrate
 

@@ -1,5 +1,12 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import jax
 import jax.numpy as jnp
+
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 
 # import custom classes
 from Usadel_methods import UsadelEvolution
@@ -9,6 +16,9 @@ from system_state import SupercondctingState
 from tqdm import tqdm
 # to disable jax add this to all the files
 #jax.config.update("jax_disable_jit", True)
+
+# Disable progress bars on cluster
+DISABLE_TQDM = 'SLURM_JOB_ID' in os.environ
 
 
 def calculate_equilibrium(temp_list, grid_parameters, system_parameters, optimization_parameters = None, sigma_scatterings = None,  Q_list = None):

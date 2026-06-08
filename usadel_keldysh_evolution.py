@@ -4,6 +4,7 @@ Handles time evolution of retarded Green's function g^R and distribution functio
 """
 
 import numpy as np
+import os
 import re
 from tqdm import tqdm
 from nambu_keldysh_class import NambuKeldyshTensor, get_pauli_matrix
@@ -1422,8 +1423,11 @@ class UsadelKeldyshEvolution:
         # Start with initial state
         state = initial_state
 
+        # Disable progress bar on cluster (when SLURM_JOB_ID is set)
+        disable_progress = 'SLURM_JOB_ID' in os.environ
+
         # Evolve over time with progress bar
-        for time_index in tqdm(range(num_timesteps), desc="Real-time evolution"):
+        for time_index in tqdm(range(num_timesteps), desc="Real-time evolution", disable=disable_progress):
             # Update vector potential using sliding window
             A_external = self.update_vector_potential(A_external, driving_field[time_index])
             # Evolve by one timestep and get observables

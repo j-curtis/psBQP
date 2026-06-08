@@ -1,6 +1,12 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["JAX_PLATFORMS"] = "cpu"
 
-import jax 
+import jax
 import jax.numpy as jnp
+
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 
 from nambu_class import NambuTensor 
 from system_state import SupercondctingState

@@ -1,9 +1,24 @@
+"""
+Data analysis tools for Keldysh-Usadel simulations.
+
+COMPATIBILITY WITH REDUCED STATES (save_full_state=False):
+- check_normalizations: ✓ Works (checks last timestep)
+- check_fdt: ✓ Works (checks last timestep)
+- check_time_translational_invariance: ✗ Requires full time history (returns None if reduced)
+- check_state_evolution: ✗ Requires full time history (returns None if reduced)
+- plot_gap: ✓ Works (plots saved gap array)
+- plot_current: ✓ Works (plots saved current array)
+- plot_equilibrated_gap_vs_parameter: ✓ Works (uses saved arrays)
+- plot_equilibrated_current_vs_parameter: ✓ Works (uses saved arrays)
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 import sys
+import pickle
 
-from demler_tools.file_manager import io
+from demler_tools.file_manager import io, path_management
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from nambu_keldysh_class import NambuKeldyshTensor
@@ -20,20 +35,51 @@ plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath} \usepackage{amssymb
 # Data Loading and Parameter Extraction
 # ============================================================================
 
-def load_job_data(timestamp, job_index):
+def load_job_data(timestamp, job_index, running_machine='laptop'):
     """
     Load simulation results using demler_tools.
 
     Args:
         timestamp: Timestamp folder name
         job_index: Job index (run_index)
+        running_machine: Machine identifier ('laptop' or 'cluster_euler')
 
     Returns:
         tuple: (input_kwargs, save_data)
             input_kwargs: Dict with system_parameters, grid_parameters, etc.
             save_data: Dict with final_state, gaps, currents, vector_potentials, times
     """
-    input_kwargs, save_data = io.get_results(timestamp=timestamp, run_index=job_index)
+    # Initialize path_management if not already done
+    if not hasattr(path_management, 'project_data'):
+        path_management.initialize(project_name='psBQP-keldysh')
+
+    # Get all kwargs from the timestamp
+    kwargs_array = io.recover_full_calculation_arguments(timestamp=timestamp)
+    input_kwargs = kwargs_array[job_index]
+
+    # Construct the result file path
+    result_file = os.path.join(
+        path_management.default_simulation_data_path(running_machine=running_machine),
+        str(timestamp),
+        path_management.relative_path_raw_result_file().format(job_index)
+    )
+
+    # Try main path first, then archive (only for cluster)
+    if not os.path.exists(result_file):
+        if running_machine == 'cluster_euler':
+            result_file = os.path.join(
+                path_management.default_autoarchive_path(running_machine=running_machine),
+                str(timestamp),
+                path_management.relative_path_raw_result_file().format(job_index)
+            )
+
+        if not os.path.exists(result_file):
+            raise FileNotFoundError(f"Result file not found for timestamp {timestamp}, job {job_index}")
+
+    # Load the result data
+    with open(result_file, 'rb') as f:
+        save_data = pickle.load(f)
+
     return input_kwargs, save_data
 
 
@@ -171,10 +217,19 @@ def check_time_translational_invariance(timestamp, job_index, num_rows=10, thres
 
     Returns:
         dict: {'max_diff_gr': array, 'max_diff_gk': array, 'passed': bool, 'threshold': float}
+            Returns None if state has insufficient time history
     """
     input_kwargs, save_data = load_job_data(timestamp, job_index)
     state = save_data['final_state']
-    time_grid = np.linspace(-state.T_max, 0, state.gr.data.shape[2])
+    n_times = state.gr.data.shape[2]
+
+    # Check if state has enough time history
+    if n_times < 2:
+        print(f"Warning: State only has {n_times} timestep. Time-translation invariance check requires multiple timesteps.")
+        print("This state was likely saved with save_full_state=False. Skipping check.")
+        return None
+
+    time_grid = np.linspace(-state.T_max, 0, n_times)
 
     max_diffs_gr = _compute_time_translation_diffs(state.gr, num_rows)
     max_diffs_gk = _compute_time_translation_diffs(state.gk, num_rows)
@@ -194,6 +249,8 @@ def check_state_evolution(timestamp, job_index, save_plot=False, save_dir='analy
     Extracts rows at earliest and latest times for both g^R and g^K, then computes
     differences across all 4 Pauli components to show how much the state has evolved.
 
+    Note: Returns None if state has only one timestep (saved with save_full_state=False).
+
     Args:
         timestamp: Timestamp to analyze
         job_index: Job index
@@ -212,7 +269,15 @@ def check_state_evolution(timestamp, job_index, save_plot=False, save_dir='analy
     """
     input_kwargs, save_data = load_job_data(timestamp, job_index)
     state = save_data['final_state']
-    time_grid = np.linspace(-state.T_max, 0, state.gr.data.shape[2])
+    n_times = state.gr.data.shape[2]
+
+    # Check if state has enough time history
+    if n_times < 2:
+        print(f"Warning: State only has {n_times} timestep. State evolution check requires multiple timesteps.")
+        print("This state was likely saved with save_full_state=False. Skipping check.")
+        return None
+
+    time_grid = np.linspace(-state.T_max, 0, n_times)
 
     # Extract rows at initial (index 0) and final (index -1) times
     gr_initial = state.gr[0, :]  # t = -T_max (earliest)

@@ -1,8 +1,15 @@
 
 from dataclasses import dataclass
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import jax.numpy as jnp
 from jax import tree_util
 import jax
+
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 # describes the evolution on the system state which we want to do
 # system state is described by two variables g^r and f which are defined using a correct grid of frequencies
 

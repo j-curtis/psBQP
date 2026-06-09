@@ -181,6 +181,7 @@ class UsadelKeldyshEvolution:
             - EquilibriumSolver.compute_equilibrium_gr()
             - EquilibriumSolver.fourier_transform_to_two_time()
         """
+
         # Create equilibrium solver with current grid parameters
         # Need to add omega_grid to grid_parameters for equilibrium solver
         grid_params_with_omega = self.grid_parameters.copy()
@@ -1331,6 +1332,10 @@ class UsadelKeldyshEvolution:
         new_gk_row, new_gk_diag = self._compute_new_gk_complete(state, A_history=A_external)
         state.update_state_gk(new_gk_row, new_gk_diag)
 
+        # Step 2.5: Update occupation function if tracking is enabled
+        if state.occupation_function is not None:
+            state.update_state_occupation(self.thermal_dist, self.thermal_integral)
+
         # Step 3: Extract observables
         gap_history = state.get_gap_history()
         gap_new = gap_history[-1]
@@ -1372,7 +1377,7 @@ class UsadelKeldyshEvolution:
 
         return new_vector_potential
 
-    def real_time_evolution(self, initial_state, num_timesteps, driving_field=None):
+    def real_time_evolution(self, initial_state, num_timesteps, driving_field=None, track_occupations=False):
         """
         Main real-time evolution loop.
 
@@ -1386,6 +1391,7 @@ class UsadelKeldyshEvolution:
             a. Update A_external using sliding window with new driving_field value
             b. Call _evolve_state_by_one_timestep() with updated A_external
             c. Store returned gap and current values
+            d. If track_occupations=True, compute and store energy-time representations
         3. Return evolved state and observable time series
 
         Args:
@@ -1395,12 +1401,17 @@ class UsadelKeldyshEvolution:
                            If None, zero driving field is used. Can be:
                            - None: No driving (A_external remains zeros)
                            - 1D array (length num_timesteps): Time-dependent field values
+            track_occupations: If True, compute and store energy-time representations of gr and f
+                               at each timestep (default: False)
 
         Returns:
-            state: Final evolved StateObject
-            gaps: Array of gap values at each timestep (length num_timesteps)
-            currents: Array of current values at each timestep (length num_timesteps)
-            vector_potentials: Array of vector potential values at each timestep (length num_timesteps)
+            Dictionary with keys:
+            - 'final_state': Final evolved StateObject
+            - 'gaps': Array of gap values at each timestep (length num_timesteps)
+            - 'currents': Array of current values at each timestep (length num_timesteps)
+            - 'vector_potentials': Array of vector potential values at each timestep (length num_timesteps)
+            - 'gr_energy_time': (only if track_occupations=True) List of energy-time representations of gr
+            - 'f_energy_time': (only if track_occupations=True) List of energy-time representations of occupation function
 
         Calls:
             - update_vector_potential(A_external, driving_field, time_index)
@@ -1411,6 +1422,11 @@ class UsadelKeldyshEvolution:
         currents = []
         vector_potentials = []
 
+        # Initialize lists to track energy-time representations if requested
+        if track_occupations:
+            gr_energy_time_list = []
+            f_energy_time_list = []
+
         # Initialize A_external as zeros (history window)
         # Size N_t from initial_state's time grid
         N_t = initial_state.gr.data.shape[2]
@@ -1418,23 +1434,38 @@ class UsadelKeldyshEvolution:
             A_external = np.zeros(N_t, dtype=complex)
         else:
             A_external = np.ones(N_t, dtype=complex) * driving_field[0]
-        
 
         # Start with initial state
         state = initial_state
+
+        # Initialize occupation function if tracking is enabled and not already initialized
+        if track_occupations and state.occupation_function is None:
+            state.occupation_function = 0 * state.gr
 
         # Disable progress bar on cluster (when SLURM_JOB_ID is set)
         disable_progress = 'SLURM_JOB_ID' in os.environ
 
         # Evolve over time with progress bar
         for time_index in tqdm(range(num_timesteps), desc="Real-time evolution", disable=disable_progress):
-            # Update vector potential using sliding window
+
             A_external = self.update_vector_potential(A_external, driving_field[time_index])
-            # Evolve by one timestep and get observables
+
             gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
-            # Store observables
+
             gaps += [gap_new]
             currents  += [current_new]
             vector_potentials += [vector_potential_new]
 
-        return state, np.array(gaps), np.array(currents), np.array(vector_potentials)
+            if track_occupations:
+                gr_energy, _ = state.energy_time_representation('gr')
+                f_energy, _ = state.energy_time_representation('f')
+                gr_energy_time_list.append(gr_energy)
+                f_energy_time_list.append(f_energy)
+
+        result = { 'final_state': state, 'gaps': np.array(gaps), 'currents': np.array(currents), 'vector_potentials': np.array(vector_potentials)}
+
+        # Add energy-time data if tracking was enabled
+        if track_occupations:
+            result['gr_energy_time'] = gr_energy_time_list
+            result['f_energy_time'] = f_energy_time_list
+        return result

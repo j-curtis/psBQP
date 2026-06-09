@@ -10,6 +10,7 @@ COMPATIBILITY WITH REDUCED STATES (save_full_state=False):
 - plot_current: ✓ Works (plots saved current array)
 - plot_equilibrated_gap_vs_parameter: ✓ Works (uses saved arrays)
 - plot_equilibrated_current_vs_parameter: ✓ Works (uses saved arrays)
+- partial_fourier_transform: ✗ Requires full two-time tensor (N_t, N_t)
 """
 
 import numpy as np
@@ -357,6 +358,139 @@ def _compute_time_translation_diffs(tensor, num_rows):
 
 
 # ============================================================================
+# Fourier Transform Functions
+# ============================================================================
+
+def partial_fourier_transform(g_two_time, time_grid):
+    """
+    Transform Green's function from two-time g(t,t') to mixed Wigner g(ε,t).
+
+    Modified Fourier transform to avoid interpolation of midpoints:
+        ĝ(ε; t) = ∫ dτ e^{i(2ε)τ} ĝ(t, t-τ)
+
+    where τ = t - t'. This avoids the τ/2 midpoint problem by working
+    directly with grid points and modifying the Fourier kernel.
+
+    For each fixed t = t_i on the grid:
+    - Extract g(t_i, t_j) for all j
+    - Define τ_j = t_i - t_j (relative time)
+    - FFT with kernel e^{i(2ε)τ} (factor of 2 in exponent)
+    - Energy grid scaled accordingly: ε_grid = 2 × (standard FFT frequencies)
+
+    Args:
+        g_two_time: NambuKeldyshTensor with shape (2, 2, N_t, N_t)
+                    representing g(t_i, t_j) in two-time form
+        time_grid: 1D array of time points [t_0, ..., t_{N_t-1}]
+                   typically from evolution.time_grid or np.linspace(-T_max, 0, N_t)
+
+    Returns:
+        dict: {
+            'energy_grid': 1D array of energy points ε (N_t points)
+            'com_time_grid': 1D array of times t (N_t points, same as input)
+            'g_mixed': NambuKeldyshTensor with shape (2, 2, N_ε, N_t)
+                       representing g(ε_n, t_i) in mixed Wigner representation
+        }
+
+    Example:
+        >>> # Load data
+        >>> input_kwargs, save_data = load_job_data(timestamp, job_index)
+        >>> state = save_data['final_state']
+        >>> evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+        >>> time_grid = evolution.time_grid
+        >>>
+        >>> # Transform retarded Green's function
+        >>> result_gr = partial_fourier_transform(state.gr, time_grid)
+        >>> energy_grid = result_gr['energy_grid']
+        >>> g_mixed_gr = result_gr['g_mixed']
+        >>>
+        >>> # Transform Keldysh Green's function
+        >>> result_gk = partial_fourier_transform(state.gk, time_grid)
+    """
+    # Setup
+    N_t = len(time_grid)
+    dt = (time_grid[-1] - time_grid[0]) / (N_t - 1)
+
+    # Pauli matrices for reconstruction
+    pauli = {
+        0: np.array([[1, 0], [0, 1]]),      # τ₀ (identity)
+        1: np.array([[0, 1], [1, 0]]),      # τ₁ (σ_x)
+        2: np.array([[0, -1j], [1j, 0]]),   # τ₂ (σ_y)
+        3: np.array([[1, 0], [0, -1]])      # τ₃ (σ_z)
+    }
+
+    # Initialize result array: (2, 2, N_ε, N_t)
+    result_data = np.zeros((2, 2, N_t, N_t), dtype=complex)
+
+    # Process each Pauli component
+    for pauli_idx in range(4):
+        # Extract Pauli component
+        g_pauli = g_two_time.trace(pauli_idx) / 2.0
+
+        # Handle both 2D and higher-dimensional cases
+        if g_pauli.ndim == 2:
+            g_pauli_data = g_pauli
+        else:
+            # If there are extra dimensions, take first element
+            g_pauli_data = g_pauli[0, :]
+
+        # For each fixed t = t_i, extract g(t_i, t_j) and FFT
+        g_energy = np.zeros((N_t, N_t), dtype=complex)
+
+        for i_t in range(N_t):
+            # Extract row: g(t_i, t_j) for all j
+            # This gives g as function of t_j for fixed t_i
+            g_row = g_pauli_data[i_t, :]
+
+            # Relative time: τ_j = t_i - t_j
+            # We need to reorder so τ is uniformly spaced
+            # Since t_j = time_grid, τ_j = t_i - time_grid
+            # For FFT, we want τ in ascending order
+
+            # Reverse the row so τ goes from negative to positive
+            # τ ranges from (t_i - t_{N_t-1}) to (t_i - t_0)
+            g_tau = g_row[::-1]  # Now indexed by increasing τ
+
+            # FFT with modified kernel e^{i(2ε)τ}
+            # Standard FFT gives e^{iωτ}, we want e^{i(2ε)τ}
+            # So energy will be: ε = ω/2
+            #
+            # Use ifft for positive exponent convention
+            g_fft = np.fft.ifft(g_tau) * N_t  # Remove 1/N normalization
+
+            # Normalize: multiply by dτ to approximate integral
+            g_fft *= dt
+
+            # Shift to match energy_grid ordering
+            g_energy[i_t, :] = np.fft.fftshift(g_fft)
+
+        # Add Pauli structure to result
+        # Transpose to (N_ε, N_t) for proper indexing
+        g_transposed = g_energy.T
+
+        # Add Pauli contribution
+        for i in range(2):
+            for j in range(2):
+                result_data[i, j, :, :] += pauli[pauli_idx][i, j] * g_transposed
+
+    # Create energy grid with factor of 2 modification
+    # Standard FFT frequencies
+    freq = np.fft.fftfreq(N_t, d=dt)  # Frequency in 1/time units
+    # Energy grid with 2× factor: ε = 2 × (2πf)
+    energy_grid = 2 * 2 * np.pi * freq
+    energy_grid = np.fft.fftshift(energy_grid)  # Shift to center
+
+    # Create NambuKeldyshTensor
+    g_mixed = NambuKeldyshTensor(result_data)
+
+    # Return result
+    return {
+        'energy_grid': energy_grid,
+        'com_time_grid': time_grid,
+        'g_mixed': g_mixed
+    }
+
+
+# ============================================================================
 # Tensor Comparison Functions (from general_comparison_file.py)
 # ============================================================================
 
@@ -645,7 +779,7 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_
     plt.show()
 
 
-def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False):
+def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None):
     """
     Plot equilibrated gap vs parameter for multiple timestamps.
 
@@ -658,6 +792,8 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
         combine_timestamps: If True, combine all timestamps into single curve (default False)
+        x_external: Optional external x-values for comparison (default None)
+        y_external: Optional external y-values for comparison (default None)
 
     Returns:
         dict: {'parameter_values': array, 'gap_means': array, 'gap_errors': array}
@@ -736,6 +872,11 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
                        yerr=data['gap_errors'], fmt='o-', capsize=5,
                        linewidth=2, markersize=8, label=label, alpha=0.7)
 
+    # Plot external data if provided
+    if x_external is not None and y_external is not None:
+        ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
+               label='External data', alpha=0.8)
+
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
     ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=12)
@@ -759,7 +900,7 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
             'timestamp_data': timestamp_data}
 
 
-def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False):
+def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None):
     """
     Plot equilibrated current vs parameter for multiple timestamps.
 
@@ -772,6 +913,8 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
         combine_timestamps: If True, combine all timestamps into single curve (default False)
+        x_external: Optional external x-values for comparison (default None)
+        y_external: Optional external y-values for comparison (default None)
 
     Returns:
         dict: {'parameter_values': array, 'current_means': array, 'current_errors': array}
@@ -849,6 +992,11 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
             ax.errorbar(data['parameter_values'], np.abs(data['current_means']),
                        yerr=data['current_errors'], fmt='o-', capsize=5,
                        linewidth=2, markersize=8, label=label, alpha=0.7)
+
+    # Plot external data if provided
+    if x_external is not None and y_external is not None:
+        ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
+               label='External data', alpha=0.8)
 
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')

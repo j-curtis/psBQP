@@ -591,6 +591,30 @@ class NambuKeldyshTensor:
                 pauli_matrix[1,0]*self.data[0,1,...] +
                 pauli_matrix[1,1]*self.data[1,1,...])
 
+    def off_diagonal(self):
+        """
+        Extract anti-diagonal in time for two-time Green's functions.
+
+        For a tensor with shape (2, 2, N_t, N_t), extracts elements along the
+        anti-diagonal in the time-time plane: g[:, :, N_t-1-i, i] for i=0,...,N_t-1.
+
+        This corresponds to points with constant sum of time indices, representing
+        g(t, t') where t + t' = constant (relative time varies, center time fixed).
+
+        Returns:
+            np.ndarray: Array with shape (2, 2, N_t) containing anti-diagonal elements
+        """
+        N_t = self.data.shape[2]
+
+        # Create index arrays for vectorized extraction
+        # i ranges from 0 to N_t-1
+        i_indices = np.arange(N_t)
+        j_indices = N_t - 1 - i_indices
+
+        # Extract anti-diagonal: g[:, :, j_indices[i], i_indices[i]] for all i
+        # Using advanced indexing in vectorized fashion
+        return self.data[:, :, j_indices, i_indices]
+
     def matrix_to_vector(self):
         """
         Convert Nambu matrix to vector of Pauli components.

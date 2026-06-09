@@ -194,8 +194,12 @@ def main():
     vector_potential = np.ones((evolution.ntpoints)) * 0.0
 
     # Evolve from initial state for 200 steps
-    simulated_state, gaps, currents, vector_potentials = evolution.real_time_evolution(
-        initial_state, num_timesteps= 1000, A_external = vector_potential)
+    result = evolution.real_time_evolution(
+        initial_state, num_timesteps=1000, driving_field=vector_potential, track_occupations=False)
+    simulated_state = result['final_state']
+    gaps = result['gaps']
+    currents = result['currents']
+    vector_potentials = result['vector_potentials']
     print("Evolution complete!")
     print(f"  Final gap after 200 steps: {gaps[-1]:.6f}")
 

@@ -13,7 +13,7 @@ class StateObject:
     Stores Green's functions and derived quantities.
     """
 
-    def __init__(self, gr, gk, bcs_coupling_constant, grid_params=None):
+    def __init__(self, gr, gk, bcs_coupling_constant, grid_params=None, track_occupation=False):
         """
         Initialize state object with Green's functions and grid parameters.
 
@@ -42,6 +42,11 @@ class StateObject:
             self.T_max = None
             self.dt = None
 
+        #* initial occupation is thermal 
+        if track_occupation:
+            self.occupation_function = 0 * self.gr
+        else:
+            self.occupation_function = None
     # ========== Green's Function Relations ==========
 
     def _r2a(self):
@@ -163,7 +168,8 @@ class StateObject:
         current = total.trace(pauli_index=0) / 2.0
 
         # Apply prefactor -i(π / 4) [σ_n absorbed into normalization]
-        current = -1j * np.pi / 4 * current
+        #* second term is the anomalous term coming from combination of delta(t-t') and f(t-t') limit at zero
+        current = -1j * np.pi / 4 * current - np.gradient(A_history)
 
         return current
 
@@ -433,6 +439,109 @@ class StateObject:
         max_error = np.max(np.abs(error_row.data))
 
         return gk_fdt_row, gk_actual_row, error_row, max_error
+
+    # ========== Fourier Transform Methods ==========
+
+    def energy_time_representation(self, green_function_type):
+        """
+        Transform Green's function to energy representation.
+
+        Extracts anti-diagonal elements in time-time plane and Fourier transforms:
+        ĝ(ε) = ∫ dτ e^{i2ετ} ĝ(t=N_t-1-i, t'=i)
+
+        Preserves full Nambu matrix structure (2x2).
+
+        Args:
+            green_function_type: 'gr', 'gk', or 'f' (occupation function)
+
+        Returns:
+            dict: {
+                'energy_grid': Energy points (1D array),
+                'g_energy': NambuKeldyshTensor with shape (2, 2, N_ε)
+            }
+        """
+        if self.dt is None:
+            raise ValueError("Time step dt must be set in grid_params")
+
+        # Select the appropriate Green's function
+        if green_function_type == 'gr':
+            g_two_time = self.gr
+        elif green_function_type == 'gk':
+            g_two_time = self.gk
+        elif green_function_type == 'f':
+            g_two_time = self.occupation_function
+        else:
+            raise ValueError(f"Invalid green_function_type: {green_function_type}")
+
+        # Get dimensions
+        N_t = g_two_time.data.shape[2]
+
+        # Extract anti-diagonal in time: g[:, :, N_t-1-i, i] for all i
+        # Shape: (2, 2, N_t)
+        g_offdiag = g_two_time.off_diagonal()
+
+        # Fourier transform along time axis (axis=2)
+        # ∫ dτ e^{iετ} g(anti-diagonal)
+        g_fft = np.fft.ifft(g_offdiag, axis=2) * N_t  # Remove 1/N normalization
+        g_fft *= self.dt  # Multiply by dτ for integral approximation
+
+        # Shift to center zero frequency
+        g_energy_data = np.fft.fftshift(g_fft, axes=2)
+
+        # Create NambuKeldyshTensor
+        g_energy = NambuKeldyshTensor(g_energy_data)
+
+        # Construct energy grid with factor of 2: ε = 2ω
+        freq = np.fft.fftfreq(N_t, d=self.dt)
+        energy_grid = 2 * 2 * np.pi * freq  # 2ε convention
+        energy_grid = np.fft.fftshift(energy_grid)
+
+        return { 'energy_grid': energy_grid, 'g_energy': g_energy}
+
+    def update_state_occupation(self, f_thermal, f_thermal_integral):
+        """
+        Compute and update occupation distribution n(t,t') at specified time.
+
+        Solves: (τ₃ + Δt·g^R(t,t)) * n + n * (τ₃ - Δt·g^A(t',t')) = source
+        where source = g^K - Δt·g^R⊗(n+f) + Δt·(n+f)⊗g^A
+
+        Args:
+            f_thermal: Thermal distribution F(t,t') - NambuKeldyshTensor (2,2,N_t,N_t)
+            f_thermal_integral: Integral of F - NambuKeldyshTensor (2,2,N_t,N_t)
+            time_index: Time index to compute (default -1)
+
+        Updates:
+            self.occupation_function[time_index, :] with computed n(t,t') row
+        """
+        #* takes advantage of the fact that gr(t,t) and ga(t',t') have to be non tau_3 or tau_0 which is the jump condition
+        time_index = -1
+        N_t = self.gr.data.shape[2]
+        t_idx = time_index % N_t
+
+        ga = self._r2a()
+
+        gr_row = self.gr[t_idx:t_idx+1, :]
+        gk_row = self.gk[t_idx:t_idx+1, :]
+
+        n_plus_f_full = self.occupation_function + f_thermal
+
+        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal[t_idx:t_idx+1, :], f_thermal_integral[t_idx:t_idx+1, :], self.dt) + ga.precise_convolution_right(f_thermal[t_idx:t_idx+1, :], f_thermal_integral[t_idx:t_idx+1, :], self.dt)
+        rhs_vector += - gr[:,-1] @ self.occupation_function[:-1,:] 
+        solution_tensor = gr[-1,-1] * 0
+        for time in range(N_t):
+            source_term = rhs_vector[-1,time] 
+            if time != 0:
+                source_term += solution_tensor[1:] @ ga[time+1,time]
+            
+            solution_tensor.append_right([source_term.trace(3) / 4.0, 0.0, 0.0, source_term.trace(0) / 4.0])
+        
+        #* assuming also same symmetry as gk, which has been "prooved" in the note 
+        #* since there is only tau_3 and tau_0 components this would imply --> it means the diagonal is purely real
+        #* typically f is purely imaginary, due to oddness so this would make the diagonal zero, but this is unclear in most generality
+        #* assuming gk is purely imaginary and gr purely real this would be true
+        solution_tensor.append_right([0.0,0.0,0.0,0.0])
+
+        self.occupation_function.update_entries(solution_tensor[1:-1], solution_tensor[1:-1].involution(), solution_tensor[-1])
 
     # ========== String Representation ==========
 

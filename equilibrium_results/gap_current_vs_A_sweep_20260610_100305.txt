@@ -1,0 +1,27 @@
+# Equilibrium Gap and Current vs Vector Potential
+# Generated: 2026-06-10 10:03:05
+# T = 0.3, T_c = 1.0, eta = 0.2
+# time_sampling = 1501, time_duration = 31.41592653589793
+#
+# Columns: A  Re(Gap)  Im(Gap)  |Gap|  Re(Current)  Im(Current)  |Current|  Gap_Error
+#----------------------------------------------------------------------------------------------------
+    0.000000           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.047368           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.094737           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.142105           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.189474           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.236842           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.284211           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.331579           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.378947           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.426316           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.473684           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.521053           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.568421           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.615789           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.663158           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.710526           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.757895           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.805263           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.852632           NaN           NaN           NaN           NaN           NaN           NaN           NaN
+    0.900000           NaN           NaN           NaN           NaN           NaN           NaN           NaN

@@ -1,7 +1,7 @@
-Log file created at Mon Jun  8 11:24:58 2026
+Log file created at Tue Jun  9 16:53:08 2026
 
 
 
 The simulation was INTERRUPTED by the following ERROR:
 
-ModuleNotFoundError("No module named 'jax'")
+TypeError("evolve_keldysh_state() got an unexpected keyword argument 'driving_field'")

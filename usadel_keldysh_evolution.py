@@ -167,19 +167,25 @@ class UsadelKeldyshEvolution:
         Steps:
         1. Create EquilibriumSolver object
         2. Compute equilibrium gr and gk in frequency domain
-        3. Fourier transform to two-time representation (only t,t' < 0)
-        4. Construct and return StateObject with equilibrium data
+        3. Compute equilibrium current using old solver's _get_current
+        4. Fourier transform to two-time representation (only t,t' < 0)
+        5. Construct and return StateObject with equilibrium data
 
         Args:
-            Q: Phase gradient (default 0)
+            Q: Phase gradient (vector potential, default 0)
             gr0: Initial guess for equilibrium gr (optional)
 
         Returns:
-            StateObject with equilibrium data for t < 0
+            tuple: (initial_state, gr_tau, gk_tau, equilibrium_current)
+                - initial_state: StateObject with equilibrium data for t < 0
+                - gr_tau: Retarded Green's function in one-time form
+                - gk_tau: Keldysh Green's function in one-time form
+                - equilibrium_current: Equilibrium current at given Q
 
         Calls:
             - EquilibriumSolver.compute_equilibrium_gr()
             - EquilibriumSolver.fourier_transform_to_two_time()
+            - UsadelEvolution._get_current() (via equilibrium_solver.usadel_solver)
         """
 
         # Create equilibrium solver with current grid parameters
@@ -187,6 +193,17 @@ class UsadelKeldyshEvolution:
         grid_params_with_omega = self.grid_parameters.copy()
         grid_params_with_omega['omega_grid'] = self.omega_grid
         grid_params_with_omega['energy_cutoff'] = self.energy_cutoff
+
+        # Print frequency information
+        print(f"\n{'='*60}")
+        print(f"Frequency Grid Information:")
+        print(f"{'='*60}")
+        print(f"  Maximum frequency (ω_max): {np.max(self.omega_grid):.6f}")
+        print(f"  Minimum frequency (ω_min): {np.min(self.omega_grid):.6f}")
+        print(f"  Energy cutoff (Nyquist):   {self.energy_cutoff:.6f}")
+        print(f"  Frequency spacing (dω):    {self.d_omega:.6f}")
+        print(f"  Number of frequency points: {len(self.omega_grid)}")
+        print(f"{'='*60}\n")
 
         equilibrium_solver = EquilibriumSolver(
             grid_params_with_omega,
@@ -203,6 +220,16 @@ class UsadelKeldyshEvolution:
             compute_gk=True
         )
 
+        # Compute equilibrium current using old solver's _get_current method
+        # Need thermal distribution in frequency domain from old solver
+        f_eq = equilibrium_solver._get_thermal_occupation(self.temperature)
+        equilibrium_current = equilibrium_solver.usadel_solver._get_current(gr_eq, f_eq, Q)
+
+        print(f"\nEquilibrium observables:")
+        print(f"  Gap (Δ₀): {equilibrium_solver.gap_0:.6f}")
+        print(f"  Current (J₀): {equilibrium_current:.6f}")
+        print(f"  Vector potential (Q): {Q:.6f}")
+
         # Transform to two-time representation (returns only t,t' < 0)
         gr_two_time, gk_two_time, gr_tau, gk_tau = equilibrium_solver.fourier_transform_to_two_time(gr_eq, gk_eq)
 
@@ -218,7 +245,7 @@ class UsadelKeldyshEvolution:
             grid_params=self.grid_parameters
         )
 
-        return initial_state, gr_tau, gk_tau
+        return initial_state, gr_tau, gk_tau, equilibrium_current
 
     def get_thermal_occupation(self, temperature):
         """

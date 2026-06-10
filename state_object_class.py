@@ -139,7 +139,7 @@ class StateObject:
         F_integral_row = thermal_integral[t_idx:t_idx+1, :]  # ∫F(t,:)
 
         # Term 1: ∫ dt' τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
-        # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]
+        # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]=
         # Midpoint rule: subtract 1/2 weight from both endpoints
         inner_1 = A_tensor * tau3 * gk_col
         first_endpoint_1 = tau3 * (gr_row[:,0:1] * inner_1[0:1,:])[0,0]
@@ -165,7 +165,7 @@ class StateObject:
 
         # Sum all terms and take Nambu trace
         total = term1 + term2 + term3 + term4
-        current = total.trace(pauli_index=0) / 2.0
+        current = total.trace(pauli_index=0)
 
         # Apply prefactor -i(π / 4) [σ_n absorbed into normalization]
         #* second term is the anomalous term coming from combination of delta(t-t') and f(t-t') limit at zero

@@ -54,28 +54,29 @@ def load_job_data(timestamp, job_index, running_machine='laptop'):
     if not hasattr(path_management, 'project_data'):
         path_management.initialize(project_name='psBQP-keldysh')
 
-    # Get all kwargs from the timestamp
-    kwargs_array = io.recover_full_calculation_arguments(timestamp=timestamp)
-    input_kwargs = kwargs_array[job_index]
-
-    # Construct the result file path
-    result_file = os.path.join(
-        path_management.default_simulation_data_path(running_machine=running_machine),
-        str(timestamp),
-        path_management.relative_path_raw_result_file().format(job_index)
-    )
+    # Construct paths for kwargs and result files
+    simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
+    kwargs_file = os.path.join(simulation_data_path, str(timestamp), 'inputs', path_management.args_input_filetag())
+    result_file = os.path.join(simulation_data_path, str(timestamp), path_management.relative_path_raw_result_file().format(job_index))
 
     # Try main path first, then archive (only for cluster)
-    if not os.path.exists(result_file):
+    if not os.path.exists(kwargs_file) or not os.path.exists(result_file):
         if running_machine == 'cluster_euler':
-            result_file = os.path.join(
-                path_management.default_autoarchive_path(running_machine=running_machine),
-                str(timestamp),
-                path_management.relative_path_raw_result_file().format(job_index)
-            )
+            archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
+            if not os.path.exists(kwargs_file):
+                kwargs_file = os.path.join(archive_path, str(timestamp), 'inputs', path_management.args_input_filetag())
+            if not os.path.exists(result_file):
+                result_file = os.path.join(archive_path, str(timestamp), path_management.relative_path_raw_result_file().format(job_index))
 
-        if not os.path.exists(result_file):
-            raise FileNotFoundError(f"Result file not found for timestamp {timestamp}, job {job_index}")
+    # Check if files exist after trying archive
+    if not os.path.exists(kwargs_file):
+        raise FileNotFoundError(f"Kwargs file not found for timestamp {timestamp}")
+    if not os.path.exists(result_file):
+        raise FileNotFoundError(f"Result file not found for timestamp {timestamp}, job {job_index}")
+
+    # Load input kwargs from the initial state job using io
+    kwargs_array = io.recover_full_calculation_arguments(full_path=kwargs_file)
+    input_kwargs = kwargs_array[job_index]
 
     # Load the result data
     with open(result_file, 'rb') as f:
@@ -625,7 +626,8 @@ def plot_gap(timestamp, job_index=None, save_plot=False, save_dir='analysis_plot
     """
     # Determine which jobs to plot
     if job_index is None:
-        job_no = io.recover_job_no(timestamp=timestamp)
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
         job_indices = range(job_no)
         plot_all = True
     else:
@@ -666,21 +668,21 @@ def plot_gap(timestamp, job_index=None, save_plot=False, save_dir='analysis_plot
 
     axes[0].set_xlabel(r'Time $t$', fontsize=12)
     axes[0].set_ylabel(r'Re($\Delta(t)$)', fontsize=12)
-    axes[0].set_title(f'Real($\Delta$) - {title_suffix}', fontsize=13)
+    axes[0].set_title(rf'Real($\Delta$) - {title_suffix}', fontsize=13)
     if plot_all:
         axes[0].legend(fontsize=9)
     axes[0].grid(True, alpha=0.3)
 
     axes[1].set_xlabel(r'Time $t$', fontsize=12)
     axes[1].set_ylabel(r'Im($\Delta(t)$)', fontsize=12)
-    axes[1].set_title(f'Imag($\Delta$) - {title_suffix}', fontsize=13)
+    axes[1].set_title(rf'Imag($\Delta$) - {title_suffix}', fontsize=13)
     if plot_all:
         axes[1].legend(fontsize=9)
     axes[1].grid(True, alpha=0.3)
 
     axes[2].set_xlabel(r'Time $t$', fontsize=12)
     axes[2].set_ylabel(r'$|\Delta(t)|$', fontsize=12)
-    axes[2].set_title(f'$|\Delta|$ - {title_suffix}', fontsize=13)
+    axes[2].set_title(rf'$|\Delta|$ - {title_suffix}', fontsize=13)
     if plot_all:
         axes[2].legend(fontsize=9)
     axes[2].grid(True, alpha=0.3)
@@ -709,7 +711,8 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_
     """
     # Determine which jobs to plot
     if job_index is None:
-        job_no = io.recover_job_no(timestamp=timestamp)
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
         job_indices = range(job_no)
         plot_all = True
     else:
@@ -787,13 +790,20 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
 
     Args:
         timestamps: List of timestamps
-        parameter: 'temperature' or 'vector_potential' (which parameter to plot against)
+        parameter: Parameter to plot against. Options:
+                   - 'temperature': System temperature
+                   - 'vector_potential': Max absolute value of vector potential
+                   - 'field_params:KEY': Specific field parameter (e.g., 'field_params:amplitude')
         n_average: Number of final timesteps to average (default 100)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
         combine_timestamps: If True, combine all timestamps into single curve (default False)
-        x_external: Optional external x-values for comparison (default None)
-        y_external: Optional external y-values for comparison (default None)
+        x_external: Optional external x-values for comparison. Can be:
+                   - Single array: plots one external dataset
+                   - List of arrays: plots multiple external datasets
+        y_external: Optional external y-values for comparison. Can be:
+                   - Single array: plots one external dataset
+                   - List of arrays: plots multiple external datasets (must match x_external length)
 
     Returns:
         dict: {'parameter_values': array, 'gap_means': array, 'gap_errors': array}
@@ -805,7 +815,8 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
     all_gap_errors = []
 
     for timestamp in timestamps:
-        job_no = io.recover_job_no(timestamp=timestamp)
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
 
         parameter_values = []
         gap_means = []
@@ -828,6 +839,10 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
             elif parameter == 'vector_potential':
                 vector_potentials = save_data['vector_potentials']
                 param_value = np.max(np.abs(vector_potentials))
+            elif parameter.startswith('field_params:'):
+                # Extract field parameter name after colon
+                field_param_name = parameter.split(':', 1)[1]
+                param_value = input_kwargs['field_params'][field_param_name]
             else:
                 raise ValueError(f"Unknown parameter: {parameter}")
 
@@ -874,8 +889,21 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
 
     # Plot external data if provided
     if x_external is not None and y_external is not None:
-        ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
-               label='External data', alpha=0.8)
+        # Check if x_external and y_external are lists of arrays
+        if isinstance(x_external, list) and isinstance(y_external, list):
+            # Plot multiple external datasets
+            markers = ['x', 's', '^', 'd', 'v', '<', '>', 'p', '*', 'h']
+            linestyles = ['--', '-.', ':', '--', '-.']
+            for idx, (x_ext, y_ext) in enumerate(zip(x_external, y_external)):
+                marker = markers[idx % len(markers)]
+                linestyle = linestyles[idx % len(linestyles)]
+                label = f'External {idx+1}' if len(x_external) > 1 else 'External data'
+                ax.plot(x_ext, np.abs(y_ext), marker=marker, linestyle=linestyle,
+                       linewidth=2, markersize=10, label=label, alpha=0.8)
+        else:
+            # Single external dataset (backward compatible)
+            ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
+                   label='External data', alpha=0.8)
 
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
@@ -908,13 +936,20 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
 
     Args:
         timestamps: List of timestamps
-        parameter: 'temperature' or 'vector_potential' (which parameter to plot against)
+        parameter: Parameter to plot against. Options:
+                   - 'temperature': System temperature
+                   - 'vector_potential': Max absolute value of vector potential
+                   - 'field_params:KEY': Specific field parameter (e.g., 'field_params:amplitude')
         n_average: Number of final timesteps to average (default 100)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
         combine_timestamps: If True, combine all timestamps into single curve (default False)
-        x_external: Optional external x-values for comparison (default None)
-        y_external: Optional external y-values for comparison (default None)
+        x_external: Optional external x-values for comparison. Can be:
+                   - Single array: plots one external dataset
+                   - List of arrays: plots multiple external datasets
+        y_external: Optional external y-values for comparison. Can be:
+                   - Single array: plots one external dataset
+                   - List of arrays: plots multiple external datasets (must match x_external length)
 
     Returns:
         dict: {'parameter_values': array, 'current_means': array, 'current_errors': array}
@@ -926,7 +961,8 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
     all_current_errors = []
 
     for timestamp in timestamps:
-        job_no = io.recover_job_no(timestamp=timestamp)
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
 
         parameter_values = []
         current_means = []
@@ -949,6 +985,10 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
             elif parameter == 'vector_potential':
                 vector_potentials = save_data['vector_potentials']
                 param_value = np.max(np.abs(vector_potentials))
+            elif parameter.startswith('field_params:'):
+                # Extract field parameter name after colon
+                field_param_name = parameter.split(':', 1)[1]
+                param_value = input_kwargs['field_params'][field_param_name]
             else:
                 raise ValueError(f"Unknown parameter: {parameter}")
 
@@ -995,8 +1035,21 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
 
     # Plot external data if provided
     if x_external is not None and y_external is not None:
-        ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
-               label='External data', alpha=0.8)
+        # Check if x_external and y_external are lists of arrays
+        if isinstance(x_external, list) and isinstance(y_external, list):
+            # Plot multiple external datasets
+            markers = ['x', 's', '^', 'd', 'v', '<', '>', 'p', '*', 'h']
+            linestyles = ['--', '-.', ':', '--', '-.']
+            for idx, (x_ext, y_ext) in enumerate(zip(x_external, y_external)):
+                marker = markers[idx % len(markers)]
+                linestyle = linestyles[idx % len(linestyles)]
+                label = f'External {idx+1}' if len(x_external) > 1 else 'External data'
+                ax.plot(x_ext, np.abs(y_ext), marker=marker, linestyle=linestyle,
+                       linewidth=2, markersize=10, label=label, alpha=0.8)
+        else:
+            # Single external dataset (backward compatible)
+            ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
+                   label='External data', alpha=0.8)
 
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
@@ -1211,7 +1264,7 @@ def _plot_state_evolution(gr_initial, gr_final, gk_initial, gk_final, time_grid,
         max_diff_time = time_grid[max_diff_idx]
 
         ax.axvline(max_diff_time, color='gray', linestyle=':', linewidth=1.5, alpha=0.5)
-        ax.text(0.02, 0.98, f'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
+        ax.text(0.02, 0.98, rf'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
                transform=ax.transAxes, fontsize=8, verticalalignment='top',
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
@@ -1259,7 +1312,7 @@ def _plot_state_evolution(gr_initial, gr_final, gk_initial, gk_final, time_grid,
         max_diff_time = time_grid[max_diff_idx]
 
         ax.axvline(max_diff_time, color='gray', linestyle=':', linewidth=1.5, alpha=0.5)
-        ax.text(0.02, 0.98, f'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
+        ax.text(0.02, 0.98, rf'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
                transform=ax.transAxes, fontsize=8, verticalalignment='top',
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 

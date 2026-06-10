@@ -260,7 +260,7 @@ class NambuKeldyshTensor:
         # Create filter function to suppress early-time artifacts
         # Zero out first 1/5 of time points
         N_t = self.data.shape[-1]
-        filter_data = np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5))
+        filter_data = np.append(np.zeros(N_t//8), np.ones(N_t - N_t//8))
         filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
 
         # Check if self is a row (shape: 2, 2, 1, N_t) - already validated above
@@ -365,7 +365,7 @@ class NambuKeldyshTensor:
         N_t = other.data.shape[-1]
         N_tprime = self.data.shape[-1]
 
-        filter_data = np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5))
+        filter_data = np.append(np.zeros(N_t//8), np.ones(N_t - N_t//8))
         filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
 
         # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')

@@ -19,7 +19,7 @@ from usadel_keldysh_evolution import UsadelKeldyshEvolution
 from driving_field_utils import compute_driving_field
 
 
-def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, save_full_state=True, track_occupation = False):
+def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, save_full_state=True, track_occupations = False):
     """
     Evolve Keldysh Green's functions in real time.
 
@@ -54,19 +54,23 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 
     #* Load or generate initial state
     if initial_state_timestamp is not None:
-        # Load input kwargs from the initial state job using io
-        kwargs_array = io.recover_full_calculation_arguments(timestamp=initial_state_timestamp)
-        initial_state_kwargs = kwargs_array[initial_state_index]
-
-        # Construct the result file path
+        # Construct paths for kwargs and state files
         initial_state_dir = path_management.default_simulation_data_path(running_machine=running_machine)
-        state_file = os.path.join(initial_state_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index) )
+        kwargs_file = os.path.join(initial_state_dir, str(initial_state_timestamp), 'inputs', path_management.args_input_filetag())
+        state_file = os.path.join(initial_state_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index))
 
-        # If file not found, try autoarchive location (only for cluster)
-        if not os.path.exists(state_file):
+        # If files not found, try autoarchive location (only for cluster)
+        if not os.path.exists(kwargs_file) or not os.path.exists(state_file):
             if running_machine == 'cluster_euler':
                 archive_dir = path_management.default_autoarchive_path(running_machine=running_machine)
-                state_file = os.path.join( archive_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index))
+                if not os.path.exists(kwargs_file):
+                    kwargs_file = os.path.join(archive_dir, str(initial_state_timestamp), 'inputs', path_management.args_input_filetag())
+                if not os.path.exists(state_file):
+                    state_file = os.path.join(archive_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index))
+
+        # Load input kwargs from the initial state job using io
+        kwargs_array = io.recover_full_calculation_arguments(full_path=kwargs_file)
+        initial_state_kwargs = kwargs_array[initial_state_index]
 
         # Load the result data
         with open(state_file, 'rb') as f:
@@ -99,12 +103,19 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
             correction = 2.0 * tau_3 * thermal_diff
             initial_state.gk = initial_state.gk + correction
 
+            if track_occupations:
+                if initial_state.occupation is None:
+                    initial_state.occupation = thermal_diff
+                else:
+                    initial_state.occupation = initial_state.occupation + thermal_diff
+
         dt = initial_state.dt
+        initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, grid_params=grid_parameters)
 
     else:
         #* generating initial state using equilibrium code
         evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
-        initial_state, _, _ = evolution.generate_initial_state(Q=0.0)
+        initial_state, _, _, equilibrium_current = evolution.generate_initial_state(Q=0.0)
         dt = grid_parameters['time_duration'] / (grid_parameters['time_sampling'] - 1)
 
 
@@ -162,9 +173,15 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 # ===============================================================================================
 
 def run_1_point(input_directory, point_index):
-    """Run a single simulation point from the cluster arguments."""
-    # Load calculation arguments
+    """Run a single simulation point from both cluster and local execution."""
+    # Try to load calculation arguments from new location (with /inputs/) first
     args_file = os.path.join(input_directory, 'inputs', 'calculation_arguments')
+
+    # Fallback to old location (without /inputs/) for compatibility with local backend
+    if not os.path.exists(args_file):
+        args_file = os.path.join(input_directory, 'calculation_arguments')
+
+    # Load calculation arguments
     with open(args_file, 'rb') as f:
         args_array, kwargs_array = pickle.load(f)
 

@@ -1,0 +1,37 @@
+# Equilibrium Gap vs Temperature
+# Generated: 2026-06-10 10:03:05
+# T_c = 1.0, eta = 0.2
+# time_sampling = 1501, time_duration = 31.41592653589793
+#
+# Columns: Temperature  Re(Gap)  Im(Gap)  |Gap|  Error
+#--------------------------------------------------------------------
+    0.100000           NaN           NaN           NaN           NaN
+    0.134483           NaN           NaN           NaN           NaN
+    0.168966           NaN           NaN           NaN           NaN
+    0.203448           NaN           NaN           NaN           NaN
+    0.237931           NaN           NaN           NaN           NaN
+    0.272414           NaN           NaN           NaN           NaN
+    0.306897           NaN           NaN           NaN           NaN
+    0.341379           NaN           NaN           NaN           NaN
+    0.375862           NaN           NaN           NaN           NaN
+    0.410345           NaN           NaN           NaN           NaN
+    0.444828           NaN           NaN           NaN           NaN
+    0.479310           NaN           NaN           NaN           NaN
+    0.513793           NaN           NaN           NaN           NaN
+    0.548276           NaN           NaN           NaN           NaN
+    0.582759           NaN           NaN           NaN           NaN
+    0.617241           NaN           NaN           NaN           NaN
+    0.651724           NaN           NaN           NaN           NaN
+    0.686207           NaN           NaN           NaN           NaN
+    0.720690           NaN           NaN           NaN           NaN
+    0.755172           NaN           NaN           NaN           NaN
+    0.789655           NaN           NaN           NaN           NaN
+    0.824138           NaN           NaN           NaN           NaN
+    0.858621           NaN           NaN           NaN           NaN
+    0.893103           NaN           NaN           NaN           NaN
+    0.927586           NaN           NaN           NaN           NaN
+    0.962069           NaN           NaN           NaN           NaN
+    0.996552           NaN           NaN           NaN           NaN
+    1.031034           NaN           NaN           NaN           NaN
+    1.065517           NaN           NaN           NaN           NaN
+    1.100000           NaN           NaN           NaN           NaN

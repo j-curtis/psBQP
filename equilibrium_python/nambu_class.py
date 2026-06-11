@@ -143,7 +143,9 @@ class NambuTensor:
     
     def _commutator(self,other,expansion_indices_left = None, expansion_indices_right = None): 
         self_object, other_object = self._make_same_dimension(other,expansion_indices_left = expansion_indices_left, expansion_indices_right = expansion_indices_right)
-        return self_object @ other_object - self_object @ self 
+        #* old 
+        #return self_object @ other_object - self_object @ self 
+        return self_object @ other_object - other_object @ self_object 
     def _anti_commutator(self,other, expansion_indices_left = None, expansion_indices_right = None): 
         self_object, other_object = self._make_same_dimension(other,expansion_indices_left = expansion_indices_left, expansion_indices_right = expansion_indices_right)
         return self_object @ other_object + other_object @ self_object 

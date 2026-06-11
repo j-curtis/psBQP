@@ -169,7 +169,7 @@ class StateObject:
 
         # Apply prefactor -i(π / 4) [σ_n absorbed into normalization]
         #* second term is the anomalous term coming from combination of delta(t-t') and f(t-t') limit at zero
-        current = -1j * np.pi / 4 * current - np.gradient(A_history)
+        current = -1j * np.pi / 4 * current - np.gradient(A_history)[t_idx]
 
         return current
 

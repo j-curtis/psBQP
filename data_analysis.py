@@ -117,7 +117,19 @@ def _get_grid_parameters(save_data, input_kwargs):
     """
     state = save_data['final_state']
     eta = state.eta if hasattr(state, 'eta') else _get_system_parameters(input_kwargs)['eta']
-    return {'time_sampling': state.gr.data.shape[2], 'time_duration': state.T_max, 'eta': eta}
+
+    # Use last dimension of gr to get time grid size (works for both full and reduced states)
+    # For full state: shape is (2, 2, N_t, N_t), so shape[-1] = N_t
+    # For reduced state: shape is (2, 2, 1, N_t), so shape[-1] = N_t
+    time_sampling = state.gr.data.shape[-1]
+
+    grid_params = {'time_sampling': time_sampling, 'time_duration': state.T_max, 'eta': eta}
+
+    # If state has dt stored (e.g., from reduced state), include it
+    if hasattr(state, 'dt') and state.dt is not None:
+        grid_params['dt'] = state.dt
+
+    return grid_params
 
 
 # ============================================================================
@@ -697,6 +709,127 @@ def plot_gap(timestamp, job_index=None, save_plot=False, save_dir='analysis_plot
     plt.show()
 
 
+def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, save_dir='analysis_plots'):
+    """
+    Extract and plot optical conductivity σ(ω) = j(ω)/A(ω) from time-domain data.
+
+    Computes the optical conductivity by taking the ratio of Fourier-transformed
+    current density to the vector potential. Filters out frequencies where the
+    vector potential is below threshold to avoid numerical instabilities.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_index: Job index
+        threshold: Minimum |A(ω)| value for valid conductivity (default 1e-6)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots
+
+    Returns:
+        dict: {
+            'omega_grid': array - frequency grid in 1/time units
+            'sigma': array - complex conductivity σ(ω)
+        }
+        Returns None if vector potential is zero (equilibrium case)
+    """
+    # Load data
+    input_kwargs, save_data = load_job_data(timestamp, job_index)
+
+    # Check if vector potential is non-zero
+    vector_potentials = save_data['vector_potentials']
+    if np.allclose(vector_potentials, 0):
+        print(f"Vector potential is zero for job {job_index}. Conductivity extraction requires non-zero driving.")
+        return None
+
+    # Extract current and time grid
+    currents = save_data['currents']
+
+    if 'times' in save_data:
+        times = save_data['times']
+    else:
+        state = save_data['final_state']
+        N_t = len(currents)
+        dt = state.dt
+        times = np.linspace(0, N_t * dt, N_t)
+
+    dt = times[1] - times[0]
+    N_t = len(times)
+
+    # Fourier transform current: j(ω)
+    j_omega = np.fft.fft(currents)
+    j_omega = np.fft.fftshift(j_omega)
+
+    # Fourier transform vector potential: A(ω)
+    A_omega = np.fft.fft(vector_potentials)
+    A_omega = np.fft.fftshift(A_omega)
+
+    # Construct frequency grid
+    freq = np.fft.fftfreq(N_t, d=dt)
+    omega_grid = 2 * np.pi * freq
+    omega_grid = np.fft.fftshift(omega_grid)
+
+    # Compute conductivity with filtering
+    sigma = np.zeros_like(j_omega, dtype=complex)
+    mask = np.abs(A_omega) > threshold
+    sigma[mask] = j_omega[mask] / A_omega[mask]
+
+    # Find frequency range where A is significant
+    omega_indices = np.where(mask)[0]
+    if len(omega_indices) > 0:
+        omega_min = omega_grid[omega_indices[0]]
+        omega_max = omega_grid[omega_indices[-1]]
+    else:
+        omega_min = omega_max = None
+
+    # Print information
+    print(f"\n{'='*60}")
+    print(f"Conductivity Extraction (timestamp={timestamp}, job_index={job_index}):")
+    print(f"{'='*60}")
+    print(f"  Max |A(ω)|: {np.max(np.abs(A_omega)):.3e}")
+    print(f"  Threshold: {threshold:.3e}")
+    print(f"  Valid frequency range: [{omega_min:.3f}, {omega_max:.3f}]" if omega_min is not None else "  No valid frequencies")
+    print(f"  Number of valid frequency points: {np.sum(mask)}/{N_t}")
+    print(f"{'='*60}\n")
+
+    # Plot conductivity
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8))
+
+    # Real part
+    axes[0].plot(omega_grid, np.real(sigma), 'b-', linewidth=2, label=r'Re($\sigma(\omega)$)')
+    axes[0].set_xlabel(r'Frequency $\omega$', fontsize=12)
+    axes[0].set_ylabel(r'Re($\sigma(\omega)$)', fontsize=12)
+    axes[0].set_title(r'Real part of conductivity $\sigma(\omega) = j(\omega)/A(\omega)$', fontsize=13)
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend(fontsize=10)
+
+    # Mark valid frequency range with pale gray dashed lines
+    if omega_min is not None:
+        axes[0].axvline(omega_min, color='gray', linestyle='--', linewidth=1.5, alpha=0.4, label='Valid range')
+        axes[0].axvline(omega_max, color='gray', linestyle='--', linewidth=1.5, alpha=0.4)
+
+    # Imaginary part
+    axes[1].plot(omega_grid, np.imag(sigma), 'r-', linewidth=2, label=r'Im($\sigma(\omega)$)')
+    axes[1].set_xlabel(r'Frequency $\omega$', fontsize=12)
+    axes[1].set_ylabel(r'Im($\sigma(\omega)$)', fontsize=12)
+    axes[1].set_title(r'Imaginary part of conductivity $\sigma(\omega) = j(\omega)/A(\omega)$', fontsize=13)
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend(fontsize=10)
+
+    # Mark valid frequency range with pale gray dashed lines
+    if omega_min is not None:
+        axes[1].axvline(omega_min, color='gray', linestyle='--', linewidth=1.5, alpha=0.4, label='Valid range')
+        axes[1].axvline(omega_max, color='gray', linestyle='--', linewidth=1.5, alpha=0.4)
+
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'conductivity_{timestamp}_job{job_index}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+    return {'omega_grid': omega_grid, 'sigma': sigma}
+
+
 def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_plots'):
     """
     Plot current vs time for all jobs or a specific job.
@@ -782,7 +915,7 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_
     plt.show()
 
 
-def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None):
+def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, add_point_labels=False):
     """
     Plot equilibrated gap vs parameter for multiple timestamps.
 
@@ -804,6 +937,7 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
         y_external: Optional external y-values for comparison. Can be:
                    - Single array: plots one external dataset
                    - List of arrays: plots multiple external datasets (must match x_external length)
+        add_point_labels: If True, annotate each datapoint with its (x, y) values (default False)
 
     Returns:
         dict: {'parameter_values': array, 'gap_means': array, 'gap_errors': array}
@@ -879,6 +1013,12 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
         ax.errorbar(all_parameter_values[sort_idx], np.abs(all_gap_means[sort_idx]),
                    yerr=all_gap_errors[sort_idx], fmt='o-', capsize=5,
                    linewidth=2, markersize=8, label='All data')
+
+        # Add point labels if requested
+        if add_point_labels:
+            for x, y in zip(all_parameter_values[sort_idx], np.abs(all_gap_means[sort_idx])):
+                ax.annotate(f'({x:.3f}, {y:.3f})', xy=(x, y), xytext=(5, 5),
+                           textcoords='offset points', fontsize=8, alpha=0.7)
     else:
         # New behavior: plot each timestamp separately
         for i, (timestamp, data) in enumerate(timestamp_data.items()):
@@ -886,6 +1026,12 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
             ax.errorbar(data['parameter_values'], np.abs(data['gap_means']),
                        yerr=data['gap_errors'], fmt='o-', capsize=5,
                        linewidth=2, markersize=8, label=label, alpha=0.7)
+
+            # Add point labels if requested
+            if add_point_labels:
+                for x, y in zip(data['parameter_values'], np.abs(data['gap_means'])):
+                    ax.annotate(f'({x:.3f}, {y:.3f})', xy=(x, y), xytext=(5, 5),
+                               textcoords='offset points', fontsize=8, alpha=0.7)
 
     # Plot external data if provided
     if x_external is not None and y_external is not None:
@@ -928,7 +1074,7 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
             'timestamp_data': timestamp_data}
 
 
-def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None):
+def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, add_point_labels=False):
     """
     Plot equilibrated current vs parameter for multiple timestamps.
 
@@ -950,6 +1096,7 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
         y_external: Optional external y-values for comparison. Can be:
                    - Single array: plots one external dataset
                    - List of arrays: plots multiple external datasets (must match x_external length)
+        add_point_labels: If True, annotate each datapoint with its (x, y) values (default False)
 
     Returns:
         dict: {'parameter_values': array, 'current_means': array, 'current_errors': array}
@@ -1025,6 +1172,12 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
         ax.errorbar(all_parameter_values[sort_idx], np.abs(all_current_means[sort_idx]),
                    yerr=all_current_errors[sort_idx], fmt='o-', capsize=5,
                    linewidth=2, markersize=8, label='All data')
+
+        # Add point labels if requested
+        if add_point_labels:
+            for x, y in zip(all_parameter_values[sort_idx], np.abs(all_current_means[sort_idx])):
+                ax.annotate(f'({x:.3f}, {y:.3f})', xy=(x, y), xytext=(5, 5),
+                           textcoords='offset points', fontsize=8, alpha=0.7)
     else:
         # New behavior: plot each timestamp separately
         for i, (timestamp, data) in enumerate(timestamp_data.items()):
@@ -1032,6 +1185,12 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
             ax.errorbar(data['parameter_values'], np.abs(data['current_means']),
                        yerr=data['current_errors'], fmt='o-', capsize=5,
                        linewidth=2, markersize=8, label=label, alpha=0.7)
+
+            # Add point labels if requested
+            if add_point_labels:
+                for x, y in zip(data['parameter_values'], np.abs(data['current_means'])):
+                    ax.annotate(f'({x:.3f}, {y:.3f})', xy=(x, y), xytext=(5, 5),
+                               textcoords='offset points', fontsize=8, alpha=0.7)
 
     # Plot external data if provided
     if x_external is not None and y_external is not None:

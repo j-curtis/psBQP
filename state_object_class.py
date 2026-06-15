@@ -326,7 +326,6 @@ class StateObject:
         gk_t1_row = self.gk[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
         last_endpoint_1 = gr_t1_t1 * gk_t1_row  # gr[t1, t1] * gk[t1, t2]
 
-        #! the midpoint rule could be breaking associativity of the convolution, check analytically
         conv1 = conv1 - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
 
         # Second convolution: ∫ g^K(t1, t') g^A(t', t2) dt' for all t2
@@ -525,13 +524,13 @@ class StateObject:
 
         n_plus_f_full = self.occupation_function + f_thermal
 
-        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal[t_idx:t_idx+1, :], f_thermal_integral[t_idx:t_idx+1, :], self.dt) + ga.precise_convolution_right(f_thermal[t_idx:t_idx+1, :], f_thermal_integral[t_idx:t_idx+1, :], self.dt)
-        rhs_vector += - gr[:,-1] @ self.occupation_function[:-1,:] 
-        solution_tensor = gr[-1,-1] * 0
+        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral[t_idx:t_idx+1, :], self.dt) + ga.precise_convolution_right(f_thermal[t_idx:t_idx+1, :], f_thermal_integral[t_idx:t_idx+1, :], self.dt)
+        rhs_vector += - gr_row[:,:-1] @ self.occupation_function[:-1,:]
+        solution_tensor = self.gr[-1,-1:] * 0
         for time in range(N_t):
             source_term = rhs_vector[-1,time] 
             if time != 0:
-                source_term += solution_tensor[1:] @ ga[time+1,time]
+                source_term += solution_tensor[1:] @ ga[:time,time]
             
             solution_tensor.append_right([source_term.trace(3) / 4.0, 0.0, 0.0, source_term.trace(0) / 4.0])
         

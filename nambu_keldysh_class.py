@@ -278,7 +278,8 @@ class NambuKeldyshTensor:
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
         first_endpoint_fact = self * (ones_tensor[:,0:1] * other[0,:])
         last_endpoint_fact = self * (ones_tensor[:,-1:] * other[-1,:])
-        result_fact = (self * ones_at_other_filtered) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact * 0 #* zero from filter function
+        #* 0 from filter function
+        result_fact = (self * ones_at_other_filtered) * dt - 0.5 * dt * first_endpoint_fact * 0 - 0.5 * dt * last_endpoint_fact #* zero from filter function
 
         # For analytic term: use row of other_integral if self is a row
         if is_self_row:
@@ -396,7 +397,8 @@ class NambuKeldyshTensor:
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
         first_endpoint_fact = (other[:,0:1] * ones_tensor[0:1,:]) * self_for_reg
         last_endpoint_fact = (other[:,:]) * self_for_reg
-        result_fact = ((other @ ones_tensor) * self_for_reg) * filter_function * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact *0 
+        #* 0 from filter function
+        result_fact = ((other @ ones_tensor) * self_for_reg) * filter_function * dt - 0.5 * dt * first_endpoint_fact * 0 - 0.5 * dt * last_endpoint_fact 
 
         # Analytic term (using integral)
         result_anal = (- other_integral) * self_for_reg

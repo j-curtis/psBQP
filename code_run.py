@@ -19,7 +19,7 @@ from usadel_keldysh_evolution import UsadelKeldyshEvolution
 from driving_field_utils import compute_driving_field
 
 
-def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, save_full_state=True, track_occupations = False):
+def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, save_full_state=True, track_every_n=None):
     """
     Evolve Keldysh Green's functions in real time.
 
@@ -40,6 +40,9 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         field_params: Optional dict with field-specific parameters
                       See driving_field_utils.compute_driving_field() for parameter details
         save_full_state: If True, save full time history. If False, save only final timestep (default: True)
+        track_every_n: If not None, compute and save energy-time representations (gr, gk, f) every
+                       track_every_n timesteps to reduce memory usage. If None, energy-time
+                       representations are not computed (default: None)
 
     Returns:
         0 on success
@@ -77,6 +80,11 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
             initial_data = pickle.load(f)
 
         initial_state = initial_data['final_state']
+
+        # Ensure occupation_function attribute exists (for backward compatibility with old saved states)
+        if not hasattr(initial_state, 'occupation_function'):
+            initial_state.occupation_function = None
+
         grid_parameters = {'time_sampling': initial_state.gr.data.shape[2], 'time_duration': initial_state.T_max, 'eta': system_parameters['eta']}
 
         # Apply temperature correction to gk if temperature has changed
@@ -103,13 +111,19 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
             correction = 2.0 * tau_3 * thermal_diff
             initial_state.gk = initial_state.gk + correction
 
+            # Determine if we need to track occupations
+            track_occupations = (track_every_n is not None)
+
             if track_occupations:
-                if initial_state.occupation is None:
-                    initial_state.occupation = thermal_diff
+                if initial_state.occupation_function is None:
+                    initial_state.occupation_function = thermal_diff
                 else:
-                    initial_state.occupation = initial_state.occupation + thermal_diff
+                    initial_state.occupation_function = initial_state.occupation_function + thermal_diff
+
 
         dt = initial_state.dt
+        # Determine if we need to track occupations
+        track_occupations = (track_every_n is not None)
         initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, grid_params=grid_parameters)
 
     else:
@@ -135,6 +149,9 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     if 'evolution' not in locals():
         evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
 
+    # Determine if we should track occupations
+    track_occupations = (track_every_n is not None)
+
     result = evolution.real_time_evolution(initial_state=initial_state, num_timesteps=num_timesteps, driving_field=prepared_driving_field, track_occupations=track_occupations)
     final_state = result['final_state']
     gaps = result['gaps']
@@ -150,23 +167,32 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         gk_last = NambuKeldyshTensor(final_state.gk.data[-1:,:])
 
         # Create reduced state with only last timestep
-        reduced_state = StateObject( gr=gr_last, gk=gk_last, bcs_coupling_constant=final_state.bcs_coupling_constant, grid_params={'time_duration': final_state.T_max, 'time_sampling': 1, 'dt': final_state.dt})
-        
+        # Preserve original grid parameters (time_sampling from grid_parameters, not 1)
+        reduced_state = StateObject( gr=gr_last, gk=gk_last, bcs_coupling_constant=final_state.bcs_coupling_constant, grid_params={'time_duration': final_state.T_max, 'time_sampling': grid_parameters['time_sampling'], 'dt': final_state.dt})
+
         final_state = reduced_state
 
     # Save results
     result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': times}
 
-    # Add energy-time data if tracking was enabled
+    # Add energy-time data if tracking was enabled, filtered by track_every_n
     if track_occupations:
-        result_data['gr_energy_time'] = result['gr_energy_time']
-        result_data['f_energy_time'] = result['f_energy_time']
+        # Filter to save only every track_every_n timestep
+        gr_energy_time_full = result['gr_energy_time']
+        gk_energy_time_full = result['gk_energy_time']
+        f_energy_time_full = result['f_energy_time']
+
+        # Select every track_every_n entry
+        result_data['gr_energy_time'] = gr_energy_time_full[::track_every_n]
+        result_data['gk_energy_time'] = gk_energy_time_full[::track_every_n]
+        result_data['f_energy_time'] = f_energy_time_full[::track_every_n]
+        # Also save the indices for reference
+        result_data['energy_time_indices'] = np.arange(0, num_timesteps, track_every_n)
 
     with open(save_filename, 'wb') as f:
         pickle.dump(result_data, f)
 
     return 0
-
 
 # ===============================================================================================
 # Cluster backend interface (for demler_tools)

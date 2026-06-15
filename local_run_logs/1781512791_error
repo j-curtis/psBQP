@@ -1,0 +1,7 @@
+Log file created at Mon Jun 15 10:49:40 2026
+
+
+
+The simulation was INTERRUPTED by the following ERROR:
+
+ValueError('Contraction dimension mismatch: 1 != 2')

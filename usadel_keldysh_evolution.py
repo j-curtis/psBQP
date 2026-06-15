@@ -110,7 +110,12 @@ class UsadelKeldyshEvolution:
             raise ValueError("grid_parameters must contain 'time_duration' or 't_max'")
 
         # Compute time step
-        self.delta_t = self.tmax / (self.ntpoints - 1)
+        if 'dt' in self.grid_parameters:
+            # Use provided dt if available (e.g., from saved state)
+            self.delta_t = self.grid_parameters['dt']
+        else:
+            # Compute from grid size
+            self.delta_t = self.tmax / (self.ntpoints - 1)
 
         # Generate time grid
         self.time_grid = np.linspace(-self.tmax, 0, self.ntpoints)
@@ -1428,7 +1433,7 @@ class UsadelKeldyshEvolution:
                            If None, zero driving field is used. Can be:
                            - None: No driving (A_external remains zeros)
                            - 1D array (length num_timesteps): Time-dependent field values
-            track_occupations: If True, compute and store energy-time representations of gr and f
+            track_occupations: If True, compute and store energy-time representations of gr, gk, and f
                                at each timestep (default: False)
 
         Returns:
@@ -1438,6 +1443,7 @@ class UsadelKeldyshEvolution:
             - 'currents': Array of current values at each timestep (length num_timesteps)
             - 'vector_potentials': Array of vector potential values at each timestep (length num_timesteps)
             - 'gr_energy_time': (only if track_occupations=True) List of energy-time representations of gr
+            - 'gk_energy_time': (only if track_occupations=True) List of energy-time representations of gk
             - 'f_energy_time': (only if track_occupations=True) List of energy-time representations of occupation function
 
         Calls:
@@ -1452,6 +1458,7 @@ class UsadelKeldyshEvolution:
         # Initialize lists to track energy-time representations if requested
         if track_occupations:
             gr_energy_time_list = []
+            gk_energy_time_list = []
             f_energy_time_list = []
 
         # Initialize A_external as zeros (history window)
@@ -1485,8 +1492,10 @@ class UsadelKeldyshEvolution:
 
             if track_occupations:
                 gr_energy, _ = state.energy_time_representation('gr')
+                gk_energy, _ = state.energy_time_representation('gk')
                 f_energy, _ = state.energy_time_representation('f')
                 gr_energy_time_list.append(gr_energy)
+                gk_energy_time_list.append(gk_energy)
                 f_energy_time_list.append(f_energy)
 
         result = { 'final_state': state, 'gaps': np.array(gaps), 'currents': np.array(currents), 'vector_potentials': np.array(vector_potentials)}
@@ -1494,5 +1503,6 @@ class UsadelKeldyshEvolution:
         # Add energy-time data if tracking was enabled
         if track_occupations:
             result['gr_energy_time'] = gr_energy_time_list
+            result['gk_energy_time'] = gk_energy_time_list
             result['f_energy_time'] = f_energy_time_list
         return result

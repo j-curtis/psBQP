@@ -165,14 +165,43 @@ def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analys
     # gr_totals and gk_totals have shape (4, N_t) for 4 Pauli components
     gr_max_errors_per_channel = np.zeros(4)
     gk_max_errors_per_channel = np.zeros(4)
+    gr_max_error_indices = np.zeros(4, dtype=int)
+    gk_max_error_indices = np.zeros(4, dtype=int)
+
+    # Compute total integral of differences (without absolute value)
+    dt = evolution.time_grid[1] - evolution.time_grid[0]
+    gr_total_integrals = np.zeros(4)
+    gk_total_integrals = np.zeros(4)
+
+    print("\n" + "="*70)
+    print("NORMALIZATION CHECK - Maximum Error Indices")
+    print("="*70)
 
     for pauli_idx in range(4):
-        # For gr: τ0 should integrate to 1, others to 0
-        expected_value = 1.0 if pauli_idx == 0 else 0.0
-        gr_max_errors_per_channel[pauli_idx] = np.max(np.abs(gr_totals[pauli_idx, :] - expected_value))
+        # gr_totals and gk_totals already contain the errors, not raw values
+        error_array_gr = np.abs(gr_totals[pauli_idx, :])
+        gr_max_error_indices[pauli_idx] = np.argmax(error_array_gr)
+        gr_max_errors_per_channel[pauli_idx] = error_array_gr[gr_max_error_indices[pauli_idx]]
+
+        # Total integral of signed differences for g^R
+        gr_total_integrals[pauli_idx] = np.sum(gr_totals[pauli_idx, :]) * dt
 
         # For gk: compute error from the totals
-        gk_max_errors_per_channel[pauli_idx] = np.max(np.abs(gk_totals[pauli_idx, :]))
+        error_array_gk = np.abs(gk_totals[pauli_idx, :])
+        gk_max_error_indices[pauli_idx] = np.argmax(error_array_gk)
+        gk_max_errors_per_channel[pauli_idx] = error_array_gk[gk_max_error_indices[pauli_idx]]
+
+        # Total integral of signed differences for g^K
+        gk_total_integrals[pauli_idx] = np.imag(np.sum(gk_totals[pauli_idx, :]) * dt)
+
+        # Print results for this Pauli component
+        print(f"\nτ_{pauli_idx} component:")
+        print(f"  g^R normalization: max_error = {gr_max_errors_per_channel[pauli_idx]:.4e} at index {gr_max_error_indices[pauli_idx]}")
+        print(f"  g^R normalization: total_integral = {gr_total_integrals[pauli_idx]:.4e}")
+        print(f"  g^K normalization: max_error = {gk_max_errors_per_channel[pauli_idx]:.4e} at index {gk_max_error_indices[pauli_idx]}")
+        print(f"  g^K normalization: total_integral = {gk_total_integrals[pauli_idx]:.4e}")
+
+    print("="*70 + "\n")
 
     _plot_normalization(gr_totals, 'gr', evolution.time_grid, save_plot, save_dir, timestamp)
     _plot_normalization(gk_totals, 'gk', evolution.time_grid, save_plot, save_dir, timestamp)
@@ -206,11 +235,34 @@ def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
 
     # Compute max error per Pauli channel
     max_errors_per_channel = np.zeros(4)
+    max_error_indices = np.zeros(4, dtype=int)
+    total_integrals = np.zeros(4)
+
+    # Get time step
+    dt = evolution.time_grid[1] - evolution.time_grid[0]
+
+    print("\n" + "="*70)
+    print("FDT CHECK - Maximum Error Indices")
+    print("="*70)
+
     for pauli_idx in range(4):
         error_pauli = error_row.trace(pauli_idx) / 2
         if error_pauli.ndim == 2:
             error_pauli = error_pauli[0, :]
-        max_errors_per_channel[pauli_idx] = np.max(np.abs(error_pauli))
+
+        error_array = np.abs(error_pauli)
+        max_error_indices[pauli_idx] = np.argmax(error_array)
+        max_errors_per_channel[pauli_idx] = error_array[max_error_indices[pauli_idx]]
+
+        # Total integral of signed differences
+        total_integrals[pauli_idx] = np.sum(error_pauli) * dt
+
+        # Print results for this Pauli component
+        print(f"\nτ_{pauli_idx} component:")
+        print(f"  max_error = {max_errors_per_channel[pauli_idx]:.4e} at index {max_error_indices[pauli_idx]}")
+        print(f"  total_integral = {total_integrals[pauli_idx]:.4e}")
+
+    print("="*70 + "\n")
 
     _plot_fdt(gk_actual_row, gk_fdt_row, error_row, evolution.time_grid, save_plot, save_dir, timestamp)
 
@@ -832,7 +884,7 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
 
 def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_plots'):
     """
-    Plot current vs time for all jobs or a specific job.
+    Plot current and vector potential vs time for all jobs or a specific job.
 
     Displays input parameters before plotting.
 
@@ -852,11 +904,12 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_
         job_indices = [job_index]
         plot_all = False
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     for job_idx in job_indices:
         input_kwargs, save_data = load_job_data(timestamp, job_idx)
         currents = save_data['currents']
+        vector_potentials = save_data['vector_potentials']
 
         if 'times' in save_data:
             times = save_data['times']
@@ -874,36 +927,78 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_
         print(f"{'='*60}\n")
 
         label = f'Job {job_idx}' if plot_all else None
-        # Plot Real part
-        axes[0].plot(times, np.real(currents), linewidth=2, label=label, alpha=0.7)
-        # Plot Imag part
-        axes[1].plot(times, np.imag(currents), linewidth=2, label=label, alpha=0.7)
-        # Plot Magnitude
-        axes[2].plot(times, np.abs(currents), linewidth=2, label=label, alpha=0.7)
+        # Plot Real part of current
+        axes[0].plot(times, np.real(currents), linewidth=2, label=label, alpha=0.7, color=f'C{job_idx}')
 
-    # Configure axes
+        # Plot vector potential (real part if complex, otherwise as is)
+        if np.iscomplexobj(vector_potentials):
+            A_values = np.real(vector_potentials)
+        else:
+            A_values = vector_potentials
+
+        # Compute dA/dt using gradient
+        dt = times[1] - times[0] if len(times) > 1 else 1.0
+        dA_dt = np.gradient(A_values, dt)
+
+        # Plot A(t) on left y-axis
+        axes[1].plot(times, A_values, linewidth=2, label=label, alpha=0.7, color=f'C{job_idx}')
+
+    # Configure current axis
     title_suffix = 'All Jobs' if plot_all else f'Job {job_index}'
 
     axes[0].set_xlabel(r'Time $t$', fontsize=12)
     axes[0].set_ylabel(r'Re($J(t)$)', fontsize=12)
-    axes[0].set_title(f'Real($J$) - {title_suffix}', fontsize=13)
+    axes[0].set_title(f'Current - {title_suffix}', fontsize=13)
     if plot_all:
         axes[0].legend(fontsize=9)
     axes[0].grid(True, alpha=0.3)
 
+    # Configure vector potential axis (left y-axis)
     axes[1].set_xlabel(r'Time $t$', fontsize=12)
-    axes[1].set_ylabel(r'Im($J(t)$)', fontsize=12)
-    axes[1].set_title(f'Imag($J$) - {title_suffix}', fontsize=13)
-    if plot_all:
-        axes[1].legend(fontsize=9)
+    axes[1].set_ylabel(r'$A(t)$', fontsize=12, color='C0')
+    axes[1].set_title(f'Vector Potential and Derivative - {title_suffix}', fontsize=13)
+    axes[1].tick_params(axis='y', labelcolor='C0')
     axes[1].grid(True, alpha=0.3)
 
-    axes[2].set_xlabel(r'Time $t$', fontsize=12)
-    axes[2].set_ylabel(r'$|J(t)|$', fontsize=12)
-    axes[2].set_title(f'$|J|$ - {title_suffix}', fontsize=13)
+    # Create second y-axis for dA/dt
+    ax_right = axes[1].twinx()
+
+    # Plot dA/dt for all jobs on right y-axis
+    for job_idx in job_indices:
+        input_kwargs, save_data = load_job_data(timestamp, job_idx)
+        vector_potentials = save_data['vector_potentials']
+
+        if 'times' in save_data:
+            times = save_data['times']
+        else:
+            state = save_data['final_state']
+            N_t = len(save_data['currents'])
+            dt_val = state.dt
+            times = np.linspace(0, N_t * dt_val, N_t)
+
+        if np.iscomplexobj(vector_potentials):
+            A_values = np.real(vector_potentials)
+        else:
+            A_values = vector_potentials
+
+        dt_val = times[1] - times[0] if len(times) > 1 else 1.0
+        dA_dt = np.gradient(A_values, dt_val)
+
+        label_deriv = f'Job {job_idx} ' + r'($\partial A/\partial t$)' if plot_all else r'$\partial A/\partial t$'
+        ax_right.plot(times, dA_dt, linewidth=2, linestyle='--', label=label_deriv, alpha=0.7, color='red')
+
+    ax_right.set_ylabel(r'$\partial A/\partial t$', fontsize=12, color='red')
+    ax_right.tick_params(axis='y', labelcolor='red')
+
+    # Combine legends if plotting all jobs
     if plot_all:
-        axes[2].legend(fontsize=9)
-    axes[2].grid(True, alpha=0.3)
+        lines1, labels1 = axes[1].get_legend_handles_labels()
+        lines2, labels2 = ax_right.get_legend_handles_labels()
+        axes[1].legend(lines1 + lines2, labels1 + labels2, fontsize=9, loc='best')
+    else:
+        lines1, labels1 = axes[1].get_legend_handles_labels()
+        lines2, labels2 = ax_right.get_legend_handles_labels()
+        axes[1].legend(lines1 + lines2, labels1 + labels2, fontsize=9, loc='best')
 
     plt.tight_layout()
 
@@ -1242,9 +1337,21 @@ def _plot_normalization(totals, gf_type, time_grid, save_plot, save_dir, timesta
     pauli_names = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
     fig, axes = plt.subplots(2, 2, figsize=(10, 7))
 
+    print(f"\n{'='*70}")
+    print(f"PLOTTING {gf_type.upper()} NORMALIZATION - Error Values")
+    print(f"{'='*70}")
+
     for pauli_idx in range(4):
         ax = axes.flat[pauli_idx]
         component = totals[pauli_idx, :]
+
+        # Print what we're plotting (totals already contain errors)
+        print(f"\nτ_{pauli_idx} component:")
+        print(f"  Plotting range: [{np.real(component).min():.4e}, {np.real(component).max():.4e}]")
+        print(f"  Mean error: {np.real(component).mean():.4e}")
+        print(f"  Std deviation: {np.real(component).std():.4e}")
+        print(f"  Max error: {np.abs(component).max():.4e}")
+
         ax.plot(time_grid, np.real(component), 'b-', linewidth=2, label='Real', alpha=0.7)
         ax.plot(time_grid, np.imag(component), 'r-', linewidth=2, label='Imag', alpha=0.7)
         ax.set_xlabel(r"$t_2$", fontsize=10)
@@ -1253,6 +1360,8 @@ def _plot_normalization(totals, gf_type, time_grid, save_plot, save_dir, timesta
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([time_grid[0], 0])
+
+    print(f"{'='*70}\n")
 
     plt.tight_layout()
 
@@ -1377,6 +1486,172 @@ def _plot_time_translation(gr_tensor, gk_tensor, time_grid, num_rows, threshold,
         plt.savefig(os.path.join(save_dir, f'tti_gk_{timestamp}.png'), dpi=150, bbox_inches='tight')
 
     plt.show()
+
+
+def plot_energy_time_representation(timestamp, job_index, green_function_type='f',
+                                     pauli_components=(0, 3), plot_every=1,
+                                     save_plot=False, save_dir='analysis_plots'):
+    """
+    Plot Green's function in energy-time representation.
+
+    Creates a 2-subplot figure showing energy cuts at different times.
+    Each time slice is plotted with progressively darker shades of blue
+    (darker = later time).
+
+    Args:
+        timestamp: Timestamp folder name
+        job_index: Job index
+        green_function_type: Type of Green's function to plot ('gr', 'gk', or 'f')
+        pauli_components: Tuple of two Pauli indices to plot (default (0, 3))
+                         0=identity, 1=tau_x, 2=tau_y, 3=tau_z
+        plot_every: Plot every N-th time slice (default 1, plot all)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots
+
+    Returns:
+        dict: {
+            'energy_grid': energy array,
+            'time_indices': array of plotted time indices,
+            'data': list of NambuKeldyshTensor objects at each time
+        }
+
+    Example:
+        # Plot occupation function f with tau_0 and tau_3 components
+        plot_energy_time_representation('20260615_143022', 0, green_function_type='f',
+                                       pauli_components=(0, 3), plot_every=5)
+
+        # Plot retarded Green's function with tau_2 and tau_3
+        plot_energy_time_representation('20260615_143022', 0, green_function_type='gr',
+                                       pauli_components=(2, 3), plot_every=10)
+    """
+    # Load data
+    input_kwargs, save_data = load_job_data(timestamp, job_index)
+
+    # Map green_function_type to data key
+    data_key_map = {
+        'gr': 'gr_energy_time',
+        'gk': 'gk_energy_time',
+        'f': 'f_energy_time'
+    }
+
+    if green_function_type not in data_key_map:
+        raise ValueError(f"green_function_type must be 'gr', 'gk', or 'f', got '{green_function_type}'")
+
+    data_key = data_key_map[green_function_type]
+
+    # Check if data exists
+    if data_key not in save_data:
+        raise ValueError(f"No {green_function_type} energy-time data found. "
+                        f"Simulation must be run with track_every_n parameter.")
+
+    # Extract data
+    energy_time_list = save_data[data_key]
+    time_indices = save_data['energy_time_indices']
+
+    # Get actual times from save_data
+    if 'times' in save_data:
+        times = save_data['times']
+        time_values = times[time_indices]
+    else:
+        time_values = time_indices
+
+    # Select which times to plot
+    plot_indices = np.arange(0, len(energy_time_list), plot_every)
+
+    # Determine which part to plot (real for gr, imag for gk and f)
+    if green_function_type == 'gr':
+        extract_part = np.real
+        part_label = 'Re'
+    else:
+        extract_part = np.imag
+        part_label = 'Im'
+
+    # Extract energy grid (same for all times)
+    energy_grid = energy_time_list[0]['energy_grid']
+
+    # Pauli component labels
+    pauli_labels = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+
+    # Create colormap (darker = later time)
+    from matplotlib import cm
+    n_plots = len(plot_indices)
+    blues = cm.get_cmap('Blues', n_plots + 2)
+
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Print information
+    print(f"\n{'='*60}")
+    print(f"Energy-Time Plot (timestamp={timestamp}, job_index={job_index}):")
+    print(f"{'='*60}")
+    print(f"  Green's function type: g^{green_function_type}")
+    print(f"  Pauli components: {pauli_components}")
+    print(f"  Total time slices available: {len(energy_time_list)}")
+    print(f"  Plotting every {plot_every} slice(s): {len(plot_indices)} lines")
+    print(f"  Time range: [{time_values[0]:.2f}, {time_values[-1]:.2f}]")
+    print(f"  Energy grid points: {len(energy_grid)}")
+    print(f"{'='*60}\n")
+
+    # Plot both Pauli components
+    for subplot_idx, pauli_idx in enumerate(pauli_components):
+        ax = axes[subplot_idx]
+
+        # Plot each time slice
+        for i, data_idx in enumerate(plot_indices):
+            # Extract Green's function at this time
+            g_data = energy_time_list[data_idx]
+            g_energy = g_data['g_energy']  # NambuKeldyshTensor (2, 2, N_ε)
+
+            # Extract Pauli component
+            g_pauli = g_energy.trace(pauli_index=pauli_idx) / 2
+
+            # Extract real or imaginary part
+            g_plot = extract_part(g_pauli)
+
+            # Color: darker for later times (skip first 2 colors to avoid white)
+            color = blues(i + 2)
+
+            # Time value for label (show only first 5 in legend to avoid clutter)
+            time_value = time_values[plot_indices[i]]
+            label = f'$t = {time_value:.2f}$' if i < 5 else None
+
+            # Plot
+            ax.plot(energy_grid, g_plot, '-', color=color, linewidth=1.5,
+                   alpha=0.8, label=label)
+
+        # Configure subplot
+        ax.set_xlabel(r'Energy $\epsilon$', fontsize=12)
+        ax.set_ylabel(f'{part_label}({pauli_labels[pauli_idx]})', fontsize=12)
+        ax.set_title(f'$g^{{{green_function_type}}}$: {pauli_labels[pauli_idx]} ({part_label})',
+                    fontsize=13)
+        ax.grid(True, alpha=0.3)
+
+        # Add legend only to first subplot
+        if subplot_idx == 0 and n_plots <= 20:  # Only show legend if not too many lines
+            ax.legend(fontsize=9, loc='best', ncol=1)
+
+    # Overall title
+    fig.suptitle(f'Energy-Time Representation: $g^{{{green_function_type}}}$ '
+                f'(timestamp={timestamp}, job={job_index})',
+                fontsize=14, y=1.02)
+
+    plt.tight_layout()
+
+    # Save if requested
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        filename = f'energy_time_{green_function_type}_{timestamp}_job{job_index}.png'
+        plt.savefig(os.path.join(save_dir, filename), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+    # Return data for further analysis
+    return {
+        'energy_grid': energy_grid,
+        'time_indices': time_indices[plot_indices],
+        'time_values': time_values[plot_indices],
+        'data': [energy_time_list[i] for i in plot_indices]
+    }
 
 
 def _plot_state_evolution(gr_initial, gr_final, gk_initial, gk_final, time_grid, save_plot, save_dir, timestamp):

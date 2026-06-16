@@ -131,27 +131,26 @@ class StateObject:
         gk_row = self.gk[t_idx:t_idx+1, :]      # g'^K(t, :) shape (2,2,1,Nt)
         gk_col = self.gk[:, t_idx:t_idx+1]      # g'^K(:, t) shape (2,2,Nt,1)
         ga_col = ga[:, t_idx:t_idx+1]           # g'^A(:, t) shape (2,2,Nt,1)
-        F_col = thermal_dist[:, t_idx:t_idx+1]  # F(:, t) shape (2,2,Nt,1)
+        F_col = thermal_dist[:, t_idx:t_idx+1]  # F(:, t) shpe (2,2,Nt,1)
         F_row = thermal_dist[t_idx:t_idx+1, :]  # F(t, :) shape (2,2,1,Nt)
 
         # Thermal integrals for precise_convolution
-        F_integral_col = thermal_integral[:, t_idx:t_idx+1]  # ∫F(:,t)
         F_integral_row = thermal_integral[t_idx:t_idx+1, :]  # ∫F(t,:)
 
         # Term 1: ∫ dt' τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
         # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]=
         # Midpoint rule: subtract 1/2 weight from both endpoints
         inner_1 = A_tensor * tau3 * gk_col
-        first_endpoint_1 = tau3 * (gr_row[:,0:1] * inner_1[0:1,:])[0,0]
-        last_endpoint_1 = tau3 * (gr_row[:,-1:] * inner_1[-1:,:])[0,0]
+        first_endpoint_1 = tau3 * (gr_row[:,0:1] * inner_1[0:1,:])[-1,-1]
+        last_endpoint_1 = tau3 * (gr_row[:,-1:] * inner_1[-1:,:])[-1,-1]
         term1 = tau3 * (gr_row @ inner_1)[0,0] * self.dt - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
 
         # Term 2: ∫ dt' τ₃ g'^K(t,t') A(t') τ₃ g'^A(t',t)
         # = τ₃ [g'^K(t,:) @ (A(:) τ₃ g'^A(:,t))]
         # Midpoint rule: subtract 1/2 weight from both endpoints
         inner_2 = A_tensor * tau3 * ga_col
-        first_endpoint_2 = tau3 * (gk_row[:,0:1] * inner_2[0:1,:])[0,0]
-        last_endpoint_2 = tau3 * (gk_row[:,-1:] * inner_2[-1:,:])[0,0]
+        first_endpoint_2 = tau3 * (gk_row[:,0:1] * inner_2[0:1,:])[-1,-1]
+        last_endpoint_2 = tau3 * (gk_row[:,-1:] * inner_2[-1:,:])[-1,-1]
         term2 = tau3 * (gk_row @ inner_2)[0,0] * self.dt - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
 
         # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
@@ -169,7 +168,7 @@ class StateObject:
 
         # Apply prefactor -i(π / 4) [σ_n absorbed into normalization]
         #* second term is the anomalous term coming from combination of delta(t-t') and f(t-t') limit at zero
-        current = -1j * np.pi / 4 * current - np.gradient(A_history)[t_idx]
+        current = -1j * np.pi / 4 * current - np.gradient(A_history, self.dt)[t_idx]
 
         return current
 
@@ -326,7 +325,7 @@ class StateObject:
         gk_t1_row = self.gk[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
         last_endpoint_1 = gr_t1_t1 * gk_t1_row  # gr[t1, t1] * gk[t1, t2]
 
-        conv1 = conv1 - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
+        conv1 = conv1 - 0.5 * self.dt * first_endpoint_1 * 0  - 0.5 * self.dt * last_endpoint_1
 
         # Second convolution: ∫ g^K(t1, t') g^A(t', t2) dt' for all t2
         conv2 = (gk_row @ ga) * self.dt  # shape (2,2,1,Nt) 
@@ -343,9 +342,9 @@ class StateObject:
         first_endpoint_2 = gk_t1_0 * ga_0_row  # gk[t1, 0] * ga[0, t2]
 
         # Extract diagonal elements of ga as row tensor
-        last_endpoint_2 = gk_row * ga.diagonal_time()  # gk[t1, t2] * ga[t2, t2] #* nothing changed since this is set to zero by default right now!
+        last_endpoint_2 = gk_row * ga.diagonal_time()  # gk[t1, t2] * ga[t2, t2]
 
-        conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
+        conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 * 0 - 0.5 * self.dt * last_endpoint_2
         
         # Thermal terms from FDT: g^K = g^R @ f - f @ g^A
         # Thermal term 1: gr_row @ (gr @ f) for all t2 at once

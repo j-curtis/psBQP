@@ -324,18 +324,22 @@ class UsadelKeldyshEvolution:
             mask = (np.abs(tau_vals) > 1e-6)
 
             # Compute where τ ≠ 0
-            x = np.pi * tau_vals[mask] * temperature / 2.0
-            tanh_x = np.tanh(x)
-            ln_tanh = np.log(tanh_x + 0j)
-            result[mask] = -1j / np.pi * ln_tanh  # No +1 constant
-
+            x = np.pi * tau_vals[mask] * temperature
+            # F(τ) = -i/π · ln(tanh(πτT/2))
+            # Must be purely imaginary since f(τ) is purely imaginary
+            tanh_half = np.tanh(x / 2.0)
+            result[mask] = -1j/np.pi * np.log(tanh_half + 0j)
             # At τ = 0, set to 0 (principal value)
             return result
 
-        # Compute finite-domain integral: F(upper) - F(lower) + 1
+        # Compute finite-domain integral
+        # F must be purely imaginary since f(τ) is purely imaginary
+        # Force this by taking only imaginary part
         F_upper = compute_F_full(tau_upper)
         F_lower = compute_F_full(tau_lower)
-        F_two_time = F_upper - F_lower + 1.0
+
+        # Take only imaginary part and multiply by 1j to ensure purely imaginary result
+        F_two_time = 1j * np.imag(F_upper - F_lower)
 
         # Set F(0) to BCS regularization: 1/λ + ln(T_c/T)
         bcs_coupling = self._get_BCS_coupling()
@@ -352,9 +356,9 @@ class UsadelKeldyshEvolution:
         # Apply filter to suppress early-time numerical artifacts
         # Zero out first 1/5 of time points
         N_t = self.ntpoints
-        filter_data = np.append(np.zeros(N_t//5), np.ones(N_t - N_t//5))
+        filter_data = np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3))
         filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
-        self.thermal_integral = self.thermal_integral * filter_function
+        self.thermal_integral = self.thermal_integral #* filter_function
 
     def construct_discrete_operators(self, terms_dict, state, gap_tensor, g_type = 'r', additional_shift_index = 0):
         #* function assumes that all the terms depending on left time are computed for the current computation time (t,t)
@@ -922,7 +926,7 @@ class UsadelKeldyshEvolution:
         gr_last_row = gr[-1:, :]
         gk_full = gk
         #* this assumes that gr_last_row has correct time index and not shifted t' index, midpoint rule automatically applied
-        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:]).shift(-1, axis = 1)
+        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:]).shift(-1, axis = 1) 
         diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)]
 
         rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1) + gr_last_row.precise_convolution_left(self.thermal_dist, self.thermal_integral[-1:,:], self.delta_t, other_index=-1) * tau3)
@@ -1249,7 +1253,6 @@ class UsadelKeldyshEvolution:
         # ========== 3. Add derivative corrections ==========
 
         L1 = L1 + (1j/2) * tau3 * expansion_tensor
-
         R1 = R1 + (1j/2) * tau3 * expansion_tensor
 
         Vfact1.append((-(1j/2) * tau3, tau0 * expansion_tensor))
@@ -1258,7 +1261,7 @@ class UsadelKeldyshEvolution:
         v_old_deriv = ((1j/2) * tau3 * gk_last_row.shift(-1, axis=1) - (1j/2) * gk_last_row.shift(-1, axis=1) * tau3
                        + (1j/2) * tau3 * gk_last_row + (1j/2) * gk_last_row * tau3)
 
-        diag_factor_list_1 += [((1j/2) * tau3, tau0), (tau0, -(1j/2) * tau3)]
+        diag_factor_list_1 += [((-1j/2) * tau3, tau0), (tau0, +(1j/2) * tau3)]
 
         V1 = V1 + v_old_deriv
 
@@ -1491,9 +1494,9 @@ class UsadelKeldyshEvolution:
             vector_potentials += [vector_potential_new]
 
             if track_occupations:
-                gr_energy, _ = state.energy_time_representation('gr')
-                gk_energy, _ = state.energy_time_representation('gk')
-                f_energy, _ = state.energy_time_representation('f')
+                gr_energy = state.energy_time_representation('gr')
+                gk_energy = state.energy_time_representation('gk')
+                f_energy = state.energy_time_representation('f')
                 gr_energy_time_list.append(gr_energy)
                 gk_energy_time_list.append(gk_energy)
                 f_energy_time_list.append(f_energy)

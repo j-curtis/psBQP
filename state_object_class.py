@@ -60,11 +60,6 @@ class StateObject:
         """
         ga = -self.gr.involution()
 
-        #* removed zeroing of the diagonal since it doesnt seem to be correct, however one has to be careful which g^a we are calling!
-        # Zero out diagonal of g^A to break F(0) cancellation
-        #diag_indices = np.diag_indices(ga.data.shape[2])
-        #ga.data[:, :, diag_indices[0], diag_indices[1]] = 0.0
-
         return ga #NambuKeldyshTensor(ga.data)
 
     # ========== State Properties ==========
@@ -156,11 +151,11 @@ class StateObject:
         # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
         # Multiply gr with A*tau3, then precise_convolution_left with F (regularized)
         #print((A_tensor * tau3 * gr_row).shape)
-        term3 = 2.0 * (tau3 * gr_row * A_tensor).precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t_idx)[0,0]
+        term3 = 2.0 * (tau3 * gr_row * A_tensor).precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t_idx)[-1,-1]
 
         # Term 4: ∫ dt' 2F(t,t') A(t') τ₃ g'^A(t',t)
         # Multiply ga with A*tau3, then precise_convolution_right with F (regularized)
-        term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=t_idx)[0,0]
+        term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=t_idx)[-1,-1]
 
         # Sum all terms and take Nambu trace
         total = term1 + term2 + term3 + term4
@@ -282,7 +277,7 @@ class StateObject:
         """
         Verify FDT normalization constraint at fixed t₁ for all t₂.
 
-        Checks: ∫ g^R g^K + ∫ g^K g^A + [τ₃, g^K] - ∫ (g^R @ f) + ∫ (f @ g^A)= 0
+        Checks: ∫ g^R g^K + ∫ g^K g^A + [τ₃, g^K] + ∫ (g^R @ f) + ∫ (f @ g^A)= 0
 
         This relation comes from the FDT: g^K = g^R @ f - f @ g^A
 
@@ -325,18 +320,14 @@ class StateObject:
         gk_t1_row = self.gk[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
         last_endpoint_1 = gr_t1_t1 * gk_t1_row  # gr[t1, t1] * gk[t1, t2]
 
-        conv1 = conv1 - 0.5 * self.dt * first_endpoint_1 * 0  - 0.5 * self.dt * last_endpoint_1
+        conv1 = conv1 - 0.5 * self.dt * first_endpoint_1  - 0.5 * self.dt * last_endpoint_1
 
         # Second convolution: ∫ g^K(t1, t') g^A(t', t2) dt' for all t2
         conv2 = (gk_row @ ga) * self.dt  # shape (2,2,1,Nt) 
         #* goes up to t', however what happens is that for elements with first element bigger than t', the integral is cut-off
         #* this means that the 1/2 midpoint rule is different!!! 
-        #* not -1 --> this is also wrong in precise convolutions! --> one has to be careful with ga jump conditions
         #* carefully compute the ga diagonal and which elements come in!!
-        # Apply midpoint rule to conv2
-        # Integration from t'=0 to t'=t2 for all t2
-        # First endpoint: gk[t1, 0] * ga[0, t2]
-        # Last endpoint: gk[t1, t2] * ga[t2, t2]
+     
         gk_t1_0 = self.gk[t1_pos, 0]  # shape (2,2)
         ga_0_row = ga[0:1, :]  # shape (2,2,1,Nt)
         first_endpoint_2 = gk_t1_0 * ga_0_row  # gk[t1, 0] * ga[0, t2]
@@ -344,19 +335,22 @@ class StateObject:
         # Extract diagonal elements of ga as row tensor
         last_endpoint_2 = gk_row * ga.diagonal_time()  # gk[t1, t2] * ga[t2, t2]
 
-        conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 * 0 - 0.5 * self.dt * last_endpoint_2
+        conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
         
-        # Thermal terms from FDT: g^K = g^R @ f - f @ g^A
         # Thermal term 1: gr_row @ (gr @ f) for all t2 at once
         thermal_gr = gr_row.precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t1_pos) * tau3 * 2
 
         # Thermal term 2: (f_row @ ga) @ ga for all t2 at once
         f_row = thermal_dist[t1_pos:t1_pos+1, :]
         F_row = thermal_integral[t1_pos:t1_pos+1, :]
-        thermal_ga = 2 * tau3 * ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t1_pos) 
+        thermal_ga = 2 * tau3 * ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t1_pos)
+
+        # Save pure convolutions before adding thermal terms
+        conv1_pure = conv1  # Pure ∫ g^R g^K (without thermal)
+        conv2_pure = conv2  # Pure ∫ g^K g^A (without thermal)
 
         # Add thermal corrections to convolutions
-        conv1 = conv1 + thermal_gr  # Subtract gr @ (gr @ f) term
+        conv1 = conv1 + thermal_gr  # add gr @ (gr @ f) term
         conv2 = conv2 + thermal_ga  # Add (f @ ga) @ ga term
 
         # Total normalization violation for all t2
@@ -368,19 +362,25 @@ class StateObject:
         # Extract Pauli components
         totals = np.zeros((4, N_t), dtype=complex)
         commutators = np.zeros((4, N_t), dtype=complex)
-        conv1s = np.zeros((4, N_t), dtype=complex)
-        conv2s = np.zeros((4, N_t), dtype=complex)
+        conv1_pures = np.zeros((4, N_t), dtype=complex)
+        conv2_pures = np.zeros((4, N_t), dtype=complex)
+        thermal_grs = np.zeros((4, N_t), dtype=complex)
+        thermal_gas = np.zeros((4, N_t), dtype=complex)
 
         for pauli_idx in range(4):
             totals[pauli_idx, :] = (total.trace(pauli_idx) / 2)[0, :]
             commutators[pauli_idx, :] = (commutator.trace(pauli_idx) / 2)[0, :]
-            conv1s[pauli_idx, :] = (conv1.trace(pauli_idx) / 2)[0, :]
-            conv2s[pauli_idx, :] = (conv2.trace(pauli_idx) / 2)[0, :]
+            conv1_pures[pauli_idx, :] = (conv1_pure.trace(pauli_idx) / 2)[0, :]
+            conv2_pures[pauli_idx, :] = (conv2_pure.trace(pauli_idx) / 2)[0, :]
+            thermal_grs[pauli_idx, :] = (thermal_gr.trace(pauli_idx) / 2)[0, :]
+            thermal_gas[pauli_idx, :] = (thermal_ga.trace(pauli_idx) / 2)[0, :]
 
         return errors, totals, {
             'commutator': commutators,
-            'gr_gk_conv': conv1s,
-            'gk_ga_conv': conv2s
+            'gr_gk_conv_pure': conv1_pures,
+            'gk_ga_conv_pure': conv2_pures,
+            'thermal_gr': thermal_grs,
+            'thermal_ga': thermal_gas
         }
 
     def check_fdt(self, f_thermal, f_thermal_integral, time_index):
@@ -476,12 +476,16 @@ class StateObject:
 
         # Extract anti-diagonal in time: g[:, :, N_t-1-i, i] for all i
         # Shape: (2, 2, N_t)
+        # Note: Anti-diagonal has τ spacing of 2*dt and is in reversed order (τ decreasing)
         g_offdiag = g_two_time.off_diagonal()
 
+        # Reverse along time axis so τ increases with index (required for FFT convention)
+        g_offdiag_reversed = np.flip(g_offdiag, axis=2)
+
         # Fourier transform along time axis (axis=2)
-        # ∫ dτ e^{iετ} g(anti-diagonal)
-        g_fft = np.fft.ifft(g_offdiag, axis=2) * N_t  # Remove 1/N normalization
-        g_fft *= self.dt  # Multiply by dτ for integral approximation
+        # ∫ dτ e^{iετ} g(τ) with τ spacing = 2*dt
+        g_fft = np.fft.ifft(g_offdiag_reversed, axis=2) * N_t  # Remove 1/N normalization
+        g_fft *= (2 * self.dt)  # Multiply by dτ = 2*dt for integral approximation
 
         # Shift to center zero frequency
         g_energy_data = np.fft.fftshift(g_fft, axes=2)
@@ -489,9 +493,9 @@ class StateObject:
         # Create NambuKeldyshTensor
         g_energy = NambuKeldyshTensor(g_energy_data)
 
-        # Construct energy grid with factor of 2: ε = 2ω
+        # Construct energy grid accounting for 2*dt spacing
         freq = np.fft.fftfreq(N_t, d=self.dt)
-        energy_grid = 2 * 2 * np.pi * freq  # 2ε convention
+        energy_grid = 2 * np.pi * freq  # ω = 2πf (factor of 2 from 2*dt spacing already in freq scale)
         energy_grid = np.fft.fftshift(energy_grid)
 
         return { 'energy_grid': energy_grid, 'g_energy': g_energy}

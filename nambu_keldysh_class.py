@@ -300,7 +300,7 @@ class NambuKeldyshTensor:
 
         # Combine: standard - factored + analytic
         #print('left_convolution', (result_std + ( - result_fact + result_anal))[-1,-1])
-        return (result_std + (- result_fact + result_anal)* filter_function)
+        return (result_std + (- result_fact + result_anal)) # * filter_function
 
 
     def precise_convolution_right(self, other, other_integral, dt, self_index = -1):
@@ -380,7 +380,7 @@ class NambuKeldyshTensor:
         # Standard convolution (always uses full self)
 
         first_endpoint_std = other[:,0:1] * self[0:1,:]
-        last_endpoint_std = other[:,:] * self.diagonal_time() #*last element is self(t't') actually!
+        last_endpoint_std = other[:,:] * self.diagonal_time()
         result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
         if is_other_row:
@@ -392,7 +392,7 @@ class NambuKeldyshTensor:
                 positive_index = N_t + self_index
             else:
                 positive_index = self_index
-            self_for_reg = self.diagonal_time()
+            self_for_reg = self[:, positive_index].transpose().complete_transpose() #self.diagonal_time() 
         else:
             self_for_reg = self
         # Factored term (non-analytic contribution)
@@ -407,7 +407,7 @@ class NambuKeldyshTensor:
 
         # Combine: standard - factored + analytic
         #print('right_convolution', (result_std + ( - result_fact + result_anal))[-1,-1])
-        return (result_std + ( - result_fact + result_anal) * filter_function)
+        return (result_std + ( - result_fact + result_anal) ) # * filter_function
 
     def _check_binary_shape_compatibility(self, other):
         """

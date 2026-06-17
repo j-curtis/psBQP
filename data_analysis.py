@@ -159,7 +159,7 @@ def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analys
     evolution.get_thermal_integral(system_params['temperature'])
 
     gr_errors, gr_totals = state.check_gr_normalization(t1_idx=-1)
-    gk_errors, gk_totals, _ = state.check_keldysh_normalization(-1, evolution.thermal_dist, evolution.thermal_integral)
+    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, evolution.thermal_dist, evolution.thermal_integral)
 
     # Compute max error per Pauli channel from totals
     # gr_totals and gk_totals have shape (4, N_t) for 4 Pauli components
@@ -168,10 +168,10 @@ def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analys
     gr_max_error_indices = np.zeros(4, dtype=int)
     gk_max_error_indices = np.zeros(4, dtype=int)
 
-    # Compute total integral of differences (without absolute value)
+    # Extract error at last element [-1]
     dt = evolution.time_grid[1] - evolution.time_grid[0]
-    gr_total_integrals = np.zeros(4)
-    gk_total_integrals = np.zeros(4)
+    gr_last_element_errors = np.zeros(4, dtype=complex)
+    gk_last_element_errors = np.zeros(4, dtype=complex)
 
     print("\n" + "="*70)
     print("NORMALIZATION CHECK - Maximum Error Indices")
@@ -183,30 +183,60 @@ def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analys
         gr_max_error_indices[pauli_idx] = np.argmax(error_array_gr)
         gr_max_errors_per_channel[pauli_idx] = error_array_gr[gr_max_error_indices[pauli_idx]]
 
-        # Total integral of signed differences for g^R
-        gr_total_integrals[pauli_idx] = np.sum(gr_totals[pauli_idx, :]) * dt
+        # Error at last element [-1] for g^R
+        gr_last_element_errors[pauli_idx] = gr_totals[pauli_idx, -1]
 
         # For gk: compute error from the totals
         error_array_gk = np.abs(gk_totals[pauli_idx, :])
         gk_max_error_indices[pauli_idx] = np.argmax(error_array_gk)
         gk_max_errors_per_channel[pauli_idx] = error_array_gk[gk_max_error_indices[pauli_idx]]
 
-        # Total integral of signed differences for g^K
-        gk_total_integrals[pauli_idx] = np.imag(np.sum(gk_totals[pauli_idx, :]) * dt)
+        # Error at last element [-1] for g^K
+        gk_last_element_errors[pauli_idx] = gk_totals[pauli_idx, -1]
 
         # Print results for this Pauli component
         print(f"\nτ_{pauli_idx} component:")
         print(f"  g^R normalization: max_error = {gr_max_errors_per_channel[pauli_idx]:.4e} at index {gr_max_error_indices[pauli_idx]}")
-        print(f"  g^R normalization: total_integral = {gr_total_integrals[pauli_idx]:.4e}")
+        print(f"  g^R normalization: error_at_last_element = {gr_last_element_errors[pauli_idx]:.4e}")
         print(f"  g^K normalization: max_error = {gk_max_errors_per_channel[pauli_idx]:.4e} at index {gk_max_error_indices[pauli_idx]}")
-        print(f"  g^K normalization: total_integral = {gk_total_integrals[pauli_idx]:.4e}")
+        print(f"  g^K normalization: error_at_last_element = {gk_last_element_errors[pauli_idx]:.4e}")
 
+    print("="*70 + "\n")
+
+    # Analyze τ₀ component contributions
+    print("\n" + "="*70)
+    print("g^K NORMALIZATION - τ₀ COMPONENT ANALYSIS")
+    print("="*70)
+    pauli_idx = 0  # τ₀ channel
+
+    # Use specific element: t=-1 (last), t'=-2 (second-to-last)
+    t_idx = -2
+
+    print(f"\nContributions to τ₀ channel at (t=-1, t'={evolution.time_grid[t_idx]:.2f}):")
+    print(f"  Total:                     {gk_totals[pauli_idx, t_idx]:.6e}")
+    print(f"  Commutator [τ₃,g^K]:       {gk_components['commutator'][pauli_idx, t_idx]:.6e}")
+    print(f"  ∫g^R⊗g^K (pure):           {gk_components['gr_gk_conv_pure'][pauli_idx, t_idx]:.6e}")
+    print(f"  ∫g^K⊗g^A (pure):           {gk_components['gk_ga_conv_pure'][pauli_idx, t_idx]:.6e}")
+    print(f"  Thermal (gr@f)*τ₃*2:       {gk_components['thermal_gr'][pauli_idx, t_idx]:.6e}")
+    print(f"  Thermal 2*τ₃*(f@ga):       {gk_components['thermal_ga'][pauli_idx, t_idx]:.6e}")
+
+    print(f"\nMax absolute values over all t':")
+    print(f"  Total:                     {np.max(np.abs(gk_totals[pauli_idx, :])):.6e}")
+    print(f"  Commutator:                {np.max(np.abs(gk_components['commutator'][pauli_idx, :])):.6e}")
+    print(f"  ∫g^R⊗g^K (pure):           {np.max(np.abs(gk_components['gr_gk_conv_pure'][pauli_idx, :])):.6e}")
+    print(f"  ∫g^K⊗g^A (pure):           {np.max(np.abs(gk_components['gk_ga_conv_pure'][pauli_idx, :])):.6e}")
+    print(f"  Thermal (gr@f)*τ₃*2:       {np.max(np.abs(gk_components['thermal_gr'][pauli_idx, :])):.6e}")
+    print(f"  Thermal 2*τ₃*(f@ga):       {np.max(np.abs(gk_components['thermal_ga'][pauli_idx, :])):.6e}")
     print("="*70 + "\n")
 
     _plot_normalization(gr_totals, 'gr', evolution.time_grid, save_plot, save_dir, timestamp)
     _plot_normalization(gk_totals, 'gk', evolution.time_grid, save_plot, save_dir, timestamp)
 
-    return {'gr_max_error': gr_max_errors_per_channel, 'gk_max_error': gk_max_errors_per_channel, 'gr_totals': gr_totals, 'gk_totals': gk_totals}
+    # Plot individual term contributions to τ₁ channel - COMMENTED OUT
+    # _plot_gk_components(gk_components, gk_totals, evolution.time_grid, pauli_channel=0, save_plot=save_plot, save_dir=save_dir, timestamp=timestamp)
+
+    return {'gr_max_error': gr_max_errors_per_channel, 'gk_max_error': gk_max_errors_per_channel,
+            'gr_totals': gr_totals, 'gk_totals': gk_totals, 'gk_components': gk_components}
 
 
 def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
@@ -236,7 +266,7 @@ def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
     # Compute max error per Pauli channel
     max_errors_per_channel = np.zeros(4)
     max_error_indices = np.zeros(4, dtype=int)
-    total_integrals = np.zeros(4)
+    last_element_errors = np.zeros(4, dtype=complex)
 
     # Get time step
     dt = evolution.time_grid[1] - evolution.time_grid[0]
@@ -254,13 +284,13 @@ def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
         max_error_indices[pauli_idx] = np.argmax(error_array)
         max_errors_per_channel[pauli_idx] = error_array[max_error_indices[pauli_idx]]
 
-        # Total integral of signed differences
-        total_integrals[pauli_idx] = np.sum(error_pauli) * dt
+        # Error at last element [-1]
+        last_element_errors[pauli_idx] = error_pauli[-1]
 
         # Print results for this Pauli component
         print(f"\nτ_{pauli_idx} component:")
         print(f"  max_error = {max_errors_per_channel[pauli_idx]:.4e} at index {max_error_indices[pauli_idx]}")
-        print(f"  total_integral = {total_integrals[pauli_idx]:.4e}")
+        print(f"  error_at_last_element = {np.real(last_element_errors[pauli_idx]):.4e} + {np.imag(last_element_errors[pauli_idx]):.4e}j")
 
     print("="*70 + "\n")
 
@@ -537,11 +567,11 @@ def partial_fourier_transform(g_two_time, time_grid):
             for j in range(2):
                 result_data[i, j, :, :] += pauli[pauli_idx][i, j] * g_transposed
 
-    # Create energy grid with factor of 2 modification
+    # Create energy grid
     # Standard FFT frequencies
     freq = np.fft.fftfreq(N_t, d=dt)  # Frequency in 1/time units
-    # Energy grid with 2× factor: ε = 2 × (2πf)
-    energy_grid = 2 * 2 * np.pi * freq
+    # Convert to angular frequency: ω = 2πf
+    energy_grid = 2 * np.pi * freq
     energy_grid = np.fft.fftshift(energy_grid)  # Shift to center
 
     # Create NambuKeldyshTensor
@@ -1010,7 +1040,7 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_
     plt.show()
 
 
-def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, add_point_labels=False):
+def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, labels_external=None, add_point_labels=False):
     """
     Plot equilibrated gap vs parameter for multiple timestamps.
 
@@ -1032,6 +1062,10 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
         y_external: Optional external y-values for comparison. Can be:
                    - Single array: plots one external dataset
                    - List of arrays: plots multiple external datasets (must match x_external length)
+        labels_external: Optional labels for external datasets. Can be:
+                   - Single string: label for single external dataset
+                   - List of strings: labels for multiple external datasets (must match x_external length)
+                   - If not provided, defaults to 'External data' or 'External 1', 'External 2', etc.
         add_point_labels: If True, annotate each datapoint with its (x, y) values (default False)
 
     Returns:
@@ -1138,13 +1172,23 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
             for idx, (x_ext, y_ext) in enumerate(zip(x_external, y_external)):
                 marker = markers[idx % len(markers)]
                 linestyle = linestyles[idx % len(linestyles)]
-                label = f'External {idx+1}' if len(x_external) > 1 else 'External data'
+                if labels_external is not None:
+                    if isinstance(labels_external, list):
+                        label = labels_external[idx]
+                    else:
+                        label = labels_external
+                else:
+                    label = f'External {idx+1}' if len(x_external) > 1 else 'External data'
                 ax.plot(x_ext, np.abs(y_ext), marker=marker, linestyle=linestyle,
                        linewidth=2, markersize=10, label=label, alpha=0.8)
         else:
             # Single external dataset (backward compatible)
+            if labels_external is not None:
+                label = labels_external if isinstance(labels_external, str) else labels_external[0]
+            else:
+                label = 'External data'
             ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
-                   label='External data', alpha=0.8)
+                   label=label, alpha=0.8)
 
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
@@ -1169,7 +1213,7 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
             'timestamp_data': timestamp_data}
 
 
-def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, add_point_labels=False):
+def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, labels_external=None, add_point_labels=False):
     """
     Plot equilibrated current vs parameter for multiple timestamps.
 
@@ -1191,6 +1235,10 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
         y_external: Optional external y-values for comparison. Can be:
                    - Single array: plots one external dataset
                    - List of arrays: plots multiple external datasets (must match x_external length)
+        labels_external: Optional labels for external datasets. Can be:
+                   - Single string: label for single external dataset
+                   - List of strings: labels for multiple external datasets (must match x_external length)
+                   - If not provided, defaults to 'External data' or 'External 1', 'External 2', etc.
         add_point_labels: If True, annotate each datapoint with its (x, y) values (default False)
 
     Returns:
@@ -1297,13 +1345,23 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
             for idx, (x_ext, y_ext) in enumerate(zip(x_external, y_external)):
                 marker = markers[idx % len(markers)]
                 linestyle = linestyles[idx % len(linestyles)]
-                label = f'External {idx+1}' if len(x_external) > 1 else 'External data'
+                if labels_external is not None:
+                    if isinstance(labels_external, list):
+                        label = labels_external[idx]
+                    else:
+                        label = labels_external
+                else:
+                    label = f'External {idx+1}' if len(x_external) > 1 else 'External data'
                 ax.plot(x_ext, np.abs(y_ext), marker=marker, linestyle=linestyle,
                        linewidth=2, markersize=10, label=label, alpha=0.8)
         else:
             # Single external dataset (backward compatible)
+            if labels_external is not None:
+                label = labels_external if isinstance(labels_external, str) else labels_external[0]
+            else:
+                label = 'External data'
             ax.plot(x_external, np.abs(y_external), 'kx--', linewidth=2, markersize=10,
-                   label='External data', alpha=0.8)
+                   label=label, alpha=0.8)
 
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
@@ -1352,8 +1410,8 @@ def _plot_normalization(totals, gf_type, time_grid, save_plot, save_dir, timesta
         print(f"  Std deviation: {np.real(component).std():.4e}")
         print(f"  Max error: {np.abs(component).max():.4e}")
 
-        ax.plot(time_grid, np.real(component), 'b-', linewidth=2, label='Real', alpha=0.7)
-        ax.plot(time_grid, np.imag(component), 'r-', linewidth=2, label='Imag', alpha=0.7)
+        ax.plot(time_grid, np.real(component), 'b-', linewidth=2, label='Real', alpha=0.7, marker='o', markevery=10, markersize=4)
+        ax.plot(time_grid, np.imag(component), 'r-', linewidth=2, label='Imag', alpha=0.7, marker='s', markevery=10, markersize=4)
         ax.set_xlabel(r"$t_2$", fontsize=10)
         ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
         ax.set_title(f'$g^{{{gf_type}}}$: {pauli_names[pauli_idx]}', fontsize=11)
@@ -1410,6 +1468,111 @@ def _plot_fdt(gk_actual, gk_fdt, error, time_grid, save_plot, save_dir, timestam
     if save_plot:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, f'fdt_{timestamp}.png'), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+
+def _plot_gk_components(gk_components, gk_totals, time_grid, pauli_channel=0, save_plot=False, save_dir='analysis_plots', timestamp=''):
+    """Plot individual term contributions to specified Pauli channel in g^K normalization."""
+    import matplotlib.pyplot as plt
+
+    pauli_idx = pauli_channel
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # Extract components for this Pauli channel
+    total = gk_totals[pauli_idx, :]
+    comm = gk_components['commutator'][pauli_idx, :]
+    gr_gk_pure = gk_components['gr_gk_conv_pure'][pauli_idx, :]
+    gk_ga_pure = gk_components['gk_ga_conv_pure'][pauli_idx, :]
+    therm_gr = gk_components['thermal_gr'][pauli_idx, :]
+    therm_ga = gk_components['thermal_ga'][pauli_idx, :]
+
+    # Plot 1: Real parts of all terms
+    ax = axes[0, 0]
+    ax.plot(time_grid, np.real(total), 'k-', linewidth=2, label='Total', alpha=0.8, marker='o', markevery=15, markersize=5)
+    ax.plot(time_grid, np.real(comm), 'b-', linewidth=1.5, label=r'Commutator', alpha=0.7, marker='s', markevery=15, markersize=4)
+    ax.plot(time_grid, np.real(gr_gk_pure), 'r-', linewidth=1.5, label=r'$g^R \otimes g^K$ (pure)', alpha=0.7, marker='^', markevery=15, markersize=4)
+    ax.plot(time_grid, np.real(gk_ga_pure), 'g-', linewidth=1.5, label=r'$g^K \otimes g^A$ (pure)', alpha=0.7, marker='v', markevery=15, markersize=4)
+    ax.plot(time_grid, np.real(therm_gr), 'm--', linewidth=1.5, label=r'Thermal $gr \otimes f$', alpha=0.7, marker='d', markevery=15, markersize=4)
+    ax.plot(time_grid, np.real(therm_ga), 'c--', linewidth=1.5, label=r'Thermal $f \otimes ga$', alpha=0.7, marker='*', markevery=15, markersize=5)
+    ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
+    ax.set_xlabel(r'$t$', fontsize=12)
+    ax.set_ylabel(rf'Re[$\tau_{pauli_idx}$ component]', fontsize=12)
+    ax.set_title(r'Real Part - Individual Terms', fontsize=13)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([time_grid[0], 0])
+
+    # Plot 2: Imaginary parts of all terms
+    ax = axes[0, 1]
+    ax.plot(time_grid, np.imag(total), 'k-', linewidth=2, label='Total', alpha=0.8, marker='o', markevery=15, markersize=5)
+    ax.plot(time_grid, np.imag(comm), 'b-', linewidth=1.5, label=r'Commutator', alpha=0.7, marker='s', markevery=15, markersize=4)
+    ax.plot(time_grid, np.imag(gr_gk_pure), 'r-', linewidth=1.5, label=r'$g^R \otimes g^K$ (pure)', alpha=0.7, marker='^', markevery=15, markersize=4)
+    ax.plot(time_grid, np.imag(gk_ga_pure), 'g-', linewidth=1.5, label=r'$g^K \otimes g^A$ (pure)', alpha=0.7, marker='v', markevery=15, markersize=4)
+    ax.plot(time_grid, np.imag(therm_gr), 'm--', linewidth=1.5, label=r'Thermal $gr \otimes f$', alpha=0.7, marker='d', markevery=15, markersize=4)
+    ax.plot(time_grid, np.imag(therm_ga), 'c--', linewidth=1.5, label=r'Thermal $f \otimes ga$', alpha=0.7, marker='*', markevery=15, markersize=5)
+    ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
+    ax.set_xlabel(r'$t$', fontsize=12)
+    ax.set_ylabel(rf'Im[$\tau_{pauli_idx}$ component]', fontsize=12)
+    ax.set_title(r'Imaginary Part - Individual Terms', fontsize=13)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([time_grid[0], 0])
+
+    # Plot 3: Absolute value (log scale)
+    ax = axes[1, 0]
+    ax.semilogy(time_grid, np.abs(total) + 1e-20, 'k-', linewidth=2, label='Total', alpha=0.8, marker='o', markevery=15, markersize=5)
+    ax.semilogy(time_grid, np.abs(comm) + 1e-20, 'b-', linewidth=1.5, label='Commutator', alpha=0.7, marker='s', markevery=15, markersize=4)
+    ax.semilogy(time_grid, np.abs(gr_gk_pure) + 1e-20, 'r-', linewidth=1.5, label=r'$g^R \otimes g^K$ (pure)', alpha=0.7, marker='^', markevery=15, markersize=4)
+    ax.semilogy(time_grid, np.abs(gk_ga_pure) + 1e-20, 'g-', linewidth=1.5, label=r'$g^K \otimes g^A$ (pure)', alpha=0.7, marker='v', markevery=15, markersize=4)
+    ax.semilogy(time_grid, np.abs(therm_gr) + 1e-20, 'm--', linewidth=1.5, label=r'Thermal $gr \otimes f$', alpha=0.7, marker='d', markevery=15, markersize=4)
+    ax.semilogy(time_grid, np.abs(therm_ga) + 1e-20, 'c--', linewidth=1.5, label=r'Thermal $f \otimes ga$', alpha=0.7, marker='*', markevery=15, markersize=5)
+    ax.set_xlabel(r'$t$', fontsize=12)
+    ax.set_ylabel(rf'|$\tau_{pauli_idx}$ component|', fontsize=12)
+    ax.set_title(r'Magnitude (log scale)', fontsize=13)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3, which='both')
+    ax.set_xlim([time_grid[0], 0])
+
+    # Plot 4: Statistics summary
+    ax = axes[1, 1]
+    ax.axis('off')
+
+    stats_text = f"tau_{pauli_idx} Channel Statistics:\n\n"
+    stats_text += f"Total:\n"
+    stats_text += f"  Re: mean={np.real(total).mean():.4e}, max={np.abs(np.real(total)).max():.4e}\n"
+    stats_text += f"  Im: mean={np.imag(total).mean():.4e}, max={np.abs(np.imag(total)).max():.4e}\n\n"
+
+    stats_text += f"Commutator:\n"
+    stats_text += f"  Re: mean={np.real(comm).mean():.4e}, max={np.abs(np.real(comm)).max():.4e}\n"
+    stats_text += f"  Im: mean={np.imag(comm).mean():.4e}, max={np.abs(np.imag(comm)).max():.4e}\n\n"
+
+    stats_text += f"gR conv gK (pure):\n"
+    stats_text += f"  Re: mean={np.real(gr_gk_pure).mean():.4e}, max={np.abs(np.real(gr_gk_pure)).max():.4e}\n"
+    stats_text += f"  Im: mean={np.imag(gr_gk_pure).mean():.4e}, max={np.abs(np.imag(gr_gk_pure)).max():.4e}\n\n"
+
+    stats_text += f"gK conv gA (pure):\n"
+    stats_text += f"  Re: mean={np.real(gk_ga_pure).mean():.4e}, max={np.abs(np.real(gk_ga_pure)).max():.4e}\n"
+    stats_text += f"  Im: mean={np.imag(gk_ga_pure).mean():.4e}, max={np.abs(np.imag(gk_ga_pure)).max():.4e}\n\n"
+
+    stats_text += f"Thermal gr@f:\n"
+    stats_text += f"  Re: mean={np.real(therm_gr).mean():.4e}, max={np.abs(np.real(therm_gr)).max():.4e}\n"
+    stats_text += f"  Im: mean={np.imag(therm_gr).mean():.4e}, max={np.abs(np.imag(therm_gr)).max():.4e}\n\n"
+
+    stats_text += f"Thermal f@ga:\n"
+    stats_text += f"  Re: mean={np.real(therm_ga).mean():.4e}, max={np.abs(np.real(therm_ga)).max():.4e}\n"
+    stats_text += f"  Im: mean={np.imag(therm_ga).mean():.4e}, max={np.abs(np.imag(therm_ga)).max():.4e}\n"
+
+    ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
+            verticalalignment='top', fontfamily='monospace', usetex=False,
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f'gk_tau{pauli_idx}_components_{timestamp}.png'), dpi=150, bbox_inches='tight')
 
     plt.show()
 
@@ -1489,7 +1652,8 @@ def _plot_time_translation(gr_tensor, gk_tensor, time_grid, num_rows, threshold,
 
 
 def plot_energy_time_representation(timestamp, job_index, green_function_type='f',
-                                     pauli_components=(0, 3), plot_every=1,
+                                     pauli_components=None, plot_every=1, xlim=(-15, 15),
+                                     x_external=None, y_external=None, labels_external=None,
                                      save_plot=False, save_dir='analysis_plots'):
     """
     Plot Green's function in energy-time representation.
@@ -1502,9 +1666,23 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         timestamp: Timestamp folder name
         job_index: Job index
         green_function_type: Type of Green's function to plot ('gr', 'gk', or 'f')
-        pauli_components: Tuple of two Pauli indices to plot (default (0, 3))
-                         0=identity, 1=tau_x, 2=tau_y, 3=tau_z
+        pauli_components: Tuple of two Pauli indices to plot. If None, uses smart defaults:
+                         - For 'f': (0, 3) - particle density and particle-hole difference
+                         - For 'gr' or 'gk': (2, 3) - anomalous and normal components
+                         0=tau_0 (identity), 1=tau_1 (tau_x), 2=tau_2 (tau_y), 3=tau_3 (tau_z)
         plot_every: Plot every N-th time slice (default 1, plot all)
+        xlim: Tuple (xmin, xmax) for energy axis limits (default (-15, 15))
+              Set to None to use full energy range
+        x_external: Optional external x-values (energy) for comparison. Can be:
+                   - Single array: plots one external dataset
+                   - List of arrays: plots multiple external datasets
+        y_external: Optional external y-values for comparison. Can be:
+                   - Single array: plots one external dataset
+                   - List of arrays: plots multiple external datasets (must match x_external length)
+                   - Should be dict with keys matching pauli_components if plotting specific components
+        labels_external: Optional labels for external datasets. Can be:
+                   - Single string: label for single external dataset
+                   - List of strings: labels for multiple external datasets
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
 
@@ -1516,13 +1694,26 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         }
 
     Example:
-        # Plot occupation function f with tau_0 and tau_3 components
+        # Plot occupation function f (uses default tau_0 and tau_3 components)
         plot_energy_time_representation('20260615_143022', 0, green_function_type='f',
-                                       pauli_components=(0, 3), plot_every=5)
+                                       plot_every=5)
 
-        # Plot retarded Green's function with tau_2 and tau_3
+        # Plot retarded Green's function (uses default tau_2 and tau_3)
         plot_energy_time_representation('20260615_143022', 0, green_function_type='gr',
-                                       pauli_components=(2, 3), plot_every=10)
+                                       plot_every=10)
+
+        # Plot with external data comparison (e.g., thermal distribution)
+        energy_ext = np.linspace(-10, 10, 100)
+        f_thermal = -1j * np.tanh(energy_ext / (2 * temperature))
+        plot_energy_time_representation('20260615_143022', 0, green_function_type='f',
+                                       x_external=energy_ext,
+                                       y_external=np.imag(f_thermal),
+                                       labels_external='Thermal',
+                                       plot_every=5)
+
+        # Override defaults - plot custom components
+        plot_energy_time_representation('20260615_143022', 0, green_function_type='f',
+                                       pauli_components=(1, 2), plot_every=5)
     """
     # Load data
     input_kwargs, save_data = load_job_data(timestamp, job_index)
@@ -1538,6 +1729,13 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         raise ValueError(f"green_function_type must be 'gr', 'gk', or 'f', got '{green_function_type}'")
 
     data_key = data_key_map[green_function_type]
+
+    # Set smart defaults for pauli_components if not provided
+    if pauli_components is None:
+        if green_function_type == 'f':
+            pauli_components = (0, 3)
+        else:
+            pauli_components = (2, 3)
 
     # Check if data exists
     if data_key not in save_data:
@@ -1558,24 +1756,18 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
     # Select which times to plot
     plot_indices = np.arange(0, len(energy_time_list), plot_every)
 
-    # Determine which part to plot (real for gr, imag for gk and f)
-    if green_function_type == 'gr':
-        extract_part = np.real
-        part_label = 'Re'
-    else:
-        extract_part = np.imag
-        part_label = 'Im'
-
     # Extract energy grid (same for all times)
     energy_grid = energy_time_list[0]['energy_grid']
 
     # Pauli component labels
     pauli_labels = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
 
-    # Create colormap (darker = later time)
+    # Create colormaps (darker = later time)
+    # Blues for real part, Reds for imaginary part
     from matplotlib import cm
     n_plots = len(plot_indices)
     blues = cm.get_cmap('Blues', n_plots + 2)
+    reds = cm.get_cmap('Reds', n_plots + 2)
 
     # Create figure with two subplots
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -1596,7 +1788,7 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
     for subplot_idx, pauli_idx in enumerate(pauli_components):
         ax = axes[subplot_idx]
 
-        # Plot each time slice
+        # Plot each time slice (both real and imaginary)
         for i, data_idx in enumerate(plot_indices):
             # Extract Green's function at this time
             g_data = energy_time_list[data_idx]
@@ -1605,30 +1797,78 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
             # Extract Pauli component
             g_pauli = g_energy.trace(pauli_index=pauli_idx) / 2
 
-            # Extract real or imaginary part
-            g_plot = extract_part(g_pauli)
+            # Extract both real and imaginary parts
+            g_real = np.real(g_pauli)
+            g_imag = np.imag(g_pauli)
 
-            # Color: darker for later times (skip first 2 colors to avoid white)
-            color = blues(i + 2)
+            # Colors: darker for later times (skip first 2 colors to avoid white)
+            color_real = blues(i + 2)
+            color_imag = reds(i + 2)
 
             # Time value for label (show only first 5 in legend to avoid clutter)
             time_value = time_values[plot_indices[i]]
-            label = f'$t = {time_value:.2f}$' if i < 5 else None
+            label_real = f'Re, $t = {time_value:.2f}$' if i < 5 else None
+            label_imag = f'Im, $t = {time_value:.2f}$' if i < 5 else None
 
-            # Plot
-            ax.plot(energy_grid, g_plot, '-', color=color, linewidth=1.5,
-                   alpha=0.8, label=label)
+            # Plot real part (blue)
+            ax.plot(energy_grid, g_real, '-', color=color_real, linewidth=1.5,
+                   alpha=0.8, label=label_real)
+
+            # Plot imaginary part (red)
+            ax.plot(energy_grid, g_imag, '-', color=color_imag, linewidth=1.5,
+                   alpha=0.8, label=label_imag)
+
+        # Plot external data if provided
+        if x_external is not None and y_external is not None:
+            # Check if y_external is dict with pauli components as keys
+            if isinstance(y_external, dict):
+                if pauli_idx in y_external:
+                    y_data = y_external[pauli_idx]
+                else:
+                    y_data = None
+            else:
+                # Assume same external data for all components
+                y_data = y_external
+
+            if y_data is not None:
+                # Handle list of external datasets
+                if isinstance(x_external, list):
+                    markers = ['x', 's', '^', 'd', 'v', '<', '>', 'p', '*', 'h']
+                    linestyles = ['--', '-.', ':', '--', '-.']
+                    y_list = y_data if isinstance(y_data, list) else [y_data]
+
+                    for idx, (x_ext, y_ext) in enumerate(zip(x_external, y_list)):
+                        marker = markers[idx % len(markers)]
+                        linestyle = linestyles[idx % len(linestyles)]
+                        if labels_external is not None:
+                            label = labels_external[idx] if isinstance(labels_external, list) else labels_external
+                        else:
+                            label = f'External {idx+1}' if len(x_external) > 1 else 'External'
+                        ax.plot(x_ext, y_ext, marker=marker, linestyle=linestyle,
+                               linewidth=2, markersize=8, label=label, alpha=0.8, color='black')
+                else:
+                    # Single external dataset
+                    if labels_external is not None:
+                        label = labels_external if isinstance(labels_external, str) else labels_external[0]
+                    else:
+                        label = 'External'
+                    ax.plot(x_external, y_data, 'kx--', linewidth=2, markersize=8,
+                           label=label, alpha=0.8)
 
         # Configure subplot
         ax.set_xlabel(r'Energy $\epsilon$', fontsize=12)
-        ax.set_ylabel(f'{part_label}({pauli_labels[pauli_idx]})', fontsize=12)
-        ax.set_title(f'$g^{{{green_function_type}}}$: {pauli_labels[pauli_idx]} ({part_label})',
+        ax.set_ylabel(f'{pauli_labels[pauli_idx]}', fontsize=12)
+        ax.set_title(f'$g^{{{green_function_type}}}$: {pauli_labels[pauli_idx]} (Blue=Re, Red=Im)',
                     fontsize=13)
         ax.grid(True, alpha=0.3)
 
-        # Add legend only to first subplot
-        if subplot_idx == 0 and n_plots <= 20:  # Only show legend if not too many lines
-            ax.legend(fontsize=9, loc='best', ncol=1)
+        # Set x-axis limits if specified
+        if xlim is not None:
+            ax.set_xlim(xlim)
+
+        # Add legend to first subplot
+        if subplot_idx == 0 and (n_plots <= 10 or x_external is not None):
+            ax.legend(fontsize=8, loc='best', ncol=2)
 
     # Overall title
     fig.suptitle(f'Energy-Time Representation: $g^{{{green_function_type}}}$ '

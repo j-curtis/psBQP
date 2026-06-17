@@ -16,7 +16,7 @@ This document organizes theoretical predictions and numerical results that can b
 
 ## LEVEL 1: Equilibrium & Static Properties
 
-### Benchmark 1.1: BCS Gap vs Temperature
+### Benchmark 1.1: BCS Gap vs Temperature [Passed]
 
 **What to compute:** Equilibrium gap Δ(T) as a function of temperature
 

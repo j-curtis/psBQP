@@ -926,7 +926,7 @@ class UsadelKeldyshEvolution:
         gr_last_row = gr[-1:, :]
         gk_full = gk
         #* this assumes that gr_last_row has correct time index and not shifted t' index, midpoint rule automatically applied
-        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:]).shift(-1, axis = 1) 
+        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:].shift(-1, axis = 1))
         diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)]
 
         rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1) + gr_last_row.precise_convolution_left(self.thermal_dist, self.thermal_integral[-1:,:], self.delta_t, other_index=-1) * tau3)
@@ -1318,7 +1318,7 @@ class UsadelKeldyshEvolution:
         L2, R2, V2, Vhist2, Vfact2, sandwich2, diag_factor_list_2, diag_hist_list_2 = self.get_gk_constraint(state, gap_tensor)
 
         # ========== 6. Call unified solver with diagonal corrections ==========
-        gk_boundary = state.gk[-1, 0]  # g^K(t, -infty)
+        gk_boundary = state.gk[-1, 0] * 0 # g^K(t, -infty)
 
         gk_new = self.generalized_g_update_rule( g_type='k',diagonal_entry=gk_boundary, left_matrix_1=L1, left_matrix_2=L2,right_matrix_1=R1, right_matrix_2=R2,
             rhs_vector_1=V1, rhs_vector_2=V2, rhs_vector_history_1_list=Vhist1, rhs_vector_history_2_list=Vhist2, rhs_vector_factor_1_list=Vfact1,

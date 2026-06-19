@@ -440,17 +440,23 @@ class StateObject:
 
     # ========== Fourier Transform Methods ==========
 
-    def energy_time_representation(self, green_function_type):
+    def energy_time_representation(self, green_function_type, eta=None):
         """
         Transform Green's function to energy representation.
 
         Extracts anti-diagonal elements in time-time plane and Fourier transforms:
         ĝ(ε) = ∫ dτ e^{i2ετ} ĝ(t=N_t-1-i, t'=i)
 
+        Applies exponential damping e^{-η|τ|} to suppress Gibbs oscillations and
+        account for finite quasiparticle lifetime (inelastic scattering).
+
         Preserves full Nambu matrix structure (2x2).
 
         Args:
             green_function_type: 'gr', 'gk', or 'f' (occupation function)
+            eta: Inelastic scattering rate for exponential damping (default: None = no damping)
+                 Physically represents quasiparticle lifetime τ = 1/η
+                 Suppresses endpoint discontinuities and broadens peaks by η in frequency
 
         Returns:
             dict: {
@@ -475,27 +481,42 @@ class StateObject:
         N_t = g_two_time.data.shape[2]
 
         # Extract anti-diagonal in time: g[:, :, N_t-1-i, i] for all i
-        # Shape: (2, 2, N_t)
-        # Note: Anti-diagonal has τ spacing of 2*dt and is in reversed order (τ decreasing)
+        # Define F(τ) = g(t+τ, t-τ) where τ = (i-j)·dt/2
+        # For anti-diagonal: τ_k = (N_t-1-2k)·dt/2 with spacing Δτ = dt
         g_offdiag = g_two_time.off_diagonal()
 
         # Reverse along time axis so τ increases with index (required for FFT convention)
+        # After reversal: τ from -(N_t-1)·dt/2 to +(N_t-1)·dt/2 with spacing dt
         g_offdiag_reversed = np.flip(g_offdiag, axis=2)
 
-        # Fourier transform along time axis (axis=2)
-        # ∫ dτ e^{iετ} g(τ) with τ spacing = 2*dt
-        g_fft = np.fft.ifft(g_offdiag_reversed, axis=2) * N_t  # Remove 1/N normalization
-        g_fft *= (2 * self.dt)  # Multiply by dτ = 2*dt for integral approximation
+        # Apply exponential damping e^{-η|τ|} to suppress Gibbs oscillations
+        # This is physically motivated: accounts for finite quasiparticle lifetime
+        if eta is not None and eta > 0:
+            # Construct relative time grid for anti-diagonal (after reversal)
+            # τ ranges from -(N_t-1)·dt/2 to +(N_t-1)·dt/2 with spacing dt
+            tau = np.linspace(-(N_t-1)*self.dt/2, (N_t-1)*self.dt/2, N_t)
+            damping_factor = np.exp(-eta * np.abs(tau))
+            # Apply damping: shape (2, 2, N_t) * (N_t,) broadcasts correctly
+            g_offdiag_regularized = g_offdiag_reversed * damping_factor[np.newaxis, np.newaxis, :]
+        else:
+            g_offdiag_regularized = g_offdiag_reversed
+
+        # Standard Fourier transform: G(ω) = ∫ dτ e^{iω·τ} F(τ) with τ spacing = dt
+        # Then g(ε,t) = G(2ε), so ε = ω/2
+        g_fft = np.fft.ifft(g_offdiag_regularized, axis=2) * N_t  # Remove 1/N normalization
+        g_fft *= self.dt  # Multiply by dτ = dt for integral approximation
 
         # Shift to center zero frequency
         g_energy_data = np.fft.fftshift(g_fft, axes=2)
 
-        # Create NambuKeldyshTensor
+        # Create NambuKeldyshTensor (keep all frequency points)
         g_energy = NambuKeldyshTensor(g_energy_data)
 
-        # Construct energy grid accounting for 2*dt spacing
+        # Construct energy grid: standard FFT gives ω, then ε = ω/2
+        # Use d=dt (spacing in τ), then divide by 2 for ε
         freq = np.fft.fftfreq(N_t, d=self.dt)
-        energy_grid = 2 * np.pi * freq  # ω = 2πf (factor of 2 from 2*dt spacing already in freq scale)
+        omega_grid = 2 * np.pi * freq  # ω = 2πf
+        energy_grid = omega_grid / 2  # ε = ω/2 (from g(ε,t) = G(2ε))
         energy_grid = np.fft.fftshift(energy_grid)
 
         return { 'energy_grid': energy_grid, 'g_energy': g_energy}

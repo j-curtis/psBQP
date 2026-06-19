@@ -1494,9 +1494,9 @@ class UsadelKeldyshEvolution:
             vector_potentials += [vector_potential_new]
 
             if track_occupations:
-                gr_energy = state.energy_time_representation('gr')
-                gk_energy = state.energy_time_representation('gk')
-                f_energy = state.energy_time_representation('f')
+                gr_energy = state.energy_time_representation('gr', eta=self.eta)
+                gk_energy = state.energy_time_representation('gk', eta=self.eta)
+                f_energy = state.energy_time_representation('f', eta=self.eta)
                 gr_energy_time_list.append(gr_energy)
                 gk_energy_time_list.append(gk_energy)
                 f_energy_time_list.append(f_energy)

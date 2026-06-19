@@ -1,0 +1,71 @@
+================================================================================
+FFT REGULARIZATION ANALYSIS FOR TIMESTAMP 1781709737
+================================================================================
+
+PROBLEM:
+  The Fourier transform g^R(ω) exhibits 298-300 zero crossings in the range
+  |ω| < 15, creating highly oscillatory structure that obscures physical features.
+
+ROOT CAUSE:
+  g^R(τ) is sharply localized near τ ≈ 1.09 with FWHM ≈ 1.6. This sharp, narrow
+  peak in time domain leads to Gibbs oscillations in frequency domain.
+
+TIME-DOMAIN CHARACTERISTICS:
+  - Peak location: τ = 1.089
+  - FWHM: 1.59
+  - Window size: [-31.42, 31.42]
+  - Structure occupies only 5% of window
+  - Only ~17 peaks/troughs in time domain
+  - 298-300 zero crossings in frequency domain → UNPHYSICAL
+
+CURRENT IMPLEMENTATION:
+  Exponential damping: g_regularized(τ) = g(τ) × exp(-η|τ|)
+  Using η = 0.2 (physical inelastic scattering rate from evolution)
+
+EFFECTIVENESS OF DIFFERENT η VALUES:
+┌─────────┬──────────────┬──────────┬──────────┬──────────────┐
+│   η     │ Endpoint     │ Max |Re| │ Max |Im| │ Crossings    │
+│         │ Discontinuity│          │          │ (real/imag)  │
+├─────────┼──────────────┼──────────┼──────────┼──────────────┤
+│  0.0    │ 1.40×10⁻⁴    │  0.87    │  1.38    │  298 / 300   │
+│  0.2    │ 2.62×10⁻⁷    │  0.75    │  0.88    │  298 / 300   │
+│  0.5    │ 2.11×10⁻¹¹   │  0.59    │  0.54    │  298 / 300   │
+│  1.0    │ 3.19×10⁻¹⁸   │  0.39    │  0.30    │  298 / 300   │
+│  2.0    │ 7.24×10⁻³²   │  0.18    │  0.13    │  298 / 300   │
+│  5.0    │ 8.48×10⁻⁷³   │  0.04    │  0.03    │  298 / 300   │
+└─────────┴──────────────┴──────────┴──────────┴──────────────┘
+
+KEY OBSERVATIONS:
+  1. Exponential damping DOES reduce amplitude dramatically
+     (η=5.0 reduces amplitude by ~40× compared to η=0)
+
+  2. Number of oscillations remains constant (298-300) regardless of η
+     → Oscillations come from sharp peak structure, not endpoint discontinuities
+
+  3. Physical η=0.2 provides only modest suppression (36% amplitude reduction)
+
+  4. η ≳ 2.0 needed for strong suppression (amplitude < 0.2)
+
+RECOMMENDATION:
+  Two possible approaches:
+
+  1. SEPARATE η FOR VISUALIZATION:
+     - Use physical η=0.2 in evolution (inelastic scattering rate)
+     - Use larger η_plot ≈ 1.0-2.0 for energy-space visualization
+     - Make η_plot an optional parameter in energy_time_representation()
+
+  2. ALTERNATIVE REGULARIZATION:
+     - Subtract asymptotic behavior (like equilibrium_class.py)
+     - Use Tukey windowing (tapers only near boundaries)
+     - Zero-pad after windowing to increase frequency resolution
+
+PHYSICAL INTERPRETATION:
+  η represents inverse quasiparticle lifetime. Larger η → shorter lifetime
+  → broader spectral features. For visualization, using η_plot > η_physical
+  is acceptable as it represents "what would we see with finite resolution".
+
+CURRENT STATUS:
+  - Implementation is CORRECT: damping is being applied
+  - Code matches manual computation to machine precision
+  - But η=0.2 is too small to suppress oscillations effectively
+================================================================================

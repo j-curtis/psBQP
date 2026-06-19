@@ -1,65 +1,44 @@
 """
 Data analysis tools for Keldysh-Usadel simulations.
 
-COMPATIBILITY WITH REDUCED STATES (save_full_state=False):
-- check_normalizations: ✓ Works (checks last timestep)
-- check_fdt: ✓ Works (checks last timestep)
-- check_time_translational_invariance: ✗ Requires full time history (returns None if reduced)
-- check_state_evolution: ✗ Requires full time history (returns None if reduced)
-- plot_gap: ✓ Works (plots saved gap array)
-- plot_current: ✓ Works (plots saved current array)
-- plot_equilibrated_gap_vs_parameter: ✓ Works (uses saved arrays)
-- plot_equilibrated_current_vs_parameter: ✓ Works (uses saved arrays)
-- partial_fourier_transform: ✗ Requires full two-time tensor (N_t, N_t)
+#* REDUCED STATE COMPATIBILITY (save_full_state=False):
+#* ✓ Normalizations, FDT checks, gap/current plots, equilibrium sweeps
+#* ✗ Time-translation invariance, state evolution, full Fourier transforms
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
-import os
-import sys
-import pickle
-
+import os, sys, pickle
 from demler_tools.file_manager import io, path_management
+from demler_tools.data_analysis.image_file_tools import extended_savefig
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from nambu_keldysh_class import NambuKeldyshTensor
 from state_object_class import StateObject
 from usadel_keldysh_evolution import UsadelKeldyshEvolution
 
-# Configure matplotlib to use LaTeX rendering
+#* Matplotlib LaTeX configuration
 plt.rcParams['text.usetex'] = True
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['Helvetica', 'Arial']
 plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath} \usepackage{amssymb} \usepackage{sfmath}'
 
-# ============================================================================
-# Data Loading and Parameter Extraction
-# ============================================================================
+
+#* ============================================================================
+#* DATA LOADING
+#* ============================================================================
 
 def load_job_data(timestamp, job_index, running_machine='laptop'):
-    """
-    Load simulation results using demler_tools.
+    """Load raw simulation data (input_kwargs, save_data) using demler_tools."""
 
-    Args:
-        timestamp: Timestamp folder name
-        job_index: Job index (run_index)
-        running_machine: Machine identifier ('laptop' or 'cluster_euler')
-
-    Returns:
-        tuple: (input_kwargs, save_data)
-            input_kwargs: Dict with system_parameters, grid_parameters, etc.
-            save_data: Dict with final_state, gaps, currents, vector_potentials, times
-    """
-    # Initialize path_management if not already done
     if not hasattr(path_management, 'project_data'):
         path_management.initialize(project_name='psBQP-keldysh')
 
-    # Construct paths for kwargs and result files
     simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
     kwargs_file = os.path.join(simulation_data_path, str(timestamp), 'inputs', path_management.args_input_filetag())
     result_file = os.path.join(simulation_data_path, str(timestamp), path_management.relative_path_raw_result_file().format(job_index))
 
-    # Try main path first, then archive (only for cluster)
+    #* Check archive path for cluster runs if not found
     if not os.path.exists(kwargs_file) or not os.path.exists(result_file):
         if running_machine == 'cluster_euler':
             archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
@@ -68,21 +47,56 @@ def load_job_data(timestamp, job_index, running_machine='laptop'):
             if not os.path.exists(result_file):
                 result_file = os.path.join(archive_path, str(timestamp), path_management.relative_path_raw_result_file().format(job_index))
 
-    # Check if files exist after trying archive
     if not os.path.exists(kwargs_file):
         raise FileNotFoundError(f"Kwargs file not found for timestamp {timestamp}")
     if not os.path.exists(result_file):
         raise FileNotFoundError(f"Result file not found for timestamp {timestamp}, job {job_index}")
 
-    # Load input kwargs from the initial state job using io
     kwargs_array = io.recover_full_calculation_arguments(full_path=kwargs_file)
     input_kwargs = kwargs_array[job_index]
 
-    # Load the result data
     with open(result_file, 'rb') as f:
         save_data = pickle.load(f)
 
     return input_kwargs, save_data
+
+
+def load_simulation_data(timestamp, job_index, running_machine='laptop'):
+    """
+    #* CENTRALIZED LOADER: Returns data + all normalization constants (T_c, J_0, A_0)
+    #* Use this for all plotting functions to ensure consistent dimensionless units
+    """
+    input_kwargs, save_data = load_job_data(timestamp, job_index, running_machine)
+
+    #* Extract normalization constants
+    T_c = input_kwargs['system_parameters']['critical_temperature']
+    gaps = save_data['gaps']
+    gap_eq = np.abs(gaps[0])  # Equilibrium gap before driving
+    field_type = input_kwargs.get('field_type', 'unknown')
+
+    times = save_data.get('times', None)
+    currents = save_data['currents']
+    vector_potentials = save_data['vector_potentials']
+
+    #* Current normalization: equilibrium value or max value
+    if 'equilibrium_current' in save_data:
+        J_0 = np.abs(save_data['equilibrium_current'])
+    else:
+        J_0 = np.max(np.abs(currents)) if len(currents) > 0 else 1.0
+    if J_0 < 1e-12:
+        J_0 = 1.0
+
+    #* Vector potential normalization: max value
+    A_0 = np.max(np.abs(vector_potentials)) if len(vector_potentials) > 0 else 1.0
+    if A_0 < 1e-12:
+        A_0 = 1.0
+
+    return {
+        'input_kwargs': input_kwargs, 'save_data': save_data,
+        'T_c': T_c, 'gap_eq': gap_eq, 'J_0': J_0, 'A_0': A_0,
+        'field_type': field_type, 'times': times,
+        'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials
+    }
 
 
 def _get_system_parameters(input_kwargs):
@@ -132,9 +146,9 @@ def _get_grid_parameters(save_data, input_kwargs):
     return grid_params
 
 
-# ============================================================================
-# Normalization and FDT Checks
-# ============================================================================
+#* ============================================================================
+#* PHYSICS CHECKS: Normalization & Fluctuation-Dissipation Theorem
+#* ============================================================================
 
 def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
     """
@@ -452,9 +466,9 @@ def _compute_time_translation_diffs(tensor, num_rows):
     return max_diffs
 
 
-# ============================================================================
-# Fourier Transform Functions
-# ============================================================================
+#* ============================================================================
+#* FOURIER TRANSFORMS: Time → Frequency domain
+#* ============================================================================
 
 def partial_fourier_transform(g_two_time, time_grid):
     """
@@ -585,9 +599,9 @@ def partial_fourier_transform(g_two_time, time_grid):
     }
 
 
-# ============================================================================
-# Tensor Comparison Functions (from general_comparison_file.py)
-# ============================================================================
+#* ============================================================================
+#* TENSOR COMPARISON UTILITIES
+#* ============================================================================
 
 def compare_tensor_rows(tensor1, tensor2, row_index=-1):
     """
@@ -702,21 +716,19 @@ def plot_tensor_comparison(tensor1, tensor2, x_values, title, row_index=-1, save
         plt.show()
 
 
-# ============================================================================
-# Gap and Current Plotting Functions
-# ============================================================================
+#* ============================================================================
+#* MAIN PLOTTING FUNCTIONS: Gap, Current, Conductivity (Dimensionless units)
+#* ============================================================================
 
-def plot_gap(timestamp, job_index=None, save_plot=False, save_dir='analysis_plots'):
+def plot_gap(timestamp, job_index=None, save_plot=False, save_dir=None):
     """
-    Plot gap vs time for all jobs or a specific job.
-
-    Displays input parameters before plotting.
+    Plot gap magnitude vs time in dimensionless units.
 
     Args:
         timestamp: Timestamp folder name
         job_index: Job index (default None plots all jobs in folder)
         save_plot: Whether to save plot (default False)
-        save_dir: Directory for plots
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
     """
     # Determine which jobs to plot
     if job_index is None:
@@ -728,83 +740,93 @@ def plot_gap(timestamp, job_index=None, save_plot=False, save_dir='analysis_plot
         job_indices = [job_index]
         plot_all = False
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
+    field_type = None
     for job_idx in job_indices:
-        input_kwargs, save_data = load_job_data(timestamp, job_idx)
-        gaps = save_data['gaps']
+        # Load data with normalization constants
+        data = load_simulation_data(timestamp, job_idx)
 
-        if 'times' in save_data:
-            times = save_data['times']
-        else:
-            state = save_data['final_state']
-            N_t = len(gaps)
-            dt = state.dt
-            times = np.linspace(0, N_t * dt, N_t)
+        # Extract normalized quantities
+        times_norm = data['times'] * data['T_c']  # t * T_c (dimensionless)
+        gap_norm = np.abs(data['gaps']) / data['T_c']  # |Δ| / T_c
 
-        print(f"\n{'='*60}")
-        print(f"Input Parameters (timestamp={timestamp}, job_index={job_idx}):")
-        print(f"{'='*60}")
-        for key, value in input_kwargs.items():
-            print(f"  {key}: {value}")
-        print(f"{'='*60}\n")
+        # Store field type from first job
+        if field_type is None:
+            field_type = data['field_type']
 
         label = f'Job {job_idx}' if plot_all else None
-        # Plot Real part
-        axes[0].plot(times, np.real(gaps), linewidth=2, label=label, alpha=0.7)
-        # Plot Imag part
-        axes[1].plot(times, np.imag(gaps), linewidth=2, label=label, alpha=0.7)
-        # Plot Magnitude
-        axes[2].plot(times, np.abs(gaps), linewidth=2, label=label, alpha=0.7)
+        ax.plot(times_norm, gap_norm, linewidth=2.5, label=label, alpha=0.8)
 
-    # Configure axes
-    title_suffix = 'All Jobs' if plot_all else f'Job {job_index}'
+    # Configure plot
+    ax.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    ax.set_ylabel(r'$|\Delta(t)| / T_c$', fontsize=13)
 
-    axes[0].set_xlabel(r'Time $t$', fontsize=12)
-    axes[0].set_ylabel(r'Re($\Delta(t)$)', fontsize=12)
-    axes[0].set_title(rf'Real($\Delta$) - {title_suffix}', fontsize=13)
+    # Title with field type
+    title = f'{field_type} pulse simulation' if field_type else 'Gap evolution'
+    ax.set_title(title, fontsize=14)
+
     if plot_all:
-        axes[0].legend(fontsize=9)
-    axes[0].grid(True, alpha=0.3)
-
-    axes[1].set_xlabel(r'Time $t$', fontsize=12)
-    axes[1].set_ylabel(r'Im($\Delta(t)$)', fontsize=12)
-    axes[1].set_title(rf'Imag($\Delta$) - {title_suffix}', fontsize=13)
-    if plot_all:
-        axes[1].legend(fontsize=9)
-    axes[1].grid(True, alpha=0.3)
-
-    axes[2].set_xlabel(r'Time $t$', fontsize=12)
-    axes[2].set_ylabel(r'$|\Delta(t)|$', fontsize=12)
-    axes[2].set_title(rf'$|\Delta|$ - {title_suffix}', fontsize=13)
-    if plot_all:
-        axes[2].legend(fontsize=9)
-    axes[2].grid(True, alpha=0.3)
+        ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
         os.makedirs(save_dir, exist_ok=True)
+
         job_str = f'job{job_index}' if job_index is not None else 'all_jobs'
-        plt.savefig(os.path.join(save_dir, f'gap_vs_time_{timestamp}_{job_str}.png'), dpi=150, bbox_inches='tight')
+        filename = os.path.join(save_dir, f'gap_vs_time_{timestamp}_{job_str}.png')
 
-    plt.show()
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='plot_gap',
+            additional_information=job_str,
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
 
 
-def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, save_dir='analysis_plots'):
+def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, save_dir=None,
+                        omega_external=None, sigma_re_external=None, sigma_im_external=None,
+                        labels_external=None):
     """
-    Extract and plot optical conductivity σ(ω) = j(ω)/A(ω) from time-domain data.
+    Extract and plot optical conductivity σ(ω) = j(ω)/(iω A(ω)) from time-domain data.
 
-    Computes the optical conductivity by taking the ratio of Fourier-transformed
-    current density to the vector potential. Filters out frequencies where the
-    vector potential is below threshold to avoid numerical instabilities.
+    Computes the optical conductivity using σ(ω) = j(ω)/E(ω) where E(ω) = iω A(ω).
+    Filters out frequencies where |A(ω)| or |ω| are below threshold to avoid
+    numerical instabilities.
 
     Args:
         timestamp: Timestamp folder name
         job_index: Job index
         threshold: Minimum |A(ω)| value for valid conductivity (default 1e-6)
         save_plot: Whether to save plot (default False)
-        save_dir: Directory for plots
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        omega_external: Optional external frequency values for comparison. Can be:
+                       - Single array: plots one external dataset
+                       - List of arrays: plots multiple external datasets
+        sigma_re_external: Optional external Re[σ(ω)] values. Can be:
+                          - Single array: plots one external dataset
+                          - List of arrays: plots multiple external datasets (must match omega_external length)
+        sigma_im_external: Optional external Im[σ(ω)] values. Can be:
+                          - Single array: plots one external dataset
+                          - List of arrays: plots multiple external datasets (must match omega_external length)
+        labels_external: Optional labels for external datasets. Can be:
+                        - Single string: label for single external dataset
+                        - List of strings: labels for multiple external datasets (must match omega_external length)
+                        - If not provided, defaults to 'External data' or 'External 1', 'External 2', etc.
 
     Returns:
         dict: {
@@ -818,9 +840,12 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
 
     # Check if vector potential is non-zero
     vector_potentials = save_data['vector_potentials']
-    if np.allclose(vector_potentials, 0):
-        print(f"Vector potential is zero for job {job_index}. Conductivity extraction requires non-zero driving.")
+    max_A = np.max(np.abs(vector_potentials))
+    if max_A < 1e-10:
+        print(f"Vector potential is zero for job {job_index}. Max |A| = {max_A:.3e}. Conductivity extraction requires non-zero driving.")
         return None
+    else:
+        print(f"Max |A(t)| = {max_A:.3e}")
 
     # Extract current and time grid
     currents = save_data['currents']
@@ -836,6 +861,23 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
     dt = times[1] - times[0]
     N_t = len(times)
 
+    # Check boundary values to diagnose FFT artifacts
+    print(f"\nTime-domain boundary values:")
+    print(f"  A(t_start) = {vector_potentials[0]:.3e}, A(t_end) = {vector_potentials[-1]:.3e}")
+    print(f"  j(t_start) = {currents[0]:.3e}, j(t_end) = {currents[-1]:.3e}")
+    print(f"  Max |A(t)| = {np.max(np.abs(vector_potentials)):.3e}")
+    print(f"  Max |j(t)| = {np.max(np.abs(currents)):.3e}")
+
+    # Construct frequency grid first (needed for phase correction)
+    freq = np.fft.fftfreq(N_t, d=dt)
+    omega_grid = 2 * np.pi * freq
+    omega_grid = np.fft.fftshift(omega_grid)
+
+    # Fourier transform with phase correction for centered pulse
+    # If pulse is centered at t_center, FFT includes phase e^{-iω t_center}
+    # Remove this to get clean spectrum
+    t_center = (times[0] + times[-1]) / 2.0
+
     # Fourier transform current: j(ω)
     j_omega = np.fft.fft(currents)
     j_omega = np.fft.fftshift(j_omega)
@@ -844,15 +886,25 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
     A_omega = np.fft.fft(vector_potentials)
     A_omega = np.fft.fftshift(A_omega)
 
-    # Construct frequency grid
-    freq = np.fft.fftfreq(N_t, d=dt)
-    omega_grid = 2 * np.pi * freq
-    omega_grid = np.fft.fftshift(omega_grid)
+    # Remove phase from centered pulse: multiply by e^{+iω t_center}
+    phase_correction = np.exp(1j * omega_grid * t_center)
+    j_omega = j_omega * phase_correction
+    A_omega = A_omega * phase_correction
 
-    # Compute conductivity with filtering
+    # Calculate frequency resolution
+    T_total = times[-1] - times[0]
+    d_omega = omega_grid[1] - omega_grid[0] if len(omega_grid) > 1 else 0
+
+    # Extract equilibrium gap (same as plot_gap function)
+    gaps = save_data['gaps']
+    # Use first gap value as equilibrium (before driving)
+    gap_eq = np.abs(gaps[0])
+
+    # Compute conductivity: σ(ω) = -j(ω) / (iω A(ω))
     sigma = np.zeros_like(j_omega, dtype=complex)
-    mask = np.abs(A_omega) > threshold
-    sigma[mask] = j_omega[mask] / A_omega[mask]
+    # Filter: need both |A(ω)| > threshold and |ω| > threshold (avoid ω=0)
+    mask = (np.abs(A_omega) > threshold) & (np.abs(omega_grid) > threshold)
+    sigma[mask] = -j_omega[mask] / (1j * omega_grid[mask] * A_omega[mask])
 
     # Find frequency range where A is significant
     omega_indices = np.where(mask)[0]
@@ -866,63 +918,163 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
     print(f"\n{'='*60}")
     print(f"Conductivity Extraction (timestamp={timestamp}, job_index={job_index}):")
     print(f"{'='*60}")
+    print(f"  Time step (dt): {dt:.6f}")
+    print(f"  Total duration (T_total): {T_total:.3f}")
+    print(f"  Number of time points: {N_t}")
+    print(f"  Frequency resolution (Δω): {d_omega:.6f}")
+    print(f"  Nyquist frequency (ω_max): {np.max(np.abs(omega_grid)):.3f}")
+    print(f"  Equilibrium gap (Δ₀): {gap_eq:.6f}")
     print(f"  Max |A(ω)|: {np.max(np.abs(A_omega)):.3e}")
     print(f"  Threshold: {threshold:.3e}")
     print(f"  Valid frequency range: [{omega_min:.3f}, {omega_max:.3f}]" if omega_min is not None else "  No valid frequencies")
     print(f"  Number of valid frequency points: {np.sum(mask)}/{N_t}")
     print(f"{'='*60}\n")
 
-    # Plot conductivity
-    fig, axes = plt.subplots(2, 1, figsize=(10, 8))
+    # Plot conductivity and components in 2x2 grid
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    # Real part
-    axes[0].plot(omega_grid, np.real(sigma), 'b-', linewidth=2, label=r'Re($\sigma(\omega)$)')
-    axes[0].set_xlabel(r'Frequency $\omega$', fontsize=12)
-    axes[0].set_ylabel(r'Re($\sigma(\omega)$)', fontsize=12)
-    axes[0].set_title(r'Real part of conductivity $\sigma(\omega) = j(\omega)/A(\omega)$', fontsize=13)
-    axes[0].grid(True, alpha=0.3)
-    axes[0].legend(fontsize=10)
+    # Compute electric field E(ω) = iωA(ω)
+    E_omega = 1j * omega_grid * A_omega
 
-    # Mark valid frequency range with pale gray dashed lines
-    if omega_min is not None:
-        axes[0].axvline(omega_min, color='gray', linestyle='--', linewidth=1.5, alpha=0.4, label='Valid range')
-        axes[0].axvline(omega_max, color='gray', linestyle='--', linewidth=1.5, alpha=0.4)
+    # Top left: Re[σ(ω)] - only positive frequencies where |σ| > 0
+    # Additional mask: only plot where absolute conductivity is non-zero
+    sigma_abs = np.abs(sigma)
+    sigma_threshold = 1e-12  # Threshold for considering conductivity as non-zero
 
-    # Imaginary part
-    axes[1].plot(omega_grid, np.imag(sigma), 'r-', linewidth=2, label=r'Im($\sigma(\omega)$)')
-    axes[1].set_xlabel(r'Frequency $\omega$', fontsize=12)
-    axes[1].set_ylabel(r'Im($\sigma(\omega)$)', fontsize=12)
-    axes[1].set_title(r'Imaginary part of conductivity $\sigma(\omega) = j(\omega)/A(\omega)$', fontsize=13)
-    axes[1].grid(True, alpha=0.3)
-    axes[1].legend(fontsize=10)
+    mask_plot_re = (omega_grid > threshold) & (sigma_abs > sigma_threshold)
+    axes[0, 0].plot(omega_grid[mask_plot_re], np.real(sigma)[mask_plot_re], 'b-', linewidth=2, label=r'Simulation')
+    axes[0, 0].set_xlabel(r'Frequency $\omega$', fontsize=12)
+    axes[0, 0].set_ylabel(r'Re($\sigma(\omega)$)', fontsize=12)
+    axes[0, 0].set_title(r'Real part of conductivity ($\omega > 0$)', fontsize=13)
+    axes[0, 0].grid(True, alpha=0.3)
 
-    # Mark valid frequency range with pale gray dashed lines
-    if omega_min is not None:
-        axes[1].axvline(omega_min, color='gray', linestyle='--', linewidth=1.5, alpha=0.4, label='Valid range')
-        axes[1].axvline(omega_max, color='gray', linestyle='--', linewidth=1.5, alpha=0.4)
+    # Top right: Im[σ(ω)] - only positive frequencies where |σ| > 0
+    mask_plot_im = (omega_grid > 0) & (sigma_abs > sigma_threshold)
+    axes[0, 1].plot(omega_grid[mask_plot_im], np.imag(sigma)[mask_plot_im], 'r-', linewidth=2, label=r'Simulation')
+    axes[0, 1].set_xlabel(r'Frequency $\omega$', fontsize=12)
+    axes[0, 1].set_ylabel(r'Im($\sigma(\omega)$)', fontsize=12)
+    axes[0, 1].set_title(r'Imaginary part of conductivity ($\omega > 0$)', fontsize=13)
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Plot external data if provided
+    if omega_external is not None:
+        # Normalize external data to lists
+        if not isinstance(omega_external, list):
+            omega_list = [omega_external]
+            sigma_re_list = [sigma_re_external] if sigma_re_external is not None else [None]
+            sigma_im_list = [sigma_im_external] if sigma_im_external is not None else [None]
+            if labels_external is None:
+                label_list = ['External data']
+            elif isinstance(labels_external, str):
+                label_list = [labels_external]
+            else:
+                label_list = labels_external
+        else:
+            omega_list = omega_external
+            sigma_re_list = sigma_re_external if sigma_re_external is not None else [None] * len(omega_list)
+            sigma_im_list = sigma_im_external if sigma_im_external is not None else [None] * len(omega_list)
+            if labels_external is None:
+                label_list = [f'External {i+1}' for i in range(len(omega_list))]
+            else:
+                label_list = labels_external
+
+        # Plot each external dataset
+        for i, (omega_ext, sigma_re_ext, sigma_im_ext, label_ext) in enumerate(zip(omega_list, sigma_re_list, sigma_im_list, label_list)):
+            color_idx = i + 1  # Offset to avoid blue/red used for simulation
+
+            # Plot real part if provided
+            if sigma_re_ext is not None:
+                axes[0, 0].plot(omega_ext, sigma_re_ext, '--', linewidth=2,
+                              label=label_ext, alpha=0.7, color=f'C{color_idx}')
+
+            # Plot imaginary part if provided
+            if sigma_im_ext is not None:
+                axes[0, 1].plot(omega_ext, sigma_im_ext, '--', linewidth=2,
+                              label=label_ext, alpha=0.7, color=f'C{color_idx}')
+
+    axes[0, 0].legend(fontsize=10)
+    axes[0, 1].legend(fontsize=10)
+
+    # Bottom left: j(ω)
+    axes[1, 0].plot(omega_grid, np.real(j_omega), 'b-', linewidth=2, label=r'Re($j(\omega)$)')
+    axes[1, 0].plot(omega_grid, np.imag(j_omega), 'b--', linewidth=2, alpha=0.7, label=r'Im($j(\omega)$)')
+    axes[1, 0].set_xlabel(r'Frequency $\omega$', fontsize=12)
+    axes[1, 0].set_ylabel(r'$j(\omega)$', fontsize=12)
+    axes[1, 0].set_title(r'Current density in frequency domain', fontsize=13)
+    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 0].legend(fontsize=10)
+
+    # Bottom right: E(ω) = iωA(ω)
+    axes[1, 1].plot(omega_grid, np.real(E_omega), 'r-', linewidth=2, label=r'Re($E(\omega)$)')
+    axes[1, 1].plot(omega_grid, np.imag(E_omega), 'r--', linewidth=2, alpha=0.7, label=r'Im($E(\omega)$)')
+    axes[1, 1].set_xlabel(r'Frequency $\omega$', fontsize=12)
+    axes[1, 1].set_ylabel(r'$E(\omega) = i\omega A(\omega)$', fontsize=12)
+    axes[1, 1].set_title(r'Electric field in frequency domain', fontsize=13)
+    axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].legend(fontsize=10)
+
+    # Set x-axis limits to positive frequency range only with small margin
+    if omega_min is not None and omega_max is not None:
+        # Only use positive part of valid range
+        omega_max_positive = max(omega_max, 0)
+        margin = 0.1 * omega_max_positive  # 10% margin on right
+        plot_min = 0
+        plot_max = omega_max_positive + margin
+    else:
+        # Fallback if no valid range found
+        plot_min = 0
+        plot_max = 10 * gap_eq
+
+    for ax in axes.flat:
+        ax.set_xlim(plot_min, plot_max)
+
+    # Mark valid frequency range and coherence peaks on all subplots
+    for ax in axes.flat:
+        if omega_min is not None:
+            ax.axvline(omega_min, color='gray', linestyle='--', linewidth=1.5, alpha=0.3)
+            ax.axvline(omega_max, color='gray', linestyle='--', linewidth=1.5, alpha=0.3)
+        ax.axvline(2 * gap_eq, color='red', linestyle=':', linewidth=1, alpha=0.4)
+        ax.axvline(-2 * gap_eq, color='red', linestyle=':', linewidth=1, alpha=0.4)
+        ax.axvline(0, color='black', linestyle='-', linewidth=0.5, alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'conductivity_{timestamp}_job{job_index}.png'), dpi=150, bbox_inches='tight')
 
-    plt.show()
+        filename = os.path.join(save_dir, f'conductivity_{timestamp}_job{job_index}.png')
+
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='extract_conductivity',
+            additional_information=f'job{job_index}',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
 
     return {'omega_grid': omega_grid, 'sigma': sigma}
 
 
-def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_plots'):
+def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
     """
-    Plot current and vector potential vs time for all jobs or a specific job.
-
-    Displays input parameters before plotting.
+    Plot current and vector potential vs time in dimensionless units.
 
     Args:
         timestamp: Timestamp folder name
         job_index: Job index (default None plots all jobs in folder)
         save_plot: Whether to save plot (default False)
-        save_dir: Directory for plots
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
     """
     # Determine which jobs to plot
     if job_index is None:
@@ -934,113 +1086,326 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir='analysis_
         job_indices = [job_index]
         plot_all = False
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
+    field_type = None
     for job_idx in job_indices:
-        input_kwargs, save_data = load_job_data(timestamp, job_idx)
-        currents = save_data['currents']
-        vector_potentials = save_data['vector_potentials']
+        # Load data with normalization constants
+        data = load_simulation_data(timestamp, job_idx)
 
-        if 'times' in save_data:
-            times = save_data['times']
-        else:
-            state = save_data['final_state']
-            N_t = len(currents)
-            dt = state.dt
-            times = np.linspace(0, N_t * dt, N_t)
+        # Extract normalized quantities
+        times_norm = data['times'] * data['T_c']  # t * T_c (dimensionless)
+        current_norm = np.real(data['currents']) / data['J_0']  # J / J_0
 
-        print(f"\n{'='*60}")
-        print(f"Input Parameters (timestamp={timestamp}, job_index={job_idx}):")
-        print(f"{'='*60}")
-        for key, value in input_kwargs.items():
-            print(f"  {key}: {value}")
-        print(f"{'='*60}\n")
+        # Vector potential (real part if complex)
+        A_values = np.real(data['vector_potentials']) if np.iscomplexobj(data['vector_potentials']) else data['vector_potentials']
+        A_norm = A_values / data['A_0']  # A / A_0
+
+        # Store field type from first job
+        if field_type is None:
+            field_type = data['field_type']
 
         label = f'Job {job_idx}' if plot_all else None
-        # Plot Real part of current
-        axes[0].plot(times, np.real(currents), linewidth=2, label=label, alpha=0.7, color=f'C{job_idx}')
 
-        # Plot vector potential (real part if complex, otherwise as is)
-        if np.iscomplexobj(vector_potentials):
-            A_values = np.real(vector_potentials)
-        else:
-            A_values = vector_potentials
+        # Plot current
+        axes[0].plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
 
-        # Compute dA/dt using gradient
-        dt = times[1] - times[0] if len(times) > 1 else 1.0
-        dA_dt = np.gradient(A_values, dt)
-
-        # Plot A(t) on left y-axis
-        axes[1].plot(times, A_values, linewidth=2, label=label, alpha=0.7, color=f'C{job_idx}')
+        # Plot vector potential
+        axes[1].plot(times_norm, A_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
 
     # Configure current axis
-    title_suffix = 'All Jobs' if plot_all else f'Job {job_index}'
-
-    axes[0].set_xlabel(r'Time $t$', fontsize=12)
-    axes[0].set_ylabel(r'Re($J(t)$)', fontsize=12)
-    axes[0].set_title(f'Current - {title_suffix}', fontsize=13)
+    axes[0].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    axes[0].set_ylabel(r'$J(t) / J_0$', fontsize=13)
+    title = f'{field_type} pulse simulation' if field_type else 'Current evolution'
+    axes[0].set_title(title, fontsize=14)
     if plot_all:
-        axes[0].legend(fontsize=9)
+        axes[0].legend(fontsize=10)
     axes[0].grid(True, alpha=0.3)
 
-    # Configure vector potential axis (left y-axis)
-    axes[1].set_xlabel(r'Time $t$', fontsize=12)
-    axes[1].set_ylabel(r'$A(t)$', fontsize=12, color='C0')
-    axes[1].set_title(f'Vector Potential and Derivative - {title_suffix}', fontsize=13)
-    axes[1].tick_params(axis='y', labelcolor='C0')
-    axes[1].grid(True, alpha=0.3)
-
-    # Create second y-axis for dA/dt
-    ax_right = axes[1].twinx()
-
-    # Plot dA/dt for all jobs on right y-axis
-    for job_idx in job_indices:
-        input_kwargs, save_data = load_job_data(timestamp, job_idx)
-        vector_potentials = save_data['vector_potentials']
-
-        if 'times' in save_data:
-            times = save_data['times']
-        else:
-            state = save_data['final_state']
-            N_t = len(save_data['currents'])
-            dt_val = state.dt
-            times = np.linspace(0, N_t * dt_val, N_t)
-
-        if np.iscomplexobj(vector_potentials):
-            A_values = np.real(vector_potentials)
-        else:
-            A_values = vector_potentials
-
-        dt_val = times[1] - times[0] if len(times) > 1 else 1.0
-        dA_dt = np.gradient(A_values, dt_val)
-
-        label_deriv = f'Job {job_idx} ' + r'($\partial A/\partial t$)' if plot_all else r'$\partial A/\partial t$'
-        ax_right.plot(times, dA_dt, linewidth=2, linestyle='--', label=label_deriv, alpha=0.7, color='red')
-
-    ax_right.set_ylabel(r'$\partial A/\partial t$', fontsize=12, color='red')
-    ax_right.tick_params(axis='y', labelcolor='red')
-
-    # Combine legends if plotting all jobs
+    # Configure vector potential axis
+    axes[1].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    axes[1].set_ylabel(r'$A(t) / A_0$', fontsize=13)
+    title_A = f'{field_type} pulse - Vector potential' if field_type else 'Vector potential'
+    axes[1].set_title(title_A, fontsize=14)
     if plot_all:
-        lines1, labels1 = axes[1].get_legend_handles_labels()
-        lines2, labels2 = ax_right.get_legend_handles_labels()
-        axes[1].legend(lines1 + lines2, labels1 + labels2, fontsize=9, loc='best')
-    else:
-        lines1, labels1 = axes[1].get_legend_handles_labels()
-        lines2, labels2 = ax_right.get_legend_handles_labels()
-        axes[1].legend(lines1 + lines2, labels1 + labels2, fontsize=9, loc='best')
+        axes[1].legend(fontsize=10)
+    axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
         os.makedirs(save_dir, exist_ok=True)
+
         job_str = f'job{job_index}' if job_index is not None else 'all_jobs'
-        plt.savefig(os.path.join(save_dir, f'current_vs_time_{timestamp}_{job_str}.png'), dpi=150, bbox_inches='tight')
+        filename = os.path.join(save_dir, f'current_vs_time_{timestamp}_{job_str}.png')
 
-    plt.show()
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='plot_current',
+            additional_information=job_str,
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
 
 
-def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, labels_external=None, add_point_labels=False):
+def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=None,
+                              n_average=100, save_plot=False, save_dir=None):
+    """
+    Plot gap, current, and vector potential vs time in a combined 3-panel figure.
+
+    Optionally overlay equilibrium gap(Q) and current(Q) interpolated at instantaneous Q(t).
+
+    Args:
+        timestamp: Timestamp for time evolution data
+        job_index: Job index (default None plots all jobs in folder)
+        equilibrium_timestamp: Optional timestamp for equilibrium sweep data
+        n_average: Number of timesteps to average for equilibrium data (default 100)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+    """
+    # Determine which jobs to plot
+    if job_index is None:
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
+        job_indices = range(job_no)
+        plot_all = True
+    else:
+        job_indices = [job_index]
+        plot_all = False
+
+    # Create figure with 3 subplots (1 row, 3 columns)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    # Load equilibrium data if provided and validate parameters
+    if equilibrium_timestamp is not None:
+        # Load parameters from both timestamps for validation
+        input_kwargs_evolution, _ = load_job_data(timestamp, job_indices[0])
+        input_kwargs_eq, _ = load_job_data(equilibrium_timestamp, 0)
+
+        # Extract parameters for comparison
+        params_evolution = input_kwargs_evolution['system_parameters']
+        params_eq = input_kwargs_eq['system_parameters']
+
+        # Check and warn if parameters differ
+        params_to_check = [
+            ('eta', 'eta'),
+            ('temperature', 'temperature'),
+            ('critical_temperature', 'critical_temperature')
+        ]
+
+        print(f"\n{'='*60}")
+        print(f"Parameter validation (evolution vs equilibrium):")
+        print(f"{'='*60}")
+
+        for param_name, key in params_to_check:
+            val_evolution = params_evolution.get(key, None)
+            val_eq = params_eq.get(key, None)
+
+            if val_evolution != val_eq:
+                print(f"WARNING: {param_name} differs!")
+                print(f"  Evolution: {val_evolution}")
+                print(f"  Equilibrium: {val_eq}")
+            else:
+                print(f"  {param_name}: {val_evolution} ✓")
+
+        # Check time parameters from evolution kwargs
+        if 'dt' in input_kwargs_evolution:
+            dt_evolution = input_kwargs_evolution['dt']
+            dt_eq = input_kwargs_eq.get('dt', None)
+            if dt_evolution != dt_eq:
+                print(f"WARNING: dt (time sampling) differs!")
+                print(f"  Evolution: {dt_evolution}")
+                print(f"  Equilibrium: {dt_eq}")
+            else:
+                print(f"  dt (time sampling): {dt_evolution} ✓")
+
+        if 'num_timesteps' in input_kwargs_evolution:
+            nt_evolution = input_kwargs_evolution['num_timesteps']
+            nt_eq = input_kwargs_eq.get('num_timesteps', None)
+            dt_evolution = input_kwargs_evolution.get('dt', 0)
+            dt_eq = input_kwargs_eq.get('dt', 0)
+            T_evolution = nt_evolution * dt_evolution
+            T_eq = nt_eq * dt_eq if nt_eq is not None else 0
+
+            if abs(T_evolution - T_eq) > 1e-10:
+                print(f"WARNING: Total time duration differs!")
+                print(f"  Evolution: {T_evolution:.6f} ({nt_evolution} steps × {dt_evolution})")
+                print(f"  Equilibrium: {T_eq:.6f} ({nt_eq} steps × {dt_eq})")
+            else:
+                print(f"  Total time duration: {T_evolution:.6f} ✓")
+
+        print(f"{'='*60}\n")
+
+        # Load equilibrium sweep data directly without creating plots
+        print("Loading equilibrium sweep data...")
+
+        # Manually load and process equilibrium data
+        lines = io.read_contents_readable_file(equilibrium_timestamp)
+        job_no_eq = io.recover_job_no(lines)
+
+        # Lists to store equilibrium data
+        A_eq_list = []
+        gap_eq_list = []
+        current_eq_list = []
+
+        # Load all jobs from equilibrium sweep
+        for eq_job_idx in range(job_no_eq):
+            eq_input_kwargs, eq_save_data = load_job_data(equilibrium_timestamp, eq_job_idx)
+
+            # Extract vector potential parameter value
+            eq_vector_potentials = eq_save_data['vector_potentials']
+            A_param = np.max(np.abs(eq_vector_potentials))
+
+            # Extract equilibrated gap and current (average last n_average timesteps)
+            eq_gaps = eq_save_data['gaps']
+            eq_currents = eq_save_data['currents']
+
+            gap_eq_mean = np.mean(eq_gaps[-n_average:])
+            current_eq_mean = np.mean(eq_currents[-n_average:])
+
+            A_eq_list.append(A_param)
+            gap_eq_list.append(gap_eq_mean)
+            current_eq_list.append(current_eq_mean)
+
+        # Convert to arrays and sort by A
+        sort_indices = np.argsort(A_eq_list)
+        A_eq = np.array(A_eq_list)[sort_indices]
+        gap_eq_means = np.array(gap_eq_list)[sort_indices]
+        current_eq_means = np.array(current_eq_list)[sort_indices]
+
+        print(f"Loaded equilibrium data: {len(A_eq)} points from A={A_eq.min():.3f} to {A_eq.max():.3f}")
+        print()
+
+    field_type = None
+    for job_idx in job_indices:
+        # Load time evolution data with normalization constants
+        data = load_simulation_data(timestamp, job_idx)
+
+        # Extract normalized quantities
+        times_norm = data['times'] * data['T_c']
+        gap_norm = np.abs(data['gaps']) / data['T_c']
+        current_norm = np.real(data['currents']) / data['J_0']
+
+        # Vector potential (real part if complex)
+        A_values = np.real(data['vector_potentials']) if np.iscomplexobj(data['vector_potentials']) else data['vector_potentials']
+
+        # Store field type from first job
+        if field_type is None:
+            field_type = data['field_type']
+
+        # Debug output
+        print(f"Job {job_idx}: Plotting {len(times_norm)} points")
+        print(f"  Gap range: [{gap_norm.min():.3f}, {gap_norm.max():.3f}]")
+        print(f"  Current range: [{current_norm.min():.3f}, {current_norm.max():.3f}]")
+        print(f"  A range: [{A_values.min():.3e}, {A_values.max():.3e}]")
+        print(f"  Time range: [{times_norm.min():.3f}, {times_norm.max():.3f}]")
+
+        label = f'Job {job_idx}' if plot_all else None
+
+        # Use consistent colors: blue for single job, color cycle for multiple jobs
+        if plot_all:
+            plot_color = f'C{job_idx}'
+        else:
+            plot_color = 'C0'  # Always blue for single job
+
+        # Plot time evolution on each subplot
+        axes[0].plot(times_norm, gap_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
+        axes[1].plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
+        axes[2].plot(times_norm, A_values, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
+
+        # Compute and plot equilibrium reference if available
+        if equilibrium_timestamp is not None:
+            # Normalize equilibrium data using time evolution normalization constants
+            T_c = data['T_c']
+            J_0 = data['J_0']
+
+            gap_eq_norm = np.abs(gap_eq_means) / T_c
+            current_eq_norm = np.abs(current_eq_means) / J_0
+
+            # Get instantaneous |Q(t)|
+            Q_mag = np.abs(data['vector_potentials'])
+
+            # Interpolate equilibrium values at each Q(t) using linear interpolation
+            # np.interp returns boundary values for points outside the range
+            gap_eq_interp = np.interp(Q_mag, A_eq, gap_eq_norm)
+
+            # For current: -sign(Q) * interpolated(|Q|)
+            Q_sign = np.sign(np.real(data['vector_potentials']))
+            current_eq_interp = -Q_sign * np.interp(Q_mag, A_eq, current_eq_norm)
+
+            # Plot equilibrium reference curves
+            eq_label = 'Equilibrium' if job_idx == job_indices[0] else None
+            axes[0].plot(times_norm, gap_eq_interp, '--', linewidth=2,
+                        label=eq_label, alpha=0.7, color='red')
+            axes[1].plot(times_norm, current_eq_interp, '--', linewidth=2,
+                        label=eq_label, alpha=0.7, color='red')
+
+    # Configure gap subplot
+    axes[0].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    axes[0].set_ylabel(r'$|\Delta(t)| / T_c$', fontsize=13)
+    axes[0].set_title('Gap evolution', fontsize=14)
+    axes[0].grid(True, alpha=0.3)
+    if plot_all or equilibrium_timestamp is not None:
+        axes[0].legend(fontsize=10)
+
+    # Configure current subplot
+    axes[1].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    axes[1].set_ylabel(r'$J(t) / J_0$', fontsize=13)
+    axes[1].set_title('Current evolution', fontsize=14)
+    axes[1].grid(True, alpha=0.3)
+    if plot_all or equilibrium_timestamp is not None:
+        axes[1].legend(fontsize=10)
+
+    # Configure vector potential subplot
+    axes[2].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    axes[2].set_ylabel(r'$A(t)$', fontsize=13)
+    title_A = f'{field_type} pulse' if field_type else 'Vector potential'
+    axes[2].set_title(title_A, fontsize=14)
+    axes[2].grid(True, alpha=0.3)
+    if plot_all:
+        axes[2].legend(fontsize=10)
+
+    plt.tight_layout()
+
+    if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        job_str = f'job{job_index}' if job_index is not None else 'all_jobs'
+        eq_str = f'_eq{equilibrium_timestamp}' if equilibrium_timestamp else ''
+        filename = os.path.join(save_dir, f'gap_current_combined_{timestamp}_{job_str}{eq_str}.png')
+
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='plot_gap_current_combined',
+            additional_information=f'{job_str}{eq_str}',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir=None, combine_timestamps=False, x_external=None, y_external=None, labels_external=None, add_point_labels=False):
     """
     Plot equilibrated gap vs parameter for multiple timestamps.
 
@@ -1054,7 +1419,7 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
                    - 'field_params:KEY': Specific field parameter (e.g., 'field_params:amplitude')
         n_average: Number of final timesteps to average (default 100)
         save_plot: Whether to save plot (default False)
-        save_dir: Directory for plots
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
         combine_timestamps: If True, combine all timestamps into single curve (default False)
         x_external: Optional external x-values for comparison. Can be:
                    - Single array: plots one external dataset
@@ -1192,28 +1557,54 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
 
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
-    ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=12)
-    ax.set_ylabel(r'Equilibrated Gap $|\Delta|$', fontsize=12)
-    ax.set_title(f'Equilibrated Gap vs {parameter.replace("_", " ").title()}' + '\n' +
-                f'Max $|\\Delta|$ = {max_gap:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}',
-                fontsize=12)
+    # Set labels based on parameter type
+    if parameter == 'temperature':
+        ax.set_xlabel(r'$T / T_c$', fontsize=13)
+        ax.set_ylabel(r'$|\Delta| / T_c$', fontsize=13)
+        ax.set_title(f'Equilibrated Gap vs Temperature', fontsize=14)
+    elif parameter == 'vector_potential':
+        ax.set_xlabel(r'$A / A_0$', fontsize=13)
+        ax.set_ylabel(r'$|\Delta| / T_c$', fontsize=13)
+        ax.set_title(f'Equilibrated Gap vs Vector Potential', fontsize=14)
+    else:
+        ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=13)
+        ax.set_ylabel(r'$|\Delta| / T_c$', fontsize=13)
+        ax.set_title(f'Equilibrated Gap vs {parameter.replace("_", " ").title()}', fontsize=14)
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'gap_vs_{parameter}.png'), dpi=150, bbox_inches='tight')
 
-    plt.show()
+        filename = os.path.join(save_dir, f'gap_vs_{parameter}.png')
+
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamps[0]) if timestamps else 'multiple',
+            plot_generating_method='plot_equilibrated_gap_vs_parameter',
+            additional_information=f'parameter={parameter}',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
 
     return {'parameter_values': all_parameter_values, 'gap_means': all_gap_means,
             'gap_errors': all_gap_errors, 'max_gap': max_gap, 'max_parameter': max_param,
             'timestamp_data': timestamp_data}
 
 
-def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir='analysis_plots', combine_timestamps=False, x_external=None, y_external=None, labels_external=None, add_point_labels=False):
+def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', n_average=100, save_plot=False, save_dir=None, combine_timestamps=False, x_external=None, y_external=None, labels_external=None, add_point_labels=False):
     """
     Plot equilibrated current vs parameter for multiple timestamps.
 
@@ -1227,7 +1618,7 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
                    - 'field_params:KEY': Specific field parameter (e.g., 'field_params:amplitude')
         n_average: Number of final timesteps to average (default 100)
         save_plot: Whether to save plot (default False)
-        save_dir: Directory for plots
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
         combine_timestamps: If True, combine all timestamps into single curve (default False)
         x_external: Optional external x-values for comparison. Can be:
                    - Single array: plots one external dataset
@@ -1365,30 +1756,56 @@ def plot_equilibrated_current_vs_parameter(timestamps, parameter='temperature', 
 
     ax.axvline(max_param, color='gray', linestyle=':', linewidth=2, alpha=0.7,
               label=f'Max at {parameter.replace("_", " ")}={max_param:.3f}')
-    ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=12)
-    ax.set_ylabel(r'Equilibrated Current $|J|$', fontsize=12)
-    ax.set_title(f'Equilibrated Current vs {parameter.replace("_", " ").title()}' + '\n' +
-                f'Max $|J|$ = {max_current:.4f} at {parameter.replace("_", " ")} = {max_param:.3f}',
-                fontsize=12)
+    # Set labels based on parameter type
+    if parameter == 'temperature':
+        ax.set_xlabel(r'$T / T_c$', fontsize=13)
+        ax.set_ylabel(r'$|J| / J_0$', fontsize=13)
+        ax.set_title(f'Equilibrated Current vs Temperature', fontsize=14)
+    elif parameter == 'vector_potential':
+        ax.set_xlabel(r'$A / A_0$', fontsize=13)
+        ax.set_ylabel(r'$|J| / J_0$', fontsize=13)
+        ax.set_title(f'Equilibrated Current vs Vector Potential', fontsize=14)
+    else:
+        ax.set_xlabel(parameter.replace('_', ' ').title(), fontsize=13)
+        ax.set_ylabel(r'$|J| / J_0$', fontsize=13)
+        ax.set_title(f'Equilibrated Current vs {parameter.replace("_", " ").title()}', fontsize=14)
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'current_vs_{parameter}.png'), dpi=150, bbox_inches='tight')
 
-    plt.show()
+        filename = os.path.join(save_dir, f'current_vs_{parameter}.png')
+
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamps[0]) if timestamps else 'multiple',
+            plot_generating_method='plot_equilibrated_current_vs_parameter',
+            additional_information=f'parameter={parameter}',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
 
     return {'parameter_values': all_parameter_values, 'current_means': all_current_means,
             'current_errors': all_current_errors, 'max_current': max_current, 'max_parameter': max_param,
             'timestamp_data': timestamp_data}
 
 
-# ============================================================================
-# Internal Plotting Functions
-# ============================================================================
+#* ============================================================================
+#* INTERNAL PLOTTING HELPERS (called by main functions)
+#* ============================================================================
 
 def _plot_normalization(totals, gf_type, time_grid, save_plot, save_dir, timestamp):
     """Plot normalization check for gr or gk."""

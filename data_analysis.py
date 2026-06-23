@@ -68,7 +68,7 @@ def load_simulation_data(timestamp, job_index, running_machine='laptop'):
     """
     input_kwargs, save_data = load_job_data(timestamp, job_index, running_machine)
 
-    #* Extract normalization constants
+    #* Extract system parameters
     T_c = input_kwargs['system_parameters']['critical_temperature']
     gaps = save_data['gaps']
     gap_eq = np.abs(gaps[0])  # Equilibrium gap before driving
@@ -86,6 +86,7 @@ def load_simulation_data(timestamp, job_index, running_machine='laptop'):
     if J_0 < 1e-12:
         J_0 = 1.0
 
+    J_0 = 1.0
     #* Vector potential normalization: max value
     A_0 = np.max(np.abs(vector_potentials)) if len(vector_potentials) > 0 else 1.0
     if A_0 < 1e-12:
@@ -146,6 +147,171 @@ def _get_grid_parameters(save_data, input_kwargs):
     return grid_params
 
 
+def print_all_parameters(timestamp, job_index=0, running_machine='laptop', show_derived=True):
+    """
+    Print all simulation parameters in a nicely formatted way.
+
+    Displays input parameters, derived quantities, and state information
+    in a hierarchical, easy-to-read format.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_index: Job index to load (default 0)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        show_derived: If True, also compute and show derived quantities (default True)
+
+    Example:
+        print_all_parameters('20240615_143022', job_index=0)
+    """
+    # Load data
+    input_kwargs, save_data = load_job_data(timestamp, job_index, running_machine=running_machine)
+
+    # Compute dt from state
+    state = save_data.get('final_state', None)
+    dt_computed = None
+    if state is not None:
+        if hasattr(state, 'dt') and state.dt is not None:
+            dt_computed = state.dt
+        else:
+            time_sampling = state.gr.data.shape[-1]
+            T_max = state.T_max
+            dt_computed = T_max / (time_sampling - 1)
+
+    # Print header
+    print("\n" + "="*80)
+    print(f"SIMULATION PARAMETERS")
+    print(f"Timestamp: {timestamp}")
+    print(f"Job Index: {job_index}")
+    print("="*80)
+
+    # Helper function to print nested dictionaries
+    def print_dict(d, indent=0, section_name=None):
+        """Recursively print dictionary with proper indentation."""
+        if section_name:
+            print("\n" + " "*indent + f"{'─'*60}")
+            print(" "*indent + f"║ {section_name}")
+            print(" "*indent + f"{'─'*60}")
+
+        for key, value in d.items():
+            if isinstance(value, dict):
+                print(" "*indent + f"  {key}:")
+                print_dict(value, indent + 4)
+            elif isinstance(value, (list, tuple, np.ndarray)):
+                if isinstance(value, np.ndarray):
+                    if value.size <= 10:
+                        # Show small arrays in full
+                        print(" "*indent + f"  {key:30s} = {value}")
+                    else:
+                        # Summarize large arrays
+                        print(" "*indent + f"  {key:30s} = array(shape={value.shape}, dtype={value.dtype})")
+                        if value.ndim == 1:
+                            print(" "*indent + f"  {' '*30}   range=[{np.min(value):.4g}, {np.max(value):.4g}]")
+                else:
+                    if len(value) <= 5:
+                        print(" "*indent + f"  {key:30s} = {value}")
+                    else:
+                        print(" "*indent + f"  {key:30s} = {type(value).__name__}(length={len(value)})")
+            elif isinstance(value, (int, float, complex, bool, str, type(None))):
+                # Format numbers nicely
+                if isinstance(value, float):
+                    if abs(value) < 1e-3 or abs(value) > 1e4:
+                        print(" "*indent + f"  {key:30s} = {value:.4e}")
+                    else:
+                        print(" "*indent + f"  {key:30s} = {value:.6f}")
+                elif isinstance(value, complex):
+                    print(" "*indent + f"  {key:30s} = {value:.4e}")
+                else:
+                    print(" "*indent + f"  {key:30s} = {value}")
+            else:
+                # Unknown type
+                print(" "*indent + f"  {key:30s} = {value} (type: {type(value).__name__})")
+
+    # Print all input_kwargs sections
+    for key, value in input_kwargs.items():
+        if isinstance(value, dict):
+            # Add dt to grid_parameters if available
+            if key == 'grid_parameters' and dt_computed is not None:
+                # Create a copy with dt added
+                value_with_dt = value.copy()
+                value_with_dt['dt'] = dt_computed
+                print_dict(value_with_dt, indent=2, section_name=key.replace('_', ' ').upper())
+            else:
+                print_dict(value, indent=2, section_name=key.replace('_', ' ').upper())
+        else:
+            # Top-level non-dict parameters
+            if key not in ['system_parameters', 'grid_parameters', 'optimization_parameters',
+                          'sigma_scatterings', 'field_params']:
+                if isinstance(value, float):
+                    if abs(value) < 1e-3 or abs(value) > 1e4:
+                        print(f"  {key:30s} = {value:.4e}")
+                    else:
+                        print(f"  {key:30s} = {value:.6f}")
+                else:
+                    print(f"  {key:30s} = {value}")
+
+    # Print derived quantities if requested
+    if show_derived:
+        print("\n" + "─"*80)
+        print("║ DERIVED QUANTITIES")
+        print("─"*80)
+
+        state = save_data.get('final_state', None)
+
+        if state is not None:
+            # Compute dt
+            if hasattr(state, 'dt') and state.dt is not None:
+                dt = state.dt
+            else:
+                time_sampling = state.gr.data.shape[-1]
+                dt = state.T_max / (time_sampling - 1)
+
+            print(f"  {'Time step (dt)':30s} = {dt:.6e}")
+            print(f"  {'State shape':30s} = {state.gr.data.shape}")
+            print(f"  {'Number of timesteps':30s} = {state.gr.data.shape[-1]}")
+
+            # BCS ratio
+            T_c = input_kwargs['system_parameters']['critical_temperature']
+            gaps = save_data.get('gaps', None)
+            if gaps is not None:
+                gap_initial = np.abs(gaps[0])
+                gap_final = np.abs(gaps[-1])
+                print(f"  {'Initial gap / T_c':30s} = {gap_initial / T_c:.6f}")
+                print(f"  {'Final gap / T_c':30s} = {gap_final / T_c:.6f}")
+                print(f"  {'Gap change':30s} = {(gap_final - gap_initial) / gap_initial * 100:.2f}%")
+
+            # Currents
+            currents = save_data.get('currents', None)
+            if currents is not None and len(currents) > 0:
+                current_initial = currents[0]
+                current_final = currents[-1]
+                print(f"  {'Initial current':30s} = {current_initial:.6e}")
+                print(f"  {'Final current':30s} = {current_final:.6e}")
+                if np.abs(current_initial) > 1e-12:
+                    print(f"  {'Current change':30s} = {(current_final - current_initial) / current_initial * 100:.2f}%")
+
+            # Vector potential
+            vector_potentials = save_data.get('vector_potentials', None)
+            if vector_potentials is not None and len(vector_potentials) > 0:
+                A_max = np.max(np.abs(vector_potentials))
+                print(f"  {'Max vector potential':30s} = {A_max:.6e}")
+
+        # Evolution time info
+        times = save_data.get('times', None)
+        if times is not None:
+            print(f"  {'Evolution duration':30s} = {times[-1] - times[0]:.6f}")
+            print(f"  {'Number of evolution steps':30s} = {len(times)}")
+
+        # Field type
+        field_type = input_kwargs.get('field_type', None)
+        if field_type is not None:
+            print(f"  {'Field type':30s} = {field_type}")
+
+    # Print footer
+    print("\n" + "="*80)
+    print(f"Parameter summary complete")
+    print("="*80 + "\n")
+
+
 #* ============================================================================
 #* PHYSICS CHECKS: Normalization & Fluctuation-Dissipation Theorem
 #* ============================================================================
@@ -171,9 +337,10 @@ def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analys
     evolution = UsadelKeldyshEvolution(grid_params, system_params)
     evolution.get_thermal_occupation(system_params['temperature'])
     evolution.get_thermal_integral(system_params['temperature'])
+    evolution.get_thermal_sum(system_params['temperature'])
 
     gr_errors, gr_totals = state.check_gr_normalization(t1_idx=-1)
-    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, evolution.thermal_dist, evolution.thermal_integral)
+    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, evolution.thermal_dist, evolution.thermal_integral, thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right)
 
     # Compute max error per Pauli channel from totals
     # gr_totals and gk_totals have shape (4, N_t) for 4 Pauli components
@@ -274,8 +441,9 @@ def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
     evolution = UsadelKeldyshEvolution(grid_params, system_params)
     evolution.get_thermal_occupation(system_params['temperature'])
     evolution.get_thermal_integral(system_params['temperature'])
+    evolution.get_thermal_sum(system_params['temperature'])
 
-    gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(evolution.thermal_dist, evolution.thermal_integral, time_index=-1)
+    gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(evolution.thermal_dist, evolution.thermal_integral, time_index=-1, thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right)
 
     # Compute max error per Pauli channel
     max_errors_per_channel = np.zeros(4)
@@ -312,7 +480,6 @@ def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
 
     return {'max_error': max_errors_per_channel, 'gk_actual': gk_actual_row, 'gk_fdt': gk_fdt_row, 'error': error_row}
 
-
 def check_time_translational_invariance(timestamp, job_index, num_rows=10, threshold=1e-8, save_plot=False, save_dir='analysis_plots'):
     """
     Check time-translation invariance for equilibrium state.
@@ -329,6 +496,7 @@ def check_time_translational_invariance(timestamp, job_index, num_rows=10, thres
         dict: {'max_diff_gr': array, 'max_diff_gk': array, 'passed': bool, 'threshold': float}
             Returns None if state has insufficient time history
     """
+
     input_kwargs, save_data = load_job_data(timestamp, job_index)
     state = save_data['final_state']
     n_times = state.gr.data.shape[2]
@@ -350,87 +518,6 @@ def check_time_translational_invariance(timestamp, job_index, num_rows=10, thres
     _plot_time_translation(state.gr, state.gk, time_grid, num_rows, threshold, save_plot, save_dir, timestamp)
 
     return {'max_diff_gr': max_diffs_gr, 'max_diff_gk': max_diffs_gk, 'passed': passed, 'threshold': threshold}
-
-
-def check_state_evolution(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
-    """
-    Compare state evolution between initial (t=0, index 0) and final (t=-1, index -1) times.
-
-    Extracts rows at earliest and latest times for both g^R and g^K, then computes
-    differences across all 4 Pauli components to show how much the state has evolved.
-
-    Note: Returns None if state has only one timestep (saved with save_full_state=False).
-
-    Args:
-        timestamp: Timestamp to analyze
-        job_index: Job index
-        save_plot: Whether to save plots (default False)
-        save_dir: Directory for plots
-
-    Returns:
-        dict: {
-            'gr_max_diff': array (4,) - max difference per Pauli component for g^R
-            'gk_max_diff': array (4,) - max difference per Pauli component for g^K
-            'gr_initial': NambuKeldyshTensor - g^R at earliest time
-            'gr_final': NambuKeldyshTensor - g^R at latest time
-            'gk_initial': NambuKeldyshTensor - g^K at earliest time
-            'gk_final': NambuKeldyshTensor - g^K at latest time
-        }
-    """
-    input_kwargs, save_data = load_job_data(timestamp, job_index)
-    state = save_data['final_state']
-    n_times = state.gr.data.shape[2]
-
-    # Check if state has enough time history
-    if n_times < 2:
-        print(f"Warning: State only has {n_times} timestep. State evolution check requires multiple timesteps.")
-        print("This state was likely saved with save_full_state=False. Skipping check.")
-        return None
-
-    time_grid = np.linspace(-state.T_max, 0, n_times)
-
-    # Extract rows at initial (index 0) and final (index -1) times
-    gr_initial = state.gr[0, :]  # t = -T_max (earliest)
-    gr_final = state.gr[-1, :]   # t = 0 (latest)
-    gk_initial = state.gk[0, :]
-    gk_final = state.gk[-1, :]
-
-    # Compute differences for each Pauli component
-    gr_max_diff = np.zeros(4)
-    gk_max_diff = np.zeros(4)
-
-    for pauli_idx in range(4):
-        # g^R differences
-        gr_init_pauli = gr_initial.trace(pauli_idx) / 2
-        gr_final_pauli = gr_final.trace(pauli_idx) / 2
-        if gr_init_pauli.ndim == 2:
-            gr_init_pauli = gr_init_pauli[0, :]
-            gr_final_pauli = gr_final_pauli[0, :]
-        gr_diff = np.abs(gr_final_pauli - gr_init_pauli)
-        gr_max_diff[pauli_idx] = np.max(gr_diff)
-
-        # g^K differences
-        gk_init_pauli = gk_initial.trace(pauli_idx) / 2
-        gk_final_pauli = gk_final.trace(pauli_idx) / 2
-        if gk_init_pauli.ndim == 2:
-            gk_init_pauli = gk_init_pauli[0, :]
-            gk_final_pauli = gk_final_pauli[0, :]
-        gk_diff = np.abs(gk_final_pauli - gk_init_pauli)
-        gk_max_diff[pauli_idx] = np.max(gk_diff)
-
-    # Plot comparison
-    _plot_state_evolution(gr_initial, gr_final, gk_initial, gk_final,
-                         time_grid, save_plot, save_dir, timestamp)
-
-    return {
-        'gr_max_diff': gr_max_diff,
-        'gk_max_diff': gk_max_diff,
-        'gr_initial': gr_initial,
-        'gr_final': gr_final,
-        'gk_initial': gk_initial,
-        'gk_final': gk_final
-    }
-
 
 def _compute_time_translation_diffs(tensor, num_rows):
     """
@@ -464,256 +551,6 @@ def _compute_time_translation_diffs(tensor, num_rows):
             max_diff = max(max_diff, diff)
         max_diffs.append(max_diff)
     return max_diffs
-
-
-#* ============================================================================
-#* FOURIER TRANSFORMS: Time → Frequency domain
-#* ============================================================================
-
-def partial_fourier_transform(g_two_time, time_grid):
-    """
-    Transform Green's function from two-time g(t,t') to mixed Wigner g(ε,t).
-
-    Modified Fourier transform to avoid interpolation of midpoints:
-        ĝ(ε; t) = ∫ dτ e^{i(2ε)τ} ĝ(t, t-τ)
-
-    where τ = t - t'. This avoids the τ/2 midpoint problem by working
-    directly with grid points and modifying the Fourier kernel.
-
-    For each fixed t = t_i on the grid:
-    - Extract g(t_i, t_j) for all j
-    - Define τ_j = t_i - t_j (relative time)
-    - FFT with kernel e^{i(2ε)τ} (factor of 2 in exponent)
-    - Energy grid scaled accordingly: ε_grid = 2 × (standard FFT frequencies)
-
-    Args:
-        g_two_time: NambuKeldyshTensor with shape (2, 2, N_t, N_t)
-                    representing g(t_i, t_j) in two-time form
-        time_grid: 1D array of time points [t_0, ..., t_{N_t-1}]
-                   typically from evolution.time_grid or np.linspace(-T_max, 0, N_t)
-
-    Returns:
-        dict: {
-            'energy_grid': 1D array of energy points ε (N_t points)
-            'com_time_grid': 1D array of times t (N_t points, same as input)
-            'g_mixed': NambuKeldyshTensor with shape (2, 2, N_ε, N_t)
-                       representing g(ε_n, t_i) in mixed Wigner representation
-        }
-
-    Example:
-        >>> # Load data
-        >>> input_kwargs, save_data = load_job_data(timestamp, job_index)
-        >>> state = save_data['final_state']
-        >>> evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
-        >>> time_grid = evolution.time_grid
-        >>>
-        >>> # Transform retarded Green's function
-        >>> result_gr = partial_fourier_transform(state.gr, time_grid)
-        >>> energy_grid = result_gr['energy_grid']
-        >>> g_mixed_gr = result_gr['g_mixed']
-        >>>
-        >>> # Transform Keldysh Green's function
-        >>> result_gk = partial_fourier_transform(state.gk, time_grid)
-    """
-    # Setup
-    N_t = len(time_grid)
-    dt = (time_grid[-1] - time_grid[0]) / (N_t - 1)
-
-    # Pauli matrices for reconstruction
-    pauli = {
-        0: np.array([[1, 0], [0, 1]]),      # τ₀ (identity)
-        1: np.array([[0, 1], [1, 0]]),      # τ₁ (σ_x)
-        2: np.array([[0, -1j], [1j, 0]]),   # τ₂ (σ_y)
-        3: np.array([[1, 0], [0, -1]])      # τ₃ (σ_z)
-    }
-
-    # Initialize result array: (2, 2, N_ε, N_t)
-    result_data = np.zeros((2, 2, N_t, N_t), dtype=complex)
-
-    # Process each Pauli component
-    for pauli_idx in range(4):
-        # Extract Pauli component
-        g_pauli = g_two_time.trace(pauli_idx) / 2.0
-
-        # Handle both 2D and higher-dimensional cases
-        if g_pauli.ndim == 2:
-            g_pauli_data = g_pauli
-        else:
-            # If there are extra dimensions, take first element
-            g_pauli_data = g_pauli[0, :]
-
-        # For each fixed t = t_i, extract g(t_i, t_j) and FFT
-        g_energy = np.zeros((N_t, N_t), dtype=complex)
-
-        for i_t in range(N_t):
-            # Extract row: g(t_i, t_j) for all j
-            # This gives g as function of t_j for fixed t_i
-            g_row = g_pauli_data[i_t, :]
-
-            # Relative time: τ_j = t_i - t_j
-            # We need to reorder so τ is uniformly spaced
-            # Since t_j = time_grid, τ_j = t_i - time_grid
-            # For FFT, we want τ in ascending order
-
-            # Reverse the row so τ goes from negative to positive
-            # τ ranges from (t_i - t_{N_t-1}) to (t_i - t_0)
-            g_tau = g_row[::-1]  # Now indexed by increasing τ
-
-            # FFT with modified kernel e^{i(2ε)τ}
-            # Standard FFT gives e^{iωτ}, we want e^{i(2ε)τ}
-            # So energy will be: ε = ω/2
-            #
-            # Use ifft for positive exponent convention
-            g_fft = np.fft.ifft(g_tau) * N_t  # Remove 1/N normalization
-
-            # Normalize: multiply by dτ to approximate integral
-            g_fft *= dt
-
-            # Shift to match energy_grid ordering
-            g_energy[i_t, :] = np.fft.fftshift(g_fft)
-
-        # Add Pauli structure to result
-        # Transpose to (N_ε, N_t) for proper indexing
-        g_transposed = g_energy.T
-
-        # Add Pauli contribution
-        for i in range(2):
-            for j in range(2):
-                result_data[i, j, :, :] += pauli[pauli_idx][i, j] * g_transposed
-
-    # Create energy grid
-    # Standard FFT frequencies
-    freq = np.fft.fftfreq(N_t, d=dt)  # Frequency in 1/time units
-    # Convert to angular frequency: ω = 2πf
-    energy_grid = 2 * np.pi * freq
-    energy_grid = np.fft.fftshift(energy_grid)  # Shift to center
-
-    # Create NambuKeldyshTensor
-    g_mixed = NambuKeldyshTensor(result_data)
-
-    # Return result
-    return {
-        'energy_grid': energy_grid,
-        'com_time_grid': time_grid,
-        'g_mixed': g_mixed
-    }
-
-
-#* ============================================================================
-#* TENSOR COMPARISON UTILITIES
-#* ============================================================================
-
-def compare_tensor_rows(tensor1, tensor2, row_index=-1):
-    """
-    Compare rows of two NambuKeldyshTensor objects.
-
-    Args:
-        tensor1: First NambuKeldyshTensor to compare
-        tensor2: Second NambuKeldyshTensor to compare
-        row_index: Row index to extract (default -1 for last row)
-
-    Returns:
-        dict: Statistics for each Pauli component with structure:
-              {
-                  'pauli_0': {'real': {...}, 'imag': {...}},
-                  'pauli_1': {'real': {...}, 'imag': {...}},
-                  'pauli_2': {'real': {...}, 'imag': {...}},
-                  'pauli_3': {'real': {...}, 'imag': {...}}
-              }
-              where each {...} contains:
-                  - max_diff: Maximum absolute difference
-                  - max_diff_index: Index of maximum difference
-                  - mean_diff: Mean absolute difference
-                  - rms_diff: RMS difference
-    """
-    row1 = tensor1[row_index, :]
-    row2 = tensor2[row_index, :]
-
-    results = {}
-    pauli_names = ['pauli_0', 'pauli_1', 'pauli_2', 'pauli_3']
-
-    for pauli_idx in range(4):
-        comp1 = row1.trace(pauli_index=pauli_idx) / 2
-        comp2 = row2.trace(pauli_index=pauli_idx) / 2
-
-        if comp1.ndim == 2:
-            comp1 = comp1[0, :]
-            comp2 = comp2[0, :]
-
-        real_diff = np.abs(np.real(comp1) - np.real(comp2))
-        max_diff_idx_real = np.argmax(real_diff)
-        real_stats = {'max_diff': real_diff[max_diff_idx_real], 'max_diff_index': max_diff_idx_real, 'mean_diff': np.mean(real_diff), 'rms_diff': np.sqrt(np.mean(real_diff**2))}
-
-        imag_diff = np.abs(np.imag(comp1) - np.imag(comp2))
-        max_diff_idx_imag = np.argmax(imag_diff)
-        imag_stats = {'max_diff': imag_diff[max_diff_idx_imag], 'max_diff_index': max_diff_idx_imag, 'mean_diff': np.mean(imag_diff), 'rms_diff': np.sqrt(np.mean(imag_diff**2))}
-
-        results[pauli_names[pauli_idx]] = {'real': real_stats, 'imag': imag_stats}
-
-    return results
-
-
-def plot_tensor_comparison(tensor1, tensor2, x_values, title, row_index=-1, save_plot=False, save_dir='analysis_plots'):
-    """
-    Plot comparison of two NambuKeldyshTensor objects.
-
-    Creates a 2x2 grid showing all 4 Pauli components with deviation markers.
-
-    Args:
-        tensor1: First NambuKeldyshTensor to plot
-        tensor2: Second NambuKeldyshTensor to plot
-        x_values: Array of x-values for plotting
-        title: Plot title
-        row_index: Row index to extract (default -1 for last row)
-        save_plot: Whether to save plot (default False)
-        save_dir: Directory for plots
-    """
-    row1 = tensor1[row_index, :]
-    row2 = tensor2[row_index, :]
-
-    pauli_labels = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
-
-    for pauli_idx in range(4):
-        comp1 = row1.trace(pauli_index=pauli_idx) / 2
-        comp2 = row2.trace(pauli_index=pauli_idx) / 2
-
-        if comp1.ndim == 2:
-            comp1 = comp1[0, :]
-            comp2 = comp2[0, :]
-
-        ax = axes.flat[pauli_idx]
-
-        ax.plot(x_values, np.real(comp1), 'b-', linewidth=2, label='Tensor 1 (Real)', alpha=0.8)
-        ax.plot(x_values, np.imag(comp1), 'b--', linewidth=2, label='Tensor 1 (Imag)', alpha=0.8)
-        ax.plot(x_values, np.real(comp2), 'r-', linewidth=2, label='Tensor 2 (Real)', alpha=0.8)
-        ax.plot(x_values, np.imag(comp2), 'r--', linewidth=2, label='Tensor 2 (Imag)', alpha=0.8)
-
-        real_diff = np.abs(np.real(comp1) - np.real(comp2))
-        imag_diff = np.abs(np.imag(comp1) - np.imag(comp2))
-        max_real_idx = np.argmax(real_diff)
-        max_imag_idx = np.argmax(imag_diff)
-        max_idx = max_real_idx if real_diff[max_real_idx] > imag_diff[max_imag_idx] else max_imag_idx
-        max_x = x_values[max_idx]
-
-        ax.axvline(max_x, color='gray', linestyle=':', linewidth=1.5, alpha=0.6, label='Max deviation')
-
-        ax.set_xlabel(r"$t'$", fontsize=10)
-        ax.set_ylabel(f'{pauli_labels[pauli_idx]}', fontsize=10)
-        ax.set_title(f'{pauli_labels[pauli_idx]}', fontsize=11)
-        ax.legend(fontsize=8, loc='best')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim([x_values[0], x_values[-1]])
-
-    plt.tight_layout()
-
-    if save_plot:
-        os.makedirs(save_dir, exist_ok=True)
-        filename = title.replace(' ', '_').lower()
-        plt.savefig(os.path.join(save_dir, f'{filename}.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
 
 
 #* ============================================================================
@@ -796,6 +633,591 @@ def plot_gap(timestamp, job_index=None, save_plot=False, save_dir=None):
         plt.close()
     else:
         plt.show()
+
+
+def compare_gap_across_timestamps(timestamps, sweep_parameter, label_parameter='dt',
+                                  label_format=None, normalize_gap=True,
+                                  gap_type='final', job_range=None,
+                                  save_plot=False, save_dir=None, running_machine='laptop'):
+    """
+    Compare gap vs sweep parameter across multiple timestamps with customizable labels.
+
+    Each timestamp should contain a parameter sweep (multiple jobs with varying parameter).
+    Plots gap vs the sweep parameter for each timestamp, with curves labeled by
+    a different parameter (e.g., dt, eta).
+
+    Args:
+        timestamps: List of timestamp folder names to compare (each should be a parameter sweep)
+        sweep_parameter: Parameter being swept in each timestamp. Can be:
+                        - String path like 'system_parameters.temperature' or 'field_params.amplitude'
+                        - Callable that takes (input_kwargs, save_data) and returns sweep value
+        label_parameter: Parameter to use for labeling curves. Can be:
+                        - 'dt': Compute dt from grid parameters
+                        - String path like 'system_parameters.eta'
+                        - Callable that takes (input_kwargs, save_data) and returns label string
+                        - None: use timestamp as label
+        label_format: Format string for labels (e.g., 'dt = {:.4f}'). If None, uses default.
+        normalize_gap: If True, normalize gap by T_c (default True)
+        gap_type: Which gap to extract. Options:
+                 - 'final': Final gap value (last timestep)
+                 - 'equilibrium': Equilibrium gap (first timestep, for equilibrium sweeps)
+                 - 'mean': Mean gap over all timesteps
+                 - 'max': Maximum gap
+                 - 'min': Minimum gap
+        job_range: Range of jobs to load from each timestamp. Can be:
+                  - None: load all jobs
+                  - tuple (start, end): load jobs from start to end (exclusive)
+                  - int: load first N jobs
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+
+    Returns:
+        dict: {
+            'fig': matplotlib figure,
+            'ax': matplotlib axis,
+            'data': list of dicts with sweep data for each timestamp
+        }
+
+    Example:
+        # Compare temperature sweeps with different dt values
+        compare_gap_across_timestamps(
+            timestamps=['20240615_143022', '20240615_150033', '20240615_152145'],
+            sweep_parameter='system_parameters.temperature',
+            label_parameter='dt',
+            label_format='$\\Delta t = {:.4f}$'
+        )
+
+        # Compare vector potential sweeps labeled by eta
+        compare_gap_across_timestamps(
+            timestamps=['20240615_143022', '20240615_150033'],
+            sweep_parameter='field_params.amplitude',
+            label_parameter='system_parameters.eta',
+            label_format='$\\eta = {:.3f}$',
+            gap_type='equilibrium'
+        )
+
+        # Custom sweep parameter extraction
+        def get_A_value(kwargs, data):
+            # Extract vector potential from data
+            return np.max(np.abs(data['vector_potentials']))
+
+        compare_gap_across_timestamps(
+            timestamps=['20240615_143022', '20240615_150033'],
+            sweep_parameter=get_A_value,
+            label_parameter='dt'
+        )
+    """
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+    # Store loaded data for return
+    loaded_data = []
+
+    # Define colormap for multiple curves
+    from matplotlib import cm
+    colors = cm.get_cmap('tab10', len(timestamps))
+
+    print(f"\n{'='*70}")
+    print(f"Comparing gap sweeps across {len(timestamps)} timestamps")
+    print(f"{'='*70}")
+
+    for idx, timestamp in enumerate(timestamps):
+        print(f"\nLoading timestamp {idx+1}/{len(timestamps)}: {timestamp}")
+
+        # Determine how many jobs to load
+        lines = io.read_contents_readable_file(timestamp)
+        total_jobs = io.recover_job_no(lines)
+
+        if job_range is None:
+            jobs_to_load = range(total_jobs)
+        elif isinstance(job_range, tuple):
+            jobs_to_load = range(job_range[0], min(job_range[1], total_jobs))
+        elif isinstance(job_range, int):
+            jobs_to_load = range(min(job_range, total_jobs))
+        else:
+            raise ValueError("job_range must be None, tuple, or int")
+
+        print(f"  Loading {len(jobs_to_load)} jobs (total available: {total_jobs})")
+
+        # Arrays to store sweep data
+        sweep_values = []
+        gap_values = []
+
+        # Load all jobs in sweep
+        for job_idx in jobs_to_load:
+            input_kwargs, save_data = load_job_data(timestamp, job_idx, running_machine=running_machine)
+
+            # Extract sweep parameter value
+            if callable(sweep_parameter):
+                sweep_val = sweep_parameter(input_kwargs, save_data)
+            elif isinstance(sweep_parameter, str):
+                keys = sweep_parameter.split('.')
+                sweep_val = input_kwargs
+                try:
+                    for key in keys:
+                        sweep_val = sweep_val[key]
+                except (KeyError, TypeError) as e:
+                    print(f"  Warning: Could not extract '{sweep_parameter}' from job {job_idx}")
+                    print(f"  Error: {e}")
+                    continue
+            else:
+                raise ValueError("sweep_parameter must be callable or string path")
+
+            # Extract gap based on gap_type
+            gaps = save_data['gaps']
+            gap_magnitude = np.abs(gaps)
+
+            if gap_type == 'final':
+                gap_val = gap_magnitude[-1]
+            elif gap_type == 'equilibrium':
+                gap_val = gap_magnitude[0]
+            elif gap_type == 'mean':
+                gap_val = np.mean(gap_magnitude)
+            elif gap_type == 'max':
+                gap_val = np.max(gap_magnitude)
+            elif gap_type == 'min':
+                gap_val = np.min(gap_magnitude)
+            else:
+                raise ValueError(f"Unknown gap_type: '{gap_type}'")
+
+            sweep_values.append(sweep_val)
+            gap_values.append(gap_val)
+
+        # Convert to arrays and sort by sweep parameter
+        sweep_values = np.array(sweep_values)
+        gap_values = np.array(gap_values)
+        sort_idx = np.argsort(sweep_values)
+        sweep_values = sweep_values[sort_idx]
+        gap_values = gap_values[sort_idx]
+
+        # Get normalization constant from first job
+        first_kwargs, _ = load_job_data(timestamp, jobs_to_load[0], running_machine=running_machine)
+        T_c = first_kwargs['system_parameters']['critical_temperature']
+
+        # Normalize gap if requested
+        if normalize_gap:
+            gap_values = gap_values / T_c
+            ylabel = r'$|\Delta| / T_c$'
+        else:
+            ylabel = r'$|\Delta|$'
+
+        # Generate label for this curve
+        if label_parameter is None:
+            label = timestamp
+        elif label_parameter == 'dt':
+            # Compute dt from state
+            _, first_save_data = load_job_data(timestamp, jobs_to_load[0], running_machine=running_machine)
+            state = first_save_data['final_state']
+            if hasattr(state, 'dt') and state.dt is not None:
+                dt_val = state.dt
+            else:
+                # Compute from grid parameters
+                time_sampling = state.gr.data.shape[-1]
+                dt_val = state.T_max / (time_sampling - 1)
+
+            if label_format is None:
+                label = f'$\\Delta t = {dt_val:.4g}$'
+            else:
+                label = label_format.format(dt_val)
+
+        elif callable(label_parameter):
+            label = label_parameter(first_kwargs, first_save_data)
+        elif isinstance(label_parameter, str):
+            keys = label_parameter.split('.')
+            value = first_kwargs
+            try:
+                for key in keys:
+                    value = value[key]
+
+                if label_format is None:
+                    if isinstance(value, float):
+                        label = f'{label_parameter} = {value:.4g}'
+                    else:
+                        label = f'{label_parameter} = {value}'
+                else:
+                    label = label_format.format(value)
+
+            except (KeyError, TypeError) as e:
+                print(f"  Warning: Could not extract '{label_parameter}'. Using timestamp as label.")
+                print(f"  Error: {e}")
+                label = timestamp
+        else:
+            raise ValueError("label_parameter must be None, 'dt', callable, or string path")
+
+        print(f"  Label: {label}")
+        print(f"  Sweep parameter range: [{np.min(sweep_values):.6f}, {np.max(sweep_values):.6f}]")
+        print(f"  Gap range: [{np.min(gap_values):.6f}, {np.max(gap_values):.6f}]")
+
+        # Store data
+        loaded_data.append({
+            'timestamp': timestamp,
+            'sweep_values': sweep_values,
+            'gap_values': gap_values,
+            'label': label,
+            'T_c': T_c
+        })
+
+        # Plot
+        ax.plot(sweep_values, gap_values, 'o-', linewidth=2.5, markersize=6,
+               label=label, alpha=0.8, color=colors(idx))
+
+    # Configure plot
+    # Determine xlabel from sweep_parameter
+    if isinstance(sweep_parameter, str):
+        if 'temperature' in sweep_parameter.lower():
+            xlabel = r'Temperature ($T_c$)'
+        elif 'amplitude' in sweep_parameter.lower() or 'vector' in sweep_parameter.lower():
+            xlabel = r'Vector Potential $A$'
+        else:
+            # Use parameter name as label
+            param_name = sweep_parameter.split('.')[-1]
+            xlabel = param_name.replace('_', ' ').title()
+    else:
+        xlabel = 'Sweep Parameter'
+
+    ax.set_xlabel(xlabel, fontsize=13)
+    ax.set_ylabel(ylabel, fontsize=13)
+    ax.set_title('Gap comparison across parameter sweeps', fontsize=14)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    print(f"\n{'='*70}")
+    print(f"Plot complete")
+    print(f"{'='*70}\n")
+
+    # Save if requested
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        timestamp_str = f'{timestamps[0]}_to_{timestamps[-1]}' if len(timestamps) > 1 else timestamps[0]
+        filename = os.path.join(save_dir, f'gap_sweep_comparison_{timestamp_str}.png')
+
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=', '.join(timestamps),
+            plot_generating_method='compare_gap_across_timestamps',
+            additional_information=f'{len(timestamps)} sweeps compared',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
+
+    return {
+        'fig': fig,
+        'ax': ax,
+        'data': loaded_data
+    }
+
+
+def compare_fdt_error_across_timestamps(timestamps, job_indices=None, x_parameter='time',
+                                        label_parameter='dt', label_format=None,
+                                        normalize_time=True, pauli_channels='max',
+                                        plot_every=1, save_plot=False, save_dir=None,
+                                        running_machine='laptop'):
+    """
+    Compare FDT error across multiple timestamps with customizable labels.
+
+    Computes FDT error at each available timestep and plots maximum error magnitude
+    vs a specified parameter (time, index, etc.) for multiple simulation runs.
+
+    Args:
+        timestamps: List of timestamp folder names to compare
+        job_indices: Job indices for each timestamp. Can be:
+                    - None: use job 0 for all timestamps
+                    - int: use same job index for all timestamps
+                    - list: one job index per timestamp (must match length of timestamps)
+        x_parameter: What to plot on x-axis. Options:
+                    - 'time': Time array from simulation
+                    - 'index': Timestep index (0, 1, 2, ...)
+                    - 'normalized_time': Time normalized by T_c
+        label_parameter: Parameter from input_kwargs to use for labels. Can be:
+                        - String path like 'dt' or 'system_parameters.eta'
+                        - Callable that takes (input_kwargs, save_data) and returns label string
+                        - None: use timestamp as label
+        label_format: Format string for labels (e.g., 'dt = {:.4f}'). If None, uses default.
+                     Only used if label_parameter is a string path.
+        normalize_time: If True and x_parameter='time', normalize time by T_c (default True)
+        pauli_channels: Which Pauli channels to plot. Options:
+                       - 'max': Maximum error across all 4 channels (default)
+                       - 'all': Plot all 4 channels separately (4 subplots)
+                       - int (0-3): Specific Pauli channel to plot
+                       - list of ints: Multiple specific channels
+        plot_every: Plot every N-th time slice to reduce clutter (default 1)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+
+    Returns:
+        dict: {
+            'fig': matplotlib figure,
+            'ax': matplotlib axis or array of axes,
+            'data': list of dicts with loaded data and FDT errors for each timestamp
+        }
+
+    Example:
+        # Compare FDT errors with different dt values
+        compare_fdt_error_across_timestamps(
+            timestamps=['20240615_143022', '20240615_150033', '20240615_152145'],
+            label_parameter='dt',
+            label_format='$\\Delta t = {:.4f}$',
+            pauli_channels='max'
+        )
+
+        # Plot all Pauli channels separately
+        compare_fdt_error_across_timestamps(
+            timestamps=['20240615_143022', '20240615_150033'],
+            label_parameter='system_parameters.temperature',
+            pauli_channels='all',
+            plot_every=5
+        )
+    """
+    # Handle job_indices argument
+    if job_indices is None:
+        job_indices_list = [0] * len(timestamps)
+    elif isinstance(job_indices, int):
+        job_indices_list = [job_indices] * len(timestamps)
+    elif isinstance(job_indices, list):
+        if len(job_indices) != len(timestamps):
+            raise ValueError(f"job_indices list length ({len(job_indices)}) must match timestamps length ({len(timestamps)})")
+        job_indices_list = job_indices
+    else:
+        raise ValueError("job_indices must be None, int, or list")
+
+    # Parse pauli_channels argument
+    if pauli_channels == 'max':
+        plot_mode = 'max'
+        n_subplots = 1
+        channels_to_plot = None
+    elif pauli_channels == 'all':
+        plot_mode = 'all'
+        n_subplots = 4
+        channels_to_plot = [0, 1, 2, 3]
+    elif isinstance(pauli_channels, int):
+        plot_mode = 'specific'
+        n_subplots = 1
+        channels_to_plot = [pauli_channels]
+    elif isinstance(pauli_channels, list):
+        plot_mode = 'specific'
+        n_subplots = len(pauli_channels)
+        channels_to_plot = pauli_channels
+    else:
+        raise ValueError("pauli_channels must be 'max', 'all', int, or list of ints")
+
+    # Create figure
+    if n_subplots == 1:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+        axes = [ax]
+    else:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        axes = axes.flatten()
+
+    # Store loaded data and errors for return
+    loaded_data = []
+
+    # Define colormap for multiple curves
+    from matplotlib import cm
+    colors = cm.get_cmap('tab10', len(timestamps))
+
+    # Pauli labels
+    pauli_labels = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+
+    print(f"\n{'='*70}")
+    print(f"Comparing FDT errors across {len(timestamps)} timestamps")
+    print(f"{'='*70}")
+
+    for idx, (timestamp, job_idx) in enumerate(zip(timestamps, job_indices_list)):
+        print(f"\nLoading timestamp {idx+1}/{len(timestamps)}: {timestamp} (job {job_idx})")
+
+        # Load data
+        input_kwargs, save_data = load_job_data(timestamp, job_idx, running_machine=running_machine)
+        state = save_data['final_state']
+        system_params = _get_system_parameters(input_kwargs)
+        grid_params = _get_grid_parameters(save_data, input_kwargs)
+
+        # Get normalization constant
+        T_c = system_params['critical_temperature']
+
+        # Check if state has enough time history
+        n_times = state.gr.data.shape[2]
+        if n_times < 2:
+            print(f"  Warning: State only has {n_times} timestep. Cannot compute FDT error sweep.")
+            print(f"  This state was saved with save_full_state=False. Skipping timestamp.")
+            continue
+
+        # Create evolution object for thermal distributions
+        evolution = UsadelKeldyshEvolution(grid_params, system_params)
+        evolution.get_thermal_occupation(system_params['temperature'])
+        evolution.get_thermal_integral(system_params['temperature'])
+        evolution.get_thermal_sum(system_params['temperature'])
+
+        # Compute FDT errors at all time indices
+        time_indices = np.arange(0, n_times, plot_every)
+        fdt_errors = []  # List of arrays with shape (4,) for each time index
+
+        print(f"  Computing FDT errors at {len(time_indices)} time points...")
+
+        for t_idx in time_indices:
+            # Check FDT at this time index
+            _, _, error_row, _ = state.check_fdt(
+                evolution.thermal_dist,
+                evolution.thermal_integral,
+                time_index=t_idx,
+                thermal_sum_left=evolution.thermal_sum_left,
+                thermal_sum_right=evolution.thermal_sum_right
+            )
+
+            # Extract max error per Pauli channel
+            errors_per_channel = np.zeros(4)
+            for pauli_idx in range(4):
+                error_pauli = error_row.trace(pauli_idx) / 2
+                if error_pauli.ndim == 2:
+                    error_pauli = error_pauli[0, :]
+                errors_per_channel[pauli_idx] = np.max(np.abs(error_pauli))
+
+            fdt_errors.append(errors_per_channel)
+
+        fdt_errors = np.array(fdt_errors)  # Shape: (n_time_indices, 4)
+
+        # Determine x-axis data
+        if x_parameter == 'time':
+            times = save_data.get('times', None)
+            if times is None:
+                raise ValueError(f"Timestamp {timestamp}: 'times' not found in save_data. Use x_parameter='index' instead.")
+            times_subset = times[time_indices]
+            if normalize_time:
+                x_data = times_subset * T_c
+                xlabel = r'Time ($T_c^{-1}$)'
+            else:
+                x_data = times_subset
+                xlabel = r'Time'
+        elif x_parameter == 'normalized_time':
+            times = save_data.get('times', None)
+            if times is None:
+                raise ValueError(f"Timestamp {timestamp}: 'times' not found in save_data. Use x_parameter='index' instead.")
+            x_data = times[time_indices] * T_c
+            xlabel = r'Time ($T_c^{-1}$)'
+        elif x_parameter == 'index':
+            x_data = time_indices
+            xlabel = 'Timestep index'
+        else:
+            raise ValueError(f"Unknown x_parameter: '{x_parameter}'. Use 'time', 'normalized_time', or 'index'.")
+
+        # Generate label
+        if label_parameter is None:
+            label = timestamp
+        elif callable(label_parameter):
+            label = label_parameter(input_kwargs, save_data)
+        elif isinstance(label_parameter, str):
+            keys = label_parameter.split('.')
+            value = input_kwargs
+            try:
+                for key in keys:
+                    value = value[key]
+
+                if label_format is None:
+                    if isinstance(value, float):
+                        label = f'{label_parameter} = {value:.4g}'
+                    else:
+                        label = f'{label_parameter} = {value}'
+                else:
+                    label = label_format.format(value)
+
+            except (KeyError, TypeError) as e:
+                print(f"  Warning: Could not extract '{label_parameter}' from input_kwargs. Using timestamp as label.")
+                print(f"  Error: {e}")
+                label = timestamp
+        else:
+            raise ValueError("label_parameter must be None, callable, or string path")
+
+        print(f"  Label: {label}")
+        print(f"  FDT error range (max across channels): [{np.min(np.max(fdt_errors, axis=1)):.4e}, {np.max(np.max(fdt_errors, axis=1)):.4e}]")
+
+        # Store data
+        loaded_data.append({
+            'timestamp': timestamp,
+            'job_index': job_idx,
+            'input_kwargs': input_kwargs,
+            'save_data': save_data,
+            'fdt_errors': fdt_errors,
+            'x_data': x_data,
+            'label': label
+        })
+
+        # Plot based on mode
+        if plot_mode == 'max':
+            # Plot maximum error across all channels
+            max_errors = np.max(fdt_errors, axis=1)
+            axes[0].semilogy(x_data, max_errors, linewidth=2.5, label=label,
+                           alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+        elif plot_mode == 'all' or plot_mode == 'specific':
+            # Plot each channel separately
+            for subplot_idx, pauli_idx in enumerate(channels_to_plot):
+                axes[subplot_idx].semilogy(x_data, fdt_errors[:, pauli_idx],
+                                          linewidth=2.5, label=label, alpha=0.8,
+                                          color=colors(idx), marker='o', markersize=4)
+
+    # Configure plots
+    if plot_mode == 'max':
+        axes[0].set_xlabel(xlabel, fontsize=13)
+        axes[0].set_ylabel(r'Max FDT Error (all $\tau$ channels)', fontsize=13)
+        axes[0].set_title('Maximum FDT Error Comparison', fontsize=14)
+        axes[0].legend(fontsize=10)
+        axes[0].grid(True, alpha=0.3, which='both')
+
+    else:
+        for subplot_idx, pauli_idx in enumerate(channels_to_plot):
+            axes[subplot_idx].set_xlabel(xlabel, fontsize=12)
+            axes[subplot_idx].set_ylabel(f'FDT Error {pauli_labels[pauli_idx]}', fontsize=12)
+            axes[subplot_idx].set_title(f'FDT Error: {pauli_labels[pauli_idx]}', fontsize=13)
+            axes[subplot_idx].legend(fontsize=9)
+            axes[subplot_idx].grid(True, alpha=0.3, which='both')
+
+    plt.tight_layout()
+
+    print(f"\n{'='*70}")
+    print(f"Plot complete")
+    print(f"{'='*70}\n")
+
+    # Save if requested
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        timestamp_str = f'{timestamps[0]}_to_{timestamps[-1]}' if len(timestamps) > 1 else timestamps[0]
+        filename = os.path.join(save_dir, f'fdt_error_comparison_{timestamp_str}.png')
+
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=', '.join(timestamps),
+            plot_generating_method='compare_fdt_error_across_timestamps',
+            additional_information=f'{len(timestamps)} timestamps compared',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
+
+    return {
+        'fig': fig,
+        'ax': axes[0] if n_subplots == 1 else axes,
+        'data': loaded_data
+    }
 
 
 def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, save_dir=None,
@@ -904,7 +1326,7 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
     sigma = np.zeros_like(j_omega, dtype=complex)
     # Filter: need both |A(ω)| > threshold and |ω| > threshold (avoid ω=0)
     mask = (np.abs(A_omega) > threshold) & (np.abs(omega_grid) > threshold)
-    sigma[mask] = -j_omega[mask] / (1j * omega_grid[mask] * A_omega[mask])
+    sigma[mask] = j_omega[mask] / (-1j * omega_grid[mask] * A_omega[mask])
 
     # Find frequency range where A is significant
     omega_indices = np.where(mask)[0]
@@ -1065,7 +1487,6 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
 
     return {'omega_grid': omega_grid, 'sigma': sigma}
 
-
 def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
     """
     Plot current and vector potential vs time in dimensionless units.
@@ -1095,11 +1516,11 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
 
         # Extract normalized quantities
         times_norm = data['times'] * data['T_c']  # t * T_c (dimensionless)
-        current_norm = np.real(data['currents']) / data['J_0']  # J / J_0
+        current_norm = np.real(data['currents'])  # J / J_0
 
         # Vector potential (real part if complex)
         A_values = np.real(data['vector_potentials']) if np.iscomplexobj(data['vector_potentials']) else data['vector_potentials']
-        A_norm = A_values / data['A_0']  # A / A_0
+        A_norm = A_values  # A / A_0
 
         # Store field type from first job
         if field_type is None:
@@ -1157,7 +1578,6 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
         plt.close()
     else:
         plt.show()
-
 
 def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=None,
                               n_average=100, save_plot=False, save_dir=None):
@@ -1293,12 +1713,12 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
         data = load_simulation_data(timestamp, job_idx)
 
         # Extract normalized quantities
-        times_norm = data['times'] * data['T_c']
-        gap_norm = np.abs(data['gaps']) / data['T_c']
-        current_norm = np.real(data['currents']) / data['J_0']
+        times_norm = data['times']  # data['T_c']
+        gap_norm = np.abs(data['gaps']) #/ data['T_c']
+        current_norm = np.real(data['currents']) #/ data['J_0']
 
         # Vector potential (real part if complex)
-        A_values = np.real(data['vector_potentials']) if np.iscomplexobj(data['vector_potentials']) else data['vector_potentials']
+        A_values = np.real(data['vector_potentials']) 
 
         # Store field type from first job
         if field_type is None:
@@ -1330,8 +1750,8 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
             T_c = data['T_c']
             J_0 = data['J_0']
 
-            gap_eq_norm = np.abs(gap_eq_means) / T_c
-            current_eq_norm = np.abs(current_eq_means) / J_0
+            gap_eq_norm = np.abs(gap_eq_means) #/ T_c
+            current_eq_norm = np.abs(current_eq_means) #/ J_0
 
             # Get instantaneous |Q(t)|
             Q_mag = np.abs(data['vector_potentials'])
@@ -1572,7 +1992,7 @@ def plot_equilibrated_gap_vs_parameter(timestamps, parameter='temperature', n_av
         ax.set_title(f'Equilibrated Gap vs {parameter.replace("_", " ").title()}', fontsize=14)
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
-
+    ax.set_ylim([0,2.0])
     plt.tight_layout()
 
     if save_plot:
@@ -2067,7 +2487,6 @@ def _plot_time_translation(gr_tensor, gk_tensor, time_grid, num_rows, threshold,
 
     plt.show()
 
-
 def plot_energy_time_representation(timestamp, job_index, green_function_type='f',
                                      pauli_components=None, plot_every=1, xlim=(-15, 15),
                                      x_external=None, y_external=None, labels_external=None,
@@ -2109,29 +2528,8 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
             'time_indices': array of plotted time indices,
             'data': list of NambuKeldyshTensor objects at each time
         }
-
-    Example:
-        # Plot occupation function f (uses default tau_0 and tau_3 components)
-        plot_energy_time_representation('20260615_143022', 0, green_function_type='f',
-                                       plot_every=5)
-
-        # Plot retarded Green's function (uses default tau_2 and tau_3)
-        plot_energy_time_representation('20260615_143022', 0, green_function_type='gr',
-                                       plot_every=10)
-
-        # Plot with external data comparison (e.g., thermal distribution)
-        energy_ext = np.linspace(-10, 10, 100)
-        f_thermal = -1j * np.tanh(energy_ext / (2 * temperature))
-        plot_energy_time_representation('20260615_143022', 0, green_function_type='f',
-                                       x_external=energy_ext,
-                                       y_external=np.imag(f_thermal),
-                                       labels_external='Thermal',
-                                       plot_every=5)
-
-        # Override defaults - plot custom components
-        plot_energy_time_representation('20260615_143022', 0, green_function_type='f',
-                                       pauli_components=(1, 2), plot_every=5)
     """
+
     # Load data
     input_kwargs, save_data = load_job_data(timestamp, job_index)
 
@@ -2175,6 +2573,88 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
 
     # Extract energy grid (same for all times)
     energy_grid = energy_time_list[0]['energy_grid']
+
+    # Compute equilibrium Green's functions using Usadel methods
+    import sys
+    import os
+    equilibrium_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'equilibrium_python')
+    if equilibrium_path not in sys.path:
+        sys.path.insert(0, equilibrium_path)
+
+    from Usadel_methods import UsadelEvolution
+    from nambu_class import NambuTensor
+
+    # Extract parameters
+    system_params = input_kwargs['system_parameters']
+    eta = system_params['eta']
+    temperature = system_params['temperature']
+
+    # Get gap from gap history at t=0
+    gaps = save_data['gaps']
+    gap = np.abs(gaps[0])
+
+    # Grid parameters for UsadelEvolution
+    grid_parameters = {
+        'omega_grid': energy_grid,
+        'energy_cutoff': np.max(np.abs(energy_grid)),
+        'eta': eta
+    }
+
+    # System parameters for UsadelEvolution
+    system_parameters_usadel = {
+        'critical_temperature': system_params['critical_temperature'],
+        'temperature': temperature,
+        'current_maximum': 1.0
+    }
+
+    # Create UsadelEvolution object
+    usadel = UsadelEvolution(grid_parameters, system_parameters_usadel)
+
+    # Compute equilibrium Green's functions using Usadel methods with Q=0
+    import jax.numpy as jnp
+
+    # Thermal occupation function
+    f_thermal = NambuTensor(usadel._thermal_occupation_numbers(temperature), 0)
+
+    # Get h_r and convert to g_r
+    hr_eq = usadel._get_hr(Q=0.0, delta=gap, sigma_r=None)
+    gr_eq = usadel._hr2gr(hr_eq)
+
+    # Compute gk from gr and f: gk = gr @ f + f @ gr_involution
+    gk_eq = gr_eq @ f_thermal + f_thermal @ gr_eq._involution()
+
+    # For 'f', just use the thermal occupation directly
+    f_eq = f_thermal
+
+    # Extract Pauli components (convert jax arrays to numpy)
+    def extract_pauli_components_from_nambu(nambu_tensor, pauli_indices):
+        """Extract Pauli components from NambuTensor."""
+        components = []
+        for idx in pauli_indices:
+            component = nambu_tensor._trace(pauli_index=idx) / 2.0
+            components.append(np.array(component))
+        return components
+
+    # Create tau_3 Pauli matrix for subtractions
+    tau_3 = NambuTensor(1.0, pauli_channel=3)
+
+    # Subtract asymptotic/thermal components before comparison
+    # This isolates the non-trivial energy dependence
+    if green_function_type == 'gr':
+        # Subtract τ₃ from g^R (asymptotic unit matrix in particle-hole space)
+        gr_eq_subtracted = gr_eq - tau_3
+        eq_nambu = gr_eq_subtracted
+    elif green_function_type == 'gk':
+        # Subtract 2 * f_thermal * τ₃ from g^K (equilibrium FDT contribution)
+        gk_eq_subtracted = gk_eq - 2.0 * f_thermal * tau_3
+        eq_nambu = gk_eq_subtracted
+    elif green_function_type == 'f':
+        # Subtract f_thermal from f (equilibrium thermal distribution)
+        f_eq_subtracted = f_eq - f_thermal
+        eq_nambu = f_eq_subtracted
+
+    # Extract only the Pauli components that will be plotted
+    eq_pauli_components = extract_pauli_components_from_nambu(eq_nambu, pauli_components)
 
     # Pauli component labels
     pauli_labels = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
@@ -2234,6 +2714,17 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
             # Plot imaginary part (red)
             ax.plot(energy_grid, g_imag, '-', color=color_imag, linewidth=1.5,
                    alpha=0.8, label=label_imag)
+
+        # Plot equilibrium Green's function (dashed lines)
+        eq_component_idx = pauli_components.index(pauli_idx)
+        eq_component = eq_pauli_components[eq_component_idx]
+        eq_real = np.real(eq_component)
+        eq_imag = np.imag(eq_component)
+
+        ax.plot(energy_grid, eq_real, '--', color='black', linewidth=2,
+               alpha=0.9, label='Equilibrium (Re)')
+        ax.plot(energy_grid, eq_imag, '--', color='gray', linewidth=2,
+               alpha=0.9, label='Equilibrium (Im)')
 
         # Plot external data if provided
         if x_external is not None and y_external is not None:
@@ -2309,109 +2800,3 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         'time_values': time_values[plot_indices],
         'data': [energy_time_list[i] for i in plot_indices]
     }
-
-
-def _plot_state_evolution(gr_initial, gr_final, gk_initial, gk_final, time_grid, save_plot, save_dir, timestamp):
-    """
-    Plot state evolution comparison between initial and final times.
-
-    Shows overlay of initial (t=0, dashed) and final (t=-1, solid) states
-    for all 4 Pauli components of both g^R and g^K.
-    """
-    pauli_names = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
-
-    # Plot g^R evolution
-    fig_gr, axes_gr = plt.subplots(2, 2, figsize=(10, 7))
-    for pauli_idx in range(4):
-        # Extract Pauli components
-        gr_init_pauli = gr_initial.trace(pauli_idx) / 2
-        gr_final_pauli = gr_final.trace(pauli_idx) / 2
-
-        if gr_init_pauli.ndim == 2:
-            gr_init_pauli = gr_init_pauli[0, :]
-            gr_final_pauli = gr_final_pauli[0, :]
-
-        ax = axes_gr.flat[pauli_idx]
-
-        # Plot initial state (dashed)
-        ax.plot(time_grid, np.real(gr_init_pauli), 'b--', linewidth=2, label='Initial (Real)', alpha=0.7)
-        ax.plot(time_grid, np.imag(gr_init_pauli), 'r--', linewidth=2, label='Initial (Imag)', alpha=0.7)
-
-        # Plot final state (solid)
-        ax.plot(time_grid, np.real(gr_final_pauli), 'b-', linewidth=2, label='Final (Real)', alpha=0.8)
-        ax.plot(time_grid, np.imag(gr_final_pauli), 'r-', linewidth=2, label='Final (Imag)', alpha=0.8)
-
-        ax.set_xlabel(r"$t'$", fontsize=10)
-        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
-        ax.set_title(f'$g^R$: {pauli_names[pauli_idx]}', fontsize=11)
-        ax.legend(fontsize=8, loc='best')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim([time_grid[0], time_grid[-1]])
-
-        # Add max difference annotation
-        diff = np.abs(gr_final_pauli - gr_init_pauli)
-        max_diff = np.max(diff)
-        max_diff_idx = np.argmax(diff)
-        max_diff_time = time_grid[max_diff_idx]
-
-        ax.axvline(max_diff_time, color='gray', linestyle=':', linewidth=1.5, alpha=0.5)
-        ax.text(0.02, 0.98, rf'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
-               transform=ax.transAxes, fontsize=8, verticalalignment='top',
-               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    plt.suptitle(f'$g^R$ State Evolution: Initial (t=0) vs Final (t=-1)', fontsize=12)
-    plt.tight_layout()
-
-    if save_plot:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'state_evolution_gr_{timestamp}.png'), dpi=150, bbox_inches='tight')
-
-    plt.show()
-
-    # Plot g^K evolution
-    fig_gk, axes_gk = plt.subplots(2, 2, figsize=(10, 7))
-    for pauli_idx in range(4):
-        # Extract Pauli components
-        gk_init_pauli = gk_initial.trace(pauli_idx) / 2
-        gk_final_pauli = gk_final.trace(pauli_idx) / 2
-
-        if gk_init_pauli.ndim == 2:
-            gk_init_pauli = gk_init_pauli[0, :]
-            gk_final_pauli = gk_final_pauli[0, :]
-
-        ax = axes_gk.flat[pauli_idx]
-
-        # Plot initial state (dashed)
-        ax.plot(time_grid, np.real(gk_init_pauli), 'b--', linewidth=2, label='Initial (Real)', alpha=0.7)
-        ax.plot(time_grid, np.imag(gk_init_pauli), 'r--', linewidth=2, label='Initial (Imag)', alpha=0.7)
-
-        # Plot final state (solid)
-        ax.plot(time_grid, np.real(gk_final_pauli), 'b-', linewidth=2, label='Final (Real)', alpha=0.8)
-        ax.plot(time_grid, np.imag(gk_final_pauli), 'r-', linewidth=2, label='Final (Imag)', alpha=0.8)
-
-        ax.set_xlabel(r"$t'$", fontsize=10)
-        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
-        ax.set_title(f'$g^K$: {pauli_names[pauli_idx]}', fontsize=11)
-        ax.legend(fontsize=8, loc='best')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim([time_grid[0], time_grid[-1]])
-
-        # Add max difference annotation
-        diff = np.abs(gk_final_pauli - gk_init_pauli)
-        max_diff = np.max(diff)
-        max_diff_idx = np.argmax(diff)
-        max_diff_time = time_grid[max_diff_idx]
-
-        ax.axvline(max_diff_time, color='gray', linestyle=':', linewidth=1.5, alpha=0.5)
-        ax.text(0.02, 0.98, rf'max diff: {max_diff:.2e}\nat $t\'$={max_diff_time:.2f}',
-               transform=ax.transAxes, fontsize=8, verticalalignment='top',
-               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    plt.suptitle(f'$g^K$ State Evolution: Initial (t=0) vs Final (t=-1)', fontsize=12)
-    plt.tight_layout()
-
-    if save_plot:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f'state_evolution_gk_{timestamp}.png'), dpi=150, bbox_inches='tight')
-
-    plt.show()

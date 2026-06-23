@@ -24,7 +24,7 @@ from usadel_keldysh_evolution import UsadelKeldyshEvolution
 from Test_scripts.general_comparison_file import load_state, compare_tensor_rows
 
 
-def test_normalization(state, thermal_dist, thermal_integral, time_grid, save_dir='Test_plots', verbose=True):
+def test_normalization(state, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, time_grid, save_dir='Test_plots', verbose=True):
     """
     Test g^R and g^K normalization relations.
 
@@ -34,6 +34,8 @@ def test_normalization(state, thermal_dist, thermal_integral, time_grid, save_di
         state: StateObject with Green's functions
         thermal_dist: Thermal distribution f(t,t')
         thermal_integral: Integral of thermal distribution F(t,t')
+        thermal_sum_left: Pre-computed left thermal sum
+        thermal_sum_right: Pre-computed right thermal sum
         time_grid: Array of time values
         save_dir: Directory to save plots
         verbose: Print detailed output
@@ -63,7 +65,7 @@ def test_normalization(state, thermal_dist, thermal_integral, time_grid, save_di
     # g^K normalization check
     if verbose:
         print("\n  Testing g^K normalization...")
-    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, thermal_dist, thermal_integral)
+    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, thermal_dist, thermal_integral, thermal_sum_left=thermal_sum_left, thermal_sum_right=thermal_sum_right)
     gk_max_error = np.max(gk_errors)
 
     if verbose:
@@ -139,7 +141,7 @@ def test_normalization(state, thermal_dist, thermal_integral, time_grid, save_di
     }
 
 
-def test_fdt(state, thermal_dist, thermal_integral, time_grid, save_dir='Test_plots', time_index=-1, verbose=True):
+def test_fdt(state, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, time_grid, save_dir='Test_plots', time_index=-1, verbose=True):
     """
     Test FDT relation: g^K = g^R @ f - f @ g^A.
 
@@ -147,6 +149,8 @@ def test_fdt(state, thermal_dist, thermal_integral, time_grid, save_dir='Test_pl
         state: StateObject with Green's functions
         thermal_dist: Thermal distribution f(t,t')
         thermal_integral: Integral of thermal distribution F(t,t')
+        thermal_sum_left: Pre-computed left thermal sum
+        thermal_sum_right: Pre-computed right thermal sum
         time_grid: Array of time values
         save_dir: Directory to save plots
         time_index: Time index to check (default -1 for last row)
@@ -169,7 +173,7 @@ def test_fdt(state, thermal_dist, thermal_integral, time_grid, save_dir='Test_pl
     if verbose:
         print("\n  Computing FDT relation check...")
     gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(
-        thermal_dist, thermal_integral, time_index=time_index
+        thermal_dist, thermal_integral, time_index=time_index, thermal_sum_left=thermal_sum_left, thermal_sum_right=thermal_sum_right
     )
 
     if verbose:
@@ -241,7 +245,7 @@ def test_fdt(state, thermal_dist, thermal_integral, time_grid, save_dir='Test_pl
     }
 
 
-def test_current(state, thermal_dist, thermal_integral, time_grid, save_dir='Test_plots', A_history=None, verbose=True):
+def test_current(state, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, time_grid, save_dir='Test_plots', A_history=None, verbose=True):
     """
     Test current conservation for zero vector potential.
 
@@ -251,6 +255,8 @@ def test_current(state, thermal_dist, thermal_integral, time_grid, save_dir='Tes
         state: StateObject with Green's functions
         thermal_dist: Thermal distribution f(t,t')
         thermal_integral: Integral of thermal distribution F(t,t')
+        thermal_sum_left: Pre-computed left thermal sum
+        thermal_sum_right: Pre-computed right thermal sum
         time_grid: Array of time values
         save_dir: Directory to save plots
         A_history: Optional vector potential history (default None = zeros)
@@ -279,7 +285,7 @@ def test_current(state, thermal_dist, thermal_integral, time_grid, save_dir='Tes
         print("  Computing current...")
 
     try:
-        current = state.get_current_at_time_t(A_history, thermal_dist, thermal_integral, time_index=-1)
+        current = state.get_current_at_time_t(A_history, thermal_dist, thermal_integral, time_index=-1, thermal_sum_left=thermal_sum_left, thermal_sum_right=thermal_sum_right)
     except (IndexError, TypeError) as e:
         if verbose:
             print(f"    ⚠ Warning: Current calculation failed with error: {e}")
@@ -595,8 +601,11 @@ def test_state(filename, save_dir='Test_plots', verbose=True):
     print("Generating thermal occupation and integral...")
     evolution.get_thermal_occupation(temperature)
     evolution.get_thermal_integral(temperature)
+    evolution.get_thermal_sum(temperature)
     thermal_dist = evolution.thermal_dist
     thermal_integral = evolution.thermal_integral
+    thermal_sum_left = evolution.thermal_sum_left
+    thermal_sum_right = evolution.thermal_sum_right
     time_grid = evolution.time_grid
 
     print(f"  Thermal distribution shape: {thermal_dist.data.shape}")
@@ -607,17 +616,17 @@ def test_state(filename, save_dir='Test_plots', verbose=True):
 
     # 1. Normalization test
     results['normalization'] = test_normalization(
-        state, thermal_dist, thermal_integral, time_grid, save_dir, verbose
+        state, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, time_grid, save_dir, verbose
     )
 
     # 2. FDT test
     results['fdt'] = test_fdt(
-        state, thermal_dist, thermal_integral, time_grid, save_dir, time_index=-1, verbose=verbose
+        state, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, time_grid, save_dir, time_index=-1, verbose=verbose
     )
 
     # 3. Current test
     results['current'] = test_current(
-        state, thermal_dist, thermal_integral, time_grid, save_dir, A_history=None, verbose=verbose
+        state, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, time_grid, save_dir, A_history=None, verbose=verbose
     )
 
     # 4. Time translation invariance test

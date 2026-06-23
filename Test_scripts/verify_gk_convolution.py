@@ -62,7 +62,7 @@ def plot_gap_vs_time(time_grid, gap_eq, gap_evolved=None, filename='gap_evolutio
     # print(f"  Saved: {filename}")
 
 
-def plot_normalization_checks(state, time_grid, thermal_dist, thermal_integral, state_name='State', t1_idx=-1):
+def plot_normalization_checks(state, time_grid, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, state_name='State', t1_idx=-1):
     """
     Plot g^R and g^K normalization checks for the last row.
 
@@ -90,7 +90,7 @@ def plot_normalization_checks(state, time_grid, thermal_dist, thermal_integral, 
 
     # ========== g^K Normalization ==========
     print("\n  Computing g^K normalization...")
-    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(t1_idx, thermal_dist, thermal_integral)
+    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(t1_idx, thermal_dist, thermal_integral, thermal_sum_left=thermal_sum_left, thermal_sum_right=thermal_sum_right)
 
     # Extract Pauli components from totals
     gk_tau0 = gk_totals[0, :]
@@ -298,7 +298,7 @@ def plot_thermal_integrals(time_grid, thermal_dist, thermal_integral):
     print()
 
 
-def plot_fdt_check(state, time_grid, thermal_dist, thermal_integral, state_name='State', time_index=-1):
+def plot_fdt_check(state, time_grid, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, state_name='State', time_index=-1):
     """
     Plot FDT relation check: g^K vs (g^R @ f - f @ g^A).
 
@@ -318,7 +318,9 @@ def plot_fdt_check(state, time_grid, thermal_dist, thermal_integral, state_name=
     gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(
         thermal_dist,
         thermal_integral,
-        time_index=time_index
+        time_index=time_index,
+        thermal_sum_left=thermal_sum_left,
+        thermal_sum_right=thermal_sum_right
     )
 
     print(f"  Maximum absolute error: {max_error:.6e}")
@@ -450,6 +452,11 @@ def main():
     thermal_integral = evolution.thermal_integral
     print(f"  Thermal integral shape: {thermal_integral.data.shape}")
 
+    evolution.get_thermal_sum(system_parameters['temperature'])
+    thermal_sum_left = evolution.thermal_sum_left
+    thermal_sum_right = evolution.thermal_sum_right
+    print(f"  Thermal sum shape: {thermal_sum_left.data.shape}")
+
     # Verify F(0) is set to BCS value
     F_zero = thermal_integral.data[0, 0, 0, 0]
     bcs_coupling = evolution._get_BCS_coupling()
@@ -481,7 +488,9 @@ def main():
     gk_fdt_row, gk_actual_row, error_row, max_error = equilibrium_state.check_fdt(
         thermal_dist,
         thermal_integral,
-        time_index=-1
+        time_index=-1,
+        thermal_sum_left=thermal_sum_left,
+        thermal_sum_right=thermal_sum_right
     )
 
     print("✓ FDT check computed with precise convolution")
@@ -490,7 +499,7 @@ def main():
 
     # ========== Plot FDT Check for Equilibrium ==========
     print("Plotting FDT check for equilibrium state...")
-    plot_fdt_check(equilibrium_state, time_grid, thermal_dist, thermal_integral,
+    plot_fdt_check(equilibrium_state, time_grid, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right,
                    state_name='Equilibrium', time_index=-1)
     print()
 
@@ -499,7 +508,7 @@ def main():
     print("="*70)
     print("Equilibrium State: Normalization Checks")
     print("="*70)
-    plot_normalization_checks(equilibrium_state, time_grid, thermal_dist, thermal_integral, state_name='Equilibrium', t1_idx=-1)
+    plot_normalization_checks(equilibrium_state, time_grid, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, state_name='Equilibrium', t1_idx=-1)
     print()
 
     # ========== Check FDT for Evolved State ==========
@@ -535,7 +544,9 @@ def main():
         gk_fdt_evolved, gk_actual_evolved, error_evolved, max_error_evolved = evolved_state.check_fdt(
             thermal_dist,
             thermal_integral,
-            time_index=-1
+            time_index=-1,
+            thermal_sum_left=thermal_sum_left,
+            thermal_sum_right=thermal_sum_right
         )
 
         print("✓ FDT check computed for evolved state")
@@ -551,7 +562,7 @@ def main():
 
         # ========== Plot FDT Check for Evolved State ==========
         print("Plotting FDT check for evolved state...")
-        plot_fdt_check(evolved_state, time_grid, thermal_dist, thermal_integral,
+        plot_fdt_check(evolved_state, time_grid, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right,
                        state_name='Evolved', time_index=-1)
         print()
 
@@ -560,7 +571,7 @@ def main():
         print("="*70)
         print("Evolved State: Normalization Checks")
         print("="*70)
-        plot_normalization_checks(evolved_state, time_grid, thermal_dist, thermal_integral, state_name='Evolved', t1_idx=-1)
+        plot_normalization_checks(evolved_state, time_grid, thermal_dist, thermal_integral, thermal_sum_left, thermal_sum_right, state_name='Evolved', t1_idx=-1)
         print()
 
     except FileNotFoundError:

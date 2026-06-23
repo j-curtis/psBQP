@@ -278,7 +278,7 @@ class UsadelKeldyshEvolution:
         f_two_time = np.zeros((self.ntpoints, self.ntpoints), dtype=complex)
 
         # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
-        mask = (np.abs(tau_matrix) > 1e-10)
+        mask = (np.abs(tau_matrix) > 1e-6)
 
         # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
         f_two_time[mask] = -1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
@@ -313,7 +313,7 @@ class UsadelKeldyshEvolution:
         tau_upper = t_i - t_j
 
         # Compute lower bound: -T_max - t_j 
-        tau_lower = -self.tmax - t_j
+        tau_lower = -self.tmax * 2 - t_j * 0 #* remove -t_j since assuming -infinity actually
 
         # Helper function to compute F(τ) = -i/π · ln(tanh(πτT/2))
         def compute_F_full(tau_vals):
@@ -359,6 +359,72 @@ class UsadelKeldyshEvolution:
         filter_data = np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3))
         filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
         self.thermal_integral = self.thermal_integral #* filter_function
+
+    def get_thermal_sum(self, temperature):
+        """
+        Pre-compute cumulative sums of thermal distribution over extended grid.
+
+        Computes two-time matrices similar to get_thermal_occupation:
+        - SUM_right(t,t') = ∫_{-2*T_max}^{t'} f(t,t'') dt'' for all (t,t') pairs
+        - SUM_left(t,t') = ∫_{-2*T_max}^{t} f(t'',t') dt'' for all (t,t') pairs
+
+        Uses extended time grid (2× size) to simulate -∞ starting point.
+
+        Args:
+            temperature: Temperature in energy units
+
+        Stores:
+            self.thermal_sum_right: NambuKeldyshTensor of shape (2,2,N_t,N_t)
+            self.thermal_sum_left: NambuKeldyshTensor of shape (2,2,N_t,N_t)
+        """
+        # Define N_t from existing grid
+        N_t = self.ntpoints
+        N_t_extended = 2 * N_t -1
+
+        # Create extended time grid: from -2*T_max to 0 with same spacing
+        dt = self.delta_t
+        extended_time_grid = np.append(np.linspace(-2 * self.tmax, - self.tmax, N_t-1, endpoint=False), self.time_grid)
+
+        # Create meshgrid for all time pairs (t_i, t_j)
+        t_i, t_j = np.meshgrid(extended_time_grid, self.time_grid, indexing='ij')
+
+        # Compute tau = t_i - t_j for all pairs
+        tau_matrix = t_i - t_j
+
+        # Initialize two-time thermal distribution (extended grid × original grid)
+        f_two_time = np.zeros((N_t_extended, N_t), dtype=complex)
+
+        # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
+        mask = (np.abs(tau_matrix) > 1e-6)
+
+        # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
+        f_two_time[mask] = -1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
+
+        f_two_time_nk = NambuKeldyshTensor(f_two_time, pauli_channel=0)
+
+        ones_data_left_minus = np.ones((N_t_extended))
+        ones_data_left_minus[-1] = 0
+        ones_data_left_minus[-2] = 1/2
+        ones_tensor_left_minus = NambuKeldyshTensor([ones_data_left_minus], pauli_channel=0)
+        
+        ones_data_left = np.ones((N_t_extended))
+        ones_data_left[-1] = 1/2
+        ones_tensor_left = NambuKeldyshTensor([ones_data_left], pauli_channel=0)
+
+        f_sum_left_minus = (ones_tensor_left_minus @ f_two_time_nk) * dt
+        f_sum_left = (ones_tensor_left @ f_two_time_nk) * dt
+        # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')
+        row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
+        col_indices = np.arange(N_t)[np.newaxis, :]  # Shape (1, N_t')
+        ones_data = (row_indices <= col_indices).astype(complex)
+        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+
+        f_sum_right_minus = (f_two_time_nk[-2:-1,:] @ ones_tensor - f_two_time_nk[-2:-1,:] * 0.5) * dt
+        f_sum_right = (f_two_time_nk[-1:,:] @ ones_tensor - f_two_time_nk[-1:,:] * 0.5) * dt
+
+        #* swapped left and right since they were wrong way around
+        self.thermal_sum_left = NambuKeldyshTensor(np.append(f_sum_right_minus.data[0,0], f_sum_right.data[0,0], axis=0), pauli_channel=0)
+        self.thermal_sum_right = NambuKeldyshTensor(np.append(f_sum_left_minus.data[0,0], f_sum_left.data[0,0], axis=0), pauli_channel=0)
 
     def construct_discrete_operators(self, terms_dict, state, gap_tensor, g_type = 'r', additional_shift_index = 0):
         #* function assumes that all the terms depending on left time are computed for the current computation time (t,t)
@@ -588,15 +654,21 @@ class UsadelKeldyshEvolution:
                 #* diagonal term in gk, since referencing to g_shift(-1)
                 diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], tau0))
 
-                #* Interior sums from F(t-δt, ·): L(t-δt, :) @ g, sum to t-2δt 
+                #* Interior sums from F(t-δt, ·): L(t-δt, :) @ g, sum to t-2δt
                 #* the g_matrix starts from 1 since we assume that the g_matrix corresponds to old, so last element is t-dt and last element of L operator is t and then we remove one extra last element due to trapezoid rule
+                #? Endpoint handling: Uses interior_factor = dt²/4 vs boundary_factor = dt²/8
+                #? The factor of 8 vs 4 is meant to implement 0.5 weight at boundaries
+                #? BUT: @ operator still applies uniform weight to all terms in range [:-2] and [1:-1]
+                #? The first and last elements in this range should also get 0.5 weight for full midpoint rule
                 v_old_interior_1 = interior_factor * (l_operator[-2:-1, :-2] @ (g_matrix[1:-1, :].shift(-1, axis=1) + g_matrix[1:-1, :].shift(shift_index-1, axis=1)))
 
                 #* diagonal term convolution since convolving with g_matrix which got shifted by -1
                 diagonal_term_history_list += [(interior_factor * l_operator[-2:-1,:],tau0)]
 
-                #* Interior sums from F(t, ·): L(t, :) @ g, sum to t-δt 
+                #* Interior sums from F(t, ·): L(t, :) @ g, sum to t-δt
                 #* this summation goes until t-dt so we sum over all elements since the last one corresponds to that time label, the g_matrix starts from 1 since we assume that the g_matrix corresponds to old
+                #? Same endpoint issue as interior_1: @ uses uniform weights for all terms
+                #? Range :-1 and [1:] should have 0.5 weight at their boundaries
                 v_old_interior_3 = interior_factor * (l_operator[-1:, :-1] @ (g_matrix[1:].shift(-1, axis=1) + g_matrix[1:].shift(shift_index-1, axis=1)))
                 
 
@@ -641,6 +713,9 @@ class UsadelKeldyshEvolution:
 
                 #* Interior sums: (δt/4)·Σ_{t''} g(t-δt, t'')·R(t'', t')
                 #*  since g is computed using old basis and r is in the new basis, they need to be relatively shifted w.r.t. eachother when summing, last element is t-dt in g and t,.. element is excluded from r term
+                #? Missing endpoint corrections: @ operator uses uniform weights
+                #? Range [1:] for g and [:-1] for r should have 0.5 weight at first/last points
+                #? This is Type 4 right convolution - similar issue as Type 3
                 v_old_interior_1 = interior_factor * (g_last_row[:,1:] @ (r_operator[:-1,:] + r_operator[:-1,:].shift(shift_index, axis=1)))  
 
                 v_old_contribution = v_old_boundary_1 + v_old_boundary_2 + v_old_interior_1
@@ -695,6 +770,9 @@ class UsadelKeldyshEvolution:
 
                 #*δt/4 L(t-δt) Σ_{t''=t'+δt}^{t-2δt} g(t-δt,t'')·M(t'')·g(t'',t')·R(t')
                 #* both g's here have the old g_matrix layout we skip first and last elements in g, first due to range and last due to sum going to t-2dt, last element is already included through trapezoidal rule
+                #? Missing endpoint corrections: Type 5 bilinear convolution with @ operator
+                #? Range [1:-1] and [:-2] should have 0.5 weight at boundaries
+                #? This is a sandwich: g @ (M * g * R), both g's need endpoint handling
                 v_old_interior_1 = interior_factor * l_operator[-2] * ((g_last_row[:,1:-1] * m_operator[:-2]) @ (g_matrix[1:-1].shift(-1, axis=1) * r_operator + g_matrix[1:-1,].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0))) 
                 
                 v_old_contribution = (v_old_upper_boundary + v_old_upper_boundary_shift + v_old_lower_boundary + v_old_lower_boundary_shift + v_old_interior_1)
@@ -738,11 +816,15 @@ class UsadelKeldyshEvolution:
                 diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], r_operator[-1]))
 
                 #*From F(t-δt, ·): L(t-δt, t_init)·g(t_init, t')·R(t')
+                #? Missing endpoint corrections: Type 6 mixed left-right convolution
+                #? @ operator with range [:-2] and [1:-1] uses uniform weights
                 v_old_interior_1 = interior_factor * (l_operator[-2:-1, :-2] @ (g_matrix[1:-1, :].shift(-1, axis=1) * r_operator + g_matrix[1:-1, :].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)))
-                
+
                 diagonal_term_history_list += [(interior_factor * l_operator[-2:-1,:],r_operator[-1])]
 
                 #* Interior sums from F(t, ·): L(t, :) @ (g·R), sum to t-δt (Eq. 509)
+                #? Missing endpoint corrections: Type 6 continuation, same issue
+                #? Range [:-1] and [1:] need 0.5 weight at boundaries
                 v_old_interior_3 = interior_factor * (l_operator[-1:, :-1] @ (g_matrix[1:].shift(-1, axis=1) * r_operator + g_matrix[1:, :].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)))
                 diagonal_term_history_list += [(interior_factor * l_operator[-1:,:],r_operator[-1])]
 
@@ -782,6 +864,9 @@ class UsadelKeldyshEvolution:
                 diagonal_term_factor_list.append((boundary_factor * l_operator[-2], r_diagonal[-1]))
             
                 #* Interior sums: (δt/4)·L(t-δt)·Σ_{t''=t_init+δt}^{t'} g(t-δt, t'')·R(t'', t') (Eq. 566-567)
+                #? Missing endpoint corrections: Type 7 mixed right-left convolution
+                #? @ operator with range [1:] and [:-1] uses uniform weights
+                #? Variable upper limit at t' means each column has different integration range
                 v_old_interior_1 = interior_factor * l_operator[-2] * (g_last_row[:,1:] @ (r_operator[:-1] +  r_operator[:-1].shift(shift_index, axis=1)))
 
                 v_old_contribution = (v_old_boundary_1 + v_old_boundary_2 + v_old_interior_1)
@@ -877,6 +962,8 @@ class UsadelKeldyshEvolution:
         # This is handled via history list: (left_term * current_solution) @ right_term
         # For gr constraint: (tau0 * g_current) @ gr gives the convolution
         #* when implemented later, we automatically sum starting from t'+dt since this is previous solution and we eliminate last term by hand!
+        #? Missing endpoint corrections: This uses uniform dt weight for all points
+        #? Should subtract 0.5*dt from first (t_init) and last (t-δt) endpoints for midpoint rule
         rhs_vector_history_list = [(-tau0, gr.shift(-1, axis=1).shift(-1, axis=0) * self.delta_t)]
 
         # No diagonal coupling terms for this constraint
@@ -926,15 +1013,22 @@ class UsadelKeldyshEvolution:
         gr_last_row = gr[-1:, :]
         gk_full = gk
         #* this assumes that gr_last_row has correct time index and not shifted t' index, midpoint rule automatically applied
-        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:].shift(-1, axis = 1))
+        #? PARTIAL FIX: Added first endpoint (t_init) correction with 0.5 factor
+        #? STILL MISSING: Last endpoint (t-δt) correction - should also subtract 0.5*dt*gr[-1,-1]*gk[-1,:].shift(-1)
+        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:].shift(-1, axis = 1)) + self.delta_t * 0.5 * gr_last_row[:,0:1] * gk_full[0:1,:].shift(-1, axis = 1)
+        #? WARNING: diagonal history term uses uniform dt weight without endpoint corrections
+        #? This term is used in generalized_g_update_rule for diagonal element - may cause O(Δt) error
         diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)]
 
-        rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1) + gr_last_row.precise_convolution_left(self.thermal_dist, self.thermal_integral[-1:,:], self.delta_t, other_index=-1) * tau3)
+        rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:]) + gr_last_row.precise_convolution_left(self.thermal_dist, self.thermal_integral[-1:,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1:,:]) * tau3)
         rhs_vector = rhs_term_1 
 
         # Term 2: δt·Σ g'^K(t,t'')·g'^A(t'',t') from t''=-∞ to t'-δt
-        # This convolution is handled via history list: (tau0 * gk_current) @ ga 
+        # This convolution is handled via history list: (tau0 * gk_current) @ ga
         #* this ga is now in good frame
+        #? Missing endpoint corrections: This uses uniform dt weight via @ operator
+        #? Integration is from t''=-∞ to t'-δt with variable upper limit (depends on t')
+        #? Should use proper endpoint weights: 0.5 at t_init and 0.5 at diagonal ga(t',t')
         rhs_vector_history_list = [(-tau0 , ga * self.delta_t)]
         # No diagonal coupling terms
         rhs_vector_factor_list = []
@@ -1011,29 +1105,40 @@ class UsadelKeldyshEvolution:
                 right_term = terms[1]
                 convolution_term_2 += (left_term * previous_solution * right_term[time])
                 
-            if time != loop_start: 
+            if time != loop_start:
                 for terms in rhs_vector_history_1_list:
                     left_term = terms[0]
                     right_term = terms[1]
                     if g_type == 'r':
                         #* last element in right_term corresponds to time t actually so it should be summed with solution tensor last element
-
-                        convolution_term_1 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time] 
+                        #? Missing endpoint corrections: @ operator uses uniform weight for all points
+                        #? right_term already has dt factor from line 880, so @ gives: dt * sum(...)
+                        #? For midpoint rule need: dt * (0.5*first + interior + 0.5*last)
+                        #? Current: uses time+1:-1 to skip endpoints but doesn't apply 0.5 weight
+                        convolution_term_1 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time]
                     elif g_type == 'k':
-                        #* note, last right term is actually time t as last time index and last solution tensor is that as well? 
+                        #* note, last right term is actually time t as last time index and last solution tensor is that as well?
                         #* the sum goes until time which means last element is t'-dt' which it should be summed fulled last one is giving the diagonal
                         if time != loop_end - loop_step:
                             #* in principle first solution corresponds to t, last time is n_points which ends with t-dt, as it should
+                            #? Missing endpoint corrections: @ operator uses uniform weight
+                            #? Integrating from t''=t_init to t''=t'-δt with variable upper limit
+                            #? Should apply 0.5 weight to first point (t_init) and last point (diagonal)
                             convolution_term_1 += (left_term * solution_tensor[1:]) @ right_term[:time, time] 
 
                 for terms in rhs_vector_history_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
                     if g_type == 'r':
-                        convolution_term_2 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time]  
+                        #? Missing endpoint corrections: Same issue as history_1 for g^R constraint
+                        #? Uses uniform dt weight from line 880, should apply 0.5 to endpoints
+                        convolution_term_2 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time]
                     elif g_type == 'k':
                         if time != loop_end - loop_step:
                         #* in principle first solution corresponds to t, last time is n_points which ends with t-dt, as it should
+                            #? Missing endpoint corrections: Same issue as history_1 for g^K constraint (line 940)
+                            #? This is the gk @ ga convolution with variable upper limit at t'
+                            #? Should apply 0.5*dt to t_init and 0.5*dt to ga.diagonal_time()
                             convolution_term_2 += (left_term * solution_tensor[1:]) @ right_term[:time, time]
 
             # ========== Diagonal correction for g^K ==========
@@ -1058,11 +1163,16 @@ class UsadelKeldyshEvolution:
                 for terms in diagonal_term_history_1_list:
                     left_term = terms[0]
                     right_term = terms[1]
+                    #? Missing endpoint corrections: Uses @ with uniform weights
+                    #? left_term[-1,:-1] already has dt factor, @ applies uniform sum
+                    #? For midpoint rule: 0.5 weight at first and last points of convolution
                     convolution_term_1 += left_term[-1,:-1] @ (solution_tensor[1:].involution() * right_term)
 
                 for terms in diagonal_term_history_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
+                    #? Missing endpoint corrections: Same as diagonal_term_history_1
+                    #? This comes from constraint equation (line 932 diag_g_history_list)
                     convolution_term_2 += left_term[-1,:-1] @ (solution_tensor[1:].involution()* right_term)
 
             total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
@@ -1274,8 +1384,8 @@ class UsadelKeldyshEvolution:
         for dt_prime_shift in [0, 1]:
             for dt_shift in [0,1]:
                 dt_end = None if dt_shift == 0 else -dt_shift
-                thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift).shift(dt_prime_shift, axis=1)
-                - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1).shift(dt_prime_shift, axis=1) * tau3)
+                thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
+                - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1) * tau3)
                 thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
 
         V1 = V1 + thermal_term
@@ -1306,9 +1416,9 @@ class UsadelKeldyshEvolution:
                 for dt_shift in [0, 1]:  # NEW: Add missing dt_shift loop
                     dt_end = None if dt_shift == 0 else -dt_shift
 
-                    term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1).shift(dt_prime_shift, axis=1)
-                    term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
-                    term1and2_right = -2j * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3).precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift).shift(dt_prime_shift, axis=1)
+                    term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
+                    term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
+                    term1and2_right = -2j * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3).precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
 
                     em_thermal_conv1 += cn_factor * (term1_left + term2_left + term1and2_right)
 
@@ -1318,7 +1428,8 @@ class UsadelKeldyshEvolution:
         L2, R2, V2, Vhist2, Vfact2, sandwich2, diag_factor_list_2, diag_hist_list_2 = self.get_gk_constraint(state, gap_tensor)
 
         # ========== 6. Call unified solver with diagonal corrections ==========
-        gk_boundary = state.gk[-1, 0] * 0 # g^K(t, -infty)
+        #? extrapolate from diagonal entries by continuity equation?
+        gk_boundary = ( 2 * state.gk[-1, 0] - state.gk[-2, 1] ) # g^K(t, -infty)
 
         gk_new = self.generalized_g_update_rule( g_type='k',diagonal_entry=gk_boundary, left_matrix_1=L1, left_matrix_2=L2,right_matrix_1=R1, right_matrix_2=R2,
             rhs_vector_1=V1, rhs_vector_2=V2, rhs_vector_history_1_list=Vhist1, rhs_vector_history_2_list=Vhist2, rhs_vector_factor_1_list=Vfact1,
@@ -1358,6 +1469,8 @@ class UsadelKeldyshEvolution:
         if not hasattr(self, 'thermal_dist'):
             self.get_thermal_occupation(self.temperature)
             self.get_thermal_integral(self.temperature)
+            # Pre-compute thermal sums over extended grid for precision
+            self.get_thermal_sum(self.temperature)
 
         # Step 1: Update retarded Green's function (shifts gr matrix)
         new_gr_row, new_gr_diag = self._compute_new_gr_row(state, A_history=A_external)
@@ -1369,7 +1482,9 @@ class UsadelKeldyshEvolution:
 
         # Step 2.5: Update occupation function if tracking is enabled
         if state.occupation_function is not None:
-            state.update_state_occupation(self.thermal_dist, self.thermal_integral)
+            state.update_state_occupation(self.thermal_dist, self.thermal_integral,
+                                           thermal_sum_left=self.thermal_sum_left,
+                                           thermal_sum_right=self.thermal_sum_right)
 
         # Step 3: Extract observables
         gap_history = state.get_gap_history()
@@ -1381,7 +1496,9 @@ class UsadelKeldyshEvolution:
         else:
             vector_potential_new = A_external[-1]
 
-        current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral)
+        current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
+                                                   thermal_sum_left=self.thermal_sum_left,
+                                                   thermal_sum_right=self.thermal_sum_right)
 
         return gap_new, current_new, vector_potential_new
 

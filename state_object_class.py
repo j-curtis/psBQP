@@ -86,7 +86,8 @@ class StateObject:
 
         return gap_history
 
-    def get_current_at_time_t(self, A_history, thermal_dist, thermal_integral, time_index = -1):
+    def get_current_at_time_t(self, A_history, thermal_dist, thermal_integral, time_index=-1,
+                               thermal_sum_left=None, thermal_sum_right=None):
         """
         Compute current J(t) at specific time with thermal distribution (tex Eq. 942-945).
 
@@ -104,6 +105,8 @@ class StateObject:
             thermal_dist: Thermal distribution F(t,t') - NambuKeldyshTensor
             thermal_integral: Integral of F - NambuKeldyshTensor
             time_index: Time index to compute current at (default -1, supports negative indexing)
+            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
+            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
 
         Returns:
             complex: Current J(t) at specified time
@@ -132,6 +135,10 @@ class StateObject:
         # Thermal integrals for precise_convolution
         F_integral_row = thermal_integral[t_idx:t_idx+1, :]  # ∫F(t,:)
 
+        # Thermal sums for precise_convolution (if provided)
+        t_pos_precom = t_idx % thermal_sum_left.shape[2]
+        thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
+
         # Term 1: ∫ dt' τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
         # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]=
         # Midpoint rule: subtract 1/2 weight from both endpoints
@@ -151,11 +158,11 @@ class StateObject:
         # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
         # Multiply gr with A*tau3, then precise_convolution_left with F (regularized)
         #print((A_tensor * tau3 * gr_row).shape)
-        term3 = 2.0 * (tau3 * gr_row * A_tensor).precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t_idx)[-1,-1]
+        term3 = 2.0 * (tau3 * gr_row * A_tensor).precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right)[-1,-1]
 
         # Term 4: ∫ dt' 2F(t,t') A(t') τ₃ g'^A(t',t)
         # Multiply ga with A*tau3, then precise_convolution_right with F (regularized)
-        term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=t_idx)[-1,-1]
+        term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)[-1,-1]
 
         # Sum all terms and take Nambu trace
         total = term1 + term2 + term3 + term4
@@ -273,7 +280,8 @@ class StateObject:
 
         return errors, totals
 
-    def check_keldysh_normalization(self, t1_idx, thermal_dist, thermal_integral):
+    def check_keldysh_normalization(self, t1_idx, thermal_dist, thermal_integral,
+                                     thermal_sum_left=None, thermal_sum_right=None):
         """
         Verify FDT normalization constraint at fixed t₁ for all t₂.
 
@@ -285,6 +293,8 @@ class StateObject:
             t1_idx: Index for t₁ time (supports negative indexing)
             thermal_dist: Thermal distribution f(t,t') - NambuKeldyshTensor
             thermal_integral: Integral of thermal distribution F(t,t') - NambuKeldyshTensor
+            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
+            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
 
         Returns:
             errors: np.ndarray of shape (N_t,) with error norm at each t₂
@@ -338,12 +348,14 @@ class StateObject:
         conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
         
         # Thermal term 1: gr_row @ (gr @ f) for all t2 at once
-        thermal_gr = gr_row.precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t1_pos) * tau3 * 2
+        thermal_gr = gr_row.precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t1_idx, precomputed_sum=thermal_sum_right) * tau3 * 2
 
         # Thermal term 2: (f_row @ ga) @ ga for all t2 at once
         f_row = thermal_dist[t1_pos:t1_pos+1, :]
         F_row = thermal_integral[t1_pos:t1_pos+1, :]
-        thermal_ga = 2 * tau3 * ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t1_pos)
+        t1_pos_precom = t1_idx % thermal_sum_left.shape[2]
+        thermal_sum_left_row = thermal_sum_left[t1_pos_precom:t1_pos_precom+1, :]
+        thermal_ga = 2 * tau3 * ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t1_idx, precomputed_sum=thermal_sum_left_row)
 
         # Save pure convolutions before adding thermal terms
         conv1_pure = conv1  # Pure ∫ g^R g^K (without thermal)
@@ -383,7 +395,8 @@ class StateObject:
             'thermal_ga': thermal_gas
         }
 
-    def check_fdt(self, f_thermal, f_thermal_integral, time_index):
+    def check_fdt(self, f_thermal, f_thermal_integral, time_index,
+                   thermal_sum_left=None, thermal_sum_right=None):
         """
         Check FDT relation: g^K = g^R @ f - f @ g^A using precise convolution.
 
@@ -396,6 +409,8 @@ class StateObject:
             f_thermal: NambuKeldyshTensor - thermal distribution f(t, t')
             f_thermal_integral: NambuKeldyshTensor - integral of thermal distribution F(t, t')
             time_index: int - time index to check (supports negative indexing)
+            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
+            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
 
         Returns:
             gk_fdt_row: NambuKeldyshTensor - FDT prediction for g^K[time_index, :]
@@ -417,14 +432,15 @@ class StateObject:
         gr_row = self.gr[t_idx:t_idx+1, :]
         f_row = f_thermal[t_idx:t_idx+1, :]
         F_row = f_thermal_integral[t_idx:t_idx+1, :]
-
+        t1_pos_precom = time_index % thermal_sum_left.shape[2]
+        thermal_sum_left_row = thermal_sum_left[t1_pos_precom:t1_pos_precom+1, :]
         # First term: regularized gr @ f (f is regularized, on the right)
         # Pass full f_thermal_integral tensor so method can extract correct row t_idx
-        term1 = gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=t_idx)
+        term1 = gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right)
 
         # Second term: regularized f @ ga (f is regularized, on the left)
         # Pass t_idx (positive index) for correct row extraction
-        term2 = ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t_idx)
+        term2 = ga.precise_convolution_right(f_row, F_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
 
         # FDT relation: g^K = term1 - term2
         gk_fdt_row = term1 - term2
@@ -491,15 +507,8 @@ class StateObject:
 
         # Apply exponential damping e^{-η|τ|} to suppress Gibbs oscillations
         # This is physically motivated: accounts for finite quasiparticle lifetime
-        if eta is not None and eta > 0:
-            # Construct relative time grid for anti-diagonal (after reversal)
-            # τ ranges from -(N_t-1)·dt/2 to +(N_t-1)·dt/2 with spacing dt
-            tau = np.linspace(-(N_t-1)*self.dt/2, (N_t-1)*self.dt/2, N_t)
-            damping_factor = np.exp(-eta * np.abs(tau))
-            # Apply damping: shape (2, 2, N_t) * (N_t,) broadcasts correctly
-            g_offdiag_regularized = g_offdiag_reversed * damping_factor[np.newaxis, np.newaxis, :]
-        else:
-            g_offdiag_regularized = g_offdiag_reversed
+
+        g_offdiag_regularized = g_offdiag_reversed
 
         # Standard Fourier transform: G(ω) = ∫ dτ e^{iω·τ} F(τ) with τ spacing = dt
         # Then g(ε,t) = G(2ε), so ε = ω/2
@@ -510,18 +519,19 @@ class StateObject:
         g_energy_data = np.fft.fftshift(g_fft, axes=2)
 
         # Create NambuKeldyshTensor (keep all frequency points)
-        g_energy = NambuKeldyshTensor(g_energy_data)
+        g_energy = NambuKeldyshTensor(g_energy_data)[::2] * 2
 
         # Construct energy grid: standard FFT gives ω, then ε = ω/2
         # Use d=dt (spacing in τ), then divide by 2 for ε
         freq = np.fft.fftfreq(N_t, d=self.dt)
         omega_grid = 2 * np.pi * freq  # ω = 2πf
-        energy_grid = omega_grid / 2  # ε = ω/2 (from g(ε,t) = G(2ε))
+        energy_grid = omega_grid/2  # ε/2 (from g(ε,t) = G(2ε))
         energy_grid = np.fft.fftshift(energy_grid)
 
         return { 'energy_grid': energy_grid, 'g_energy': g_energy}
 
-    def update_state_occupation(self, f_thermal, f_thermal_integral):
+    def update_state_occupation(self, f_thermal, f_thermal_integral,
+                                 thermal_sum_left=None, thermal_sum_right=None):
         """
         Compute and update occupation distribution n(t,t') at specified time.
 
@@ -531,7 +541,8 @@ class StateObject:
         Args:
             f_thermal: Thermal distribution F(t,t') - NambuKeldyshTensor (2,2,N_t,N_t)
             f_thermal_integral: Integral of F - NambuKeldyshTensor (2,2,N_t,N_t)
-            time_index: Time index to compute (default -1)
+            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
+            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
 
         Updates:
             self.occupation_function[time_index, :] with computed n(t,t') row
@@ -546,9 +557,11 @@ class StateObject:
         gr_row = self.gr[t_idx:t_idx+1, :]
         gk_row = self.gk[t_idx:t_idx+1, :]
 
-        n_plus_f_full = self.occupation_function + f_thermal
-
-        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral[t_idx:t_idx+1, :], self.dt) + ga.precise_convolution_right(f_thermal[t_idx:t_idx+1, :], f_thermal_integral[t_idx:t_idx+1, :], self.dt)
+        f_thermal_row = f_thermal[t_idx:t_idx+1, :]
+        f_thermal_integral_row = f_thermal_integral[t_idx:t_idx+1, :]
+        t_pos_precom = t_idx % thermal_sum_left.shape[2]
+        thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
+        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=t_idx, precomputed_sum=thermal_sum_right) + ga.precise_convolution_right(f_thermal_row, f_thermal_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
         rhs_vector += - gr_row[:,:-1] @ self.occupation_function[:-1,:]
         solution_tensor = self.gr[-1,-1:] * 0
         for time in range(N_t):

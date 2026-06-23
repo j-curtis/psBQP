@@ -196,7 +196,7 @@ class NambuKeldyshTensor:
 
         return NambuKeldyshTensor(result_data)
 
-    def precise_convolution_left(self, other, other_integral, dt, other_index=-1):
+    def precise_convolution_left(self, other, other_integral, dt, other_index=-1, precomputed_sum=None):
         """ 
         Compute regularized left convolution: self @ other (regularized).
 
@@ -217,7 +217,9 @@ class NambuKeldyshTensor:
             other: NambuKeldyshTensor - function to convolve with (regularized)
             other_integral: NambuKeldyshTensor - integral of other
             dt: float - time step for discretization
-            other_index: int - row index to extract from other_integral when self is a row (default 0)
+            other_index: int - row index to extract from other_integral when self is a row (default -1)
+            precomputed_sum: NambuKeldyshTensor - optional pre-computed cumulative sum over extended grid
+                            Shape (2,2,N_t). If provided, replaces (ones @ other) computation.
 
         Returns:
             NambuKeldyshTensor - regularized convolution result
@@ -225,6 +227,9 @@ class NambuKeldyshTensor:
         Example:
             # gr @ f with regularization on f
             result = gr_row.precise_convolution_left(f_thermal, f_integral, dt, other_index=-1)
+            # With pre-computed thermal sum:
+            result = gr_row.precise_convolution_left(f_thermal, f_integral, dt, other_index=-1,
+                                                     precomputed_sum=thermal_sum_right)
         """
         # ========== Input shape validation for midpoint rule ==========
         # Check that self is a row: (2,2,1,N_t)
@@ -257,53 +262,30 @@ class NambuKeldyshTensor:
         ones_data = np.ones((1, other.data.shape[-2]), dtype=complex)
         ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
 
-        # Create filter function to suppress early-time artifacts
-        # Zero out first 1/5 of time points
-        N_t = self.data.shape[-1]
-        filter_data = np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3))
-        filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
 
-        # Check if self is a row (shape: 2, 2, 1, N_t) - already validated above
-        is_self_row = (self.data.shape[2] == 1)
-
-        # Standard convolution (always uses full other)
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
         first_endpoint_std = self[:,0:1] * other[0:1,:]
         last_endpoint_std = self[:,-1:] * other[-1:,:]
         result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
 
-        # Factored term (non-analytic contribution) - APPLY FILTER to ones_tensor @ other
-        # Filter suppresses early-time artifacts in the factorized convolution
-        ones_at_other_filtered = (ones_tensor @ other) 
-        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
-        first_endpoint_fact = self * (ones_tensor[:,0:1] * other[0,:])
-        last_endpoint_fact = self * (ones_tensor[:,-1:] * other[-1,:])
-        #* 0 from filter function
-        result_fact = (self * ones_at_other_filtered) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact 
-
-        # For analytic term: use row of other_integral if self is a row
-        if is_self_row:
-            # Extract corresponding row from other_integral
-            # Handle negative indices properly to avoid empty slices
-            N_t = other_integral.data.shape[2]
-            if other_index < 0:
-                # Convert negative index to positiveo
-                positive_index = N_t + other_index
-            else:
-                positive_index = other_index
-            other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
-        else:
-            other_integral_for_reg = other_integral
+        # For analytic term: use row onemaf other_integral if self is a row
+        N_t = other_integral.data.shape[2]
+        positive_index = other_index % N_t
+        positive_index_precomp = other_index % precomputed_sum.data.shape[2]
+        print(other_index)
+        print(positive_index_precomp)
+        precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
+        other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
+        
+        result_fact = self[-1:,:] * precomputed_sum_row
 
         # Analytic term (using integral)
-        result_anal = self * other_integral_for_reg
+        result_anal = self[-1:,:] * other_integral_for_reg
 
-        # Combine: standard - factored + analytic
-        #print('left_convolution', (result_std + ( - result_fact + result_anal))[-1,-1])
-        return (result_std + (- result_fact + result_anal)) # * filter_function
+        return (result_std + (- result_fact + result_anal) ) 
 
 
-    def precise_convolution_right(self, other, other_integral, dt, self_index = -1):
+    def precise_convolution_right(self, other, other_integral, dt, self_index=-1, precomputed_sum=None):
         """
         Compute regularized right convolution: other @ self (regularized).
 
@@ -326,13 +308,12 @@ class NambuKeldyshTensor:
             other: NambuKeldyshTensor - function to convolve with (regularized)
             other_integral: NambuKeldyshTensor - integral of other
             dt: float - time step for discretization
+            self_index: int - index for extracting diagonal (default -1)
+            precomputed_sum: NambuKeldyshTensor - optional pre-computed cumulative sum over extended grid
+                            Shape (2,2,1,N_t'). If provided, replaces (other @ ones) computation.
 
         Returns:
             NambuKeldyshTensor - regularized convolution result
-
-        Example:
-            # f @ ga with regularization on f
-            result = ga.precise_convolution_right(f_thermal, f_integral, dt)
         """
         # ========== Input shape validation for midpoint rule ==========
         # Check that other is a row: (2,2,1,N_t)
@@ -366,48 +347,25 @@ class NambuKeldyshTensor:
         N_t = other.data.shape[-1]
         N_tprime = self.data.shape[-1]
 
-        filter_data = np.append(np.zeros(N_t//3), np.ones(N_t - N_t//3))
-        filter_function = NambuKeldyshTensor(filter_data, pauli_channel=0)
-
-        # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')
-        row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
-        col_indices = np.arange(N_tprime)[np.newaxis, :]  # Shape (1, N_t')
-        ones_data = (row_indices <= col_indices).astype(complex)
-        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
 
         is_other_row = (other.data.shape[2] == 1)
 
         # Standard convolution (always uses full self)
-
+        positive_index = self_index % N_t
         first_endpoint_std = other[:,0:1] * self[0:1,:]
         last_endpoint_std = other[:,:] * self.diagonal_time()
         result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
-        if is_other_row:
-            # Extract corresponding column from self
-            # Handle negative indices properly to avoid empty slices
-            N_t = self.data.shape[2]
-            if self_index < 0:
-                # Convert negative index to positive
-                positive_index = N_t + self_index
-            else:
-                positive_index = self_index
-            self_for_reg = self[:, positive_index].transpose().complete_transpose() #self.diagonal_time() 
-        else:
-            self_for_reg = self
-        # Factored term (non-analytic contribution)
-        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
-        first_endpoint_fact = (other[:,0:1] * ones_tensor[0:1,:]) * self_for_reg
-        last_endpoint_fact = (other[:,:]) * self_for_reg
-        #* 0 from filter function
-        result_fact = ((other @ ones_tensor) * self_for_reg) * dt - 0.5 * dt * first_endpoint_fact - 0.5 * dt * last_endpoint_fact 
+        self_for_reg = self[:, positive_index].transpose().complete_transpose() #self.diagonal_time()
+        positive_index_precomp = self_index % precomputed_sum.data.shape[2]
 
+        precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
+        result_fact = precomputed_sum_row * self_for_reg
+       
         # Analytic term (using integral)
         result_anal = (- other_integral) * self_for_reg
-
-        # Combine: standard - factored + analytic
-        #print('right_convolution', (result_std + ( - result_fact + result_anal))[-1,-1])
-        return (result_std + ( - result_fact + result_anal) ) # * filter_function
+    
+        return (result_std + (- result_fact + result_anal))
 
     def _check_binary_shape_compatibility(self, other):
         """
@@ -540,6 +498,120 @@ class NambuKeldyshTensor:
         result = np.einsum('ij...,jk->ik...', temp, tau3)
 
         return NambuKeldyshTensor(result)
+
+    def extend_time_invariant(self, extension_factor=3, time_grid=None, temperature=None, formula_func=None):
+        """
+        Extend a time-translationally-invariant tensor to larger time range.
+
+        For thermal distributions f(t,t') = f(τ) where τ = t-t', this method:
+        1. Extracts the underlying 1D function f(τ) from the 2D matrix
+        2. Extends τ to a larger range (extension_factor × original)
+        3. Reconstructs 2D matrix on extended grid
+        4. Stores metadata for index mapping back to original grid
+
+        Args:
+            extension_factor: How many times to extend the time range (default 3)
+                            Extended grid covers [-k·T_max, k·T_max] where k = extension_factor
+            time_grid: Original time grid [-T_max, 0] as 1D numpy array (required)
+            temperature: Temperature for computing f(τ) on extended range (required if formula_func is None)
+            formula_func: Function f(tau, T) to compute values on extended range.
+                         Default uses thermal distribution: -iT/sinh(πτT)
+                         Signature: func(tau_array, temperature) -> complex array
+
+        Returns:
+            NambuKeldyshTensor: Extended tensor with larger time axes and metadata attributes:
+                - _time_grid: Extended time grid
+                - _extension_factor: Extension factor used
+                - _grid_offset: Index offset to map original grid to extended grid
+                - _original_N_t: Number of points in original grid
+
+        Example:
+            # Extend thermal distribution from [-10, 0] to [-30, 30]
+            f_extended = thermal_dist.extend_time_invariant(
+                extension_factor=3,
+                time_grid=np.linspace(-10, 0, 100),
+                temperature=0.1
+            )
+            # f_extended has shape (2, 2, 300, 300)
+            # Original grid [-10, 0] maps to extended indices [100:200]
+        """
+        # Validate inputs
+        if time_grid is None:
+            raise ValueError("Must provide time_grid parameter (1D array of time values)")
+
+        if self.data.ndim != 4:
+            raise ValueError(
+                f"extend_time_invariant() requires a two-time tensor with shape (2, 2, Nt, Nt). "
+                f"Got shape {self.data.shape}"
+            )
+
+        # Extract current grid info
+        N_t_original = self.data.shape[2]  # Current time points
+        if len(time_grid) != N_t_original:
+            raise ValueError(
+                f"time_grid length ({len(time_grid)}) must match tensor time dimension ({N_t_original})"
+            )
+
+        T_max = abs(time_grid[0])  # Original T_max (assuming grid is [-T_max, ...])
+        dt_original = time_grid[1] - time_grid[0]
+
+        # Create extended time grid
+        # Original: [-T_max, 0] or similar
+        # Extended: [-extension_factor·T_max, extension_factor·T_max] centered at midpoint
+
+        # Compute midpoint and range of original grid
+        t_min_orig = time_grid[0]
+        t_max_orig = time_grid[-1]
+        t_mid = (t_min_orig + t_max_orig) / 2.0
+        t_range_orig = t_max_orig - t_min_orig
+
+        # Extended range
+        t_range_extended = extension_factor * t_range_orig
+        N_t_extended = int(extension_factor * N_t_original)
+
+        # Extended grid centered at same midpoint
+        time_grid_extended = np.linspace(
+            t_mid - t_range_extended / 2.0,
+            t_mid + t_range_extended / 2.0,
+            N_t_extended
+        )
+
+        # Default formula: thermal distribution f(τ) = -iT/sinh(πτT)
+        if formula_func is None:
+            if temperature is None:
+                raise ValueError("Must provide temperature parameter when using default thermal formula")
+
+            def formula_func(tau, T):
+                """Default thermal distribution formula"""
+                result = np.zeros_like(tau, dtype=complex)
+                mask = np.abs(tau) > 1e-10  # Avoid division by zero at τ=0
+                result[mask] = -1j * T / np.sinh(np.pi * tau[mask] * T)
+                return result
+
+        # Create extended 2D matrix: f_ext[i,j] = f(t_i - t_j)
+        t_i_ext, t_j_ext = np.meshgrid(time_grid_extended, time_grid_extended, indexing='ij')
+        tau_matrix_ext = t_i_ext - t_j_ext
+
+        # Compute f(τ) on extended grid
+        f_ext_2d = formula_func(tau_matrix_ext, temperature)
+
+        # Create extended tensor (assume same Pauli structure as original, typically channel 0 for thermal)
+        # Determine Pauli channel from original tensor (check which channel is non-zero)
+        pauli_channel = 0  # Default to τ₀ (identity) for thermal distributions
+
+        extended_tensor = NambuKeldyshTensor(f_ext_2d, pauli_channel=pauli_channel)
+
+        # Store metadata for index mapping
+        # Original grid maps to extended indices [offset : offset + N_t_original]
+        # Offset is where original t_min appears in extended grid
+        offset = np.argmin(np.abs(time_grid_extended - t_min_orig))
+
+        extended_tensor._time_grid = time_grid_extended
+        extended_tensor._extension_factor = extension_factor
+        extended_tensor._grid_offset = offset
+        extended_tensor._original_N_t = N_t_original
+
+        return extended_tensor
 
     def determinant(self):
         """

@@ -147,6 +147,90 @@ def _get_grid_parameters(save_data, input_kwargs):
     return grid_params
 
 
+def identify_sweep_parameters(timestamp, running_machine='laptop', max_params=10, verbose=True):
+    """
+    Identify all parameters that vary across jobs in a timestamp.
+
+    Automatically detects parameter sweeps by loading all jobs and comparing
+    their input parameters. Works with all nested structures including field_params,
+    system_parameters, grid_parameters, etc.
+
+    Args:
+        timestamp: Timestamp folder name
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        max_params: Maximum number of varying parameters to return (default 10)
+        verbose: If True, print detailed information (default True)
+
+    Returns:
+        dict: {
+            'varying_parameters': List of (param_path, values) tuples,
+            'n_jobs': Total number of jobs,
+            'constant_parameters': Dict of parameters that are constant across all jobs
+        }
+
+    Example:
+        >>> sweep_info = identify_sweep_parameters('20240615_143022')
+        >>> varying_params = sweep_info['varying_parameters']
+        >>> for param_path, values in varying_params:
+        >>>     print(f"{param_path}: {values}")
+    """
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"IDENTIFYING SWEEP PARAMETERS FOR TIMESTAMP: {timestamp}")
+        print(f"{'='*70}\n")
+
+    # Determine number of jobs
+    lines = io.read_contents_readable_file(timestamp)
+    n_jobs = io.recover_job_no(lines)
+
+    if verbose:
+        print(f"Loading {n_jobs} jobs...\n")
+
+    # Load all jobs
+    all_kwargs = []
+    for job_idx in range(n_jobs):
+        input_kwargs, _ = load_job_data(timestamp, job_idx, running_machine=running_machine)
+        all_kwargs.append(input_kwargs)
+
+    # Find varying parameters
+    varying_params = _find_varying_parameters(all_kwargs, max_params=max_params)
+
+    if verbose:
+        if varying_params:
+            print(f"Found {len(varying_params)} varying parameter(s):\n")
+            for idx, (param_path, values) in enumerate(varying_params):
+                print(f"{idx+1}. {param_path}")
+                print(f"   Values: {values}")
+
+                # Show value range for numerical parameters
+                if all(isinstance(v, (int, float)) for v in values):
+                    print(f"   Range: [{min(values):.6g}, {max(values):.6g}]")
+                print()
+        else:
+            print("No varying parameters found - all jobs have identical parameters")
+
+        print(f"{'='*70}\n")
+
+    # Identify constant parameters (from first job, excluding varying ones)
+    varying_paths = {param_path for param_path, _ in varying_params}
+    all_paths = _explore_all_params(all_kwargs[0])
+    constant_params = {}
+
+    for param_path in all_paths:
+        if param_path not in varying_paths:
+            try:
+                value = _extract_param_value(all_kwargs[0], param_path)
+                constant_params[param_path] = value
+            except (KeyError, TypeError, AttributeError):
+                continue
+
+    return {
+        'varying_parameters': varying_params,
+        'n_jobs': n_jobs,
+        'constant_parameters': constant_params
+    }
+
+
 def print_all_parameters(timestamp, job_index=0, running_machine='laptop', show_derived=True):
     """
     Print all simulation parameters in a nicely formatted way.
@@ -633,6 +717,724 @@ def plot_gap(timestamp, job_index=None, save_plot=False, save_dir=None):
         plt.close()
     else:
         plt.show()
+
+
+def _extract_param_value(input_kwargs, param_path):
+    """Extract nested parameter value from input_kwargs using dot notation."""
+    keys = param_path.split('.')
+    value = input_kwargs
+    for key in keys:
+        value = value[key]
+    return value
+
+
+def _explore_all_params(d, prefix='', max_depth=4):
+    """
+    Recursively explore dictionary and return all parameter paths.
+
+    Args:
+        d: Dictionary to explore
+        prefix: Current path prefix
+        max_depth: Maximum recursion depth
+
+    Returns:
+        list: List of parameter paths (dot-notation strings)
+    """
+    if max_depth == 0 or not isinstance(d, dict):
+        return []
+
+    paths = []
+    for key, value in d.items():
+        current_path = f"{prefix}.{key}" if prefix else key
+
+        if isinstance(value, dict):
+            paths.extend(_explore_all_params(value, current_path, max_depth - 1))
+        elif isinstance(value, (int, float, complex, str, bool, type(None))):
+            paths.append(current_path)
+        elif isinstance(value, np.ndarray) and value.size == 1:
+            paths.append(current_path)
+
+    return paths
+
+
+def _find_varying_parameters(all_kwargs, max_params=3):
+    """
+    Identify parameters that vary across multiple jobs.
+
+    Automatically searches through all nested parameter structures including
+    field_params, system_parameters, grid_parameters, etc.
+
+    Args:
+        all_kwargs: List of input_kwargs dicts
+        max_params: Maximum number of varying parameters to return
+
+    Returns:
+        list: List of (param_path, values) tuples for varying parameters
+    """
+    if len(all_kwargs) <= 1:
+        return []
+
+    # Get all possible parameter paths from first kwargs
+    all_paths = _explore_all_params(all_kwargs[0])
+
+    # Parameters to ignore (always vary across jobs)
+    ignore_params = ['save_filename', 'filename', 'job_index', 'job_id', 'timestamp']
+
+    varying_params = []
+
+    # Check each parameter path across all jobs
+    for param_path in all_paths:
+        # Skip ignored parameters
+        if any(ignore_param in param_path for ignore_param in ignore_params):
+            continue
+        try:
+            values = [_extract_param_value(kwargs, param_path) for kwargs in all_kwargs]
+
+            # Check if values differ (accounting for numerical precision)
+            if isinstance(values[0], (int, float)):
+                if not np.allclose(values, values[0], rtol=1e-10):
+                    varying_params.append((param_path, values))
+            else:
+                if not all(v == values[0] for v in values):
+                    varying_params.append((param_path, values))
+
+        except (KeyError, TypeError, AttributeError):
+            continue
+
+    # Sort by priority: field_params first, then system_parameters, then others
+    def get_priority(param_tuple):
+        param_path, values = param_tuple
+        if param_path.startswith('field_params'):
+            return (0, param_path)
+        elif param_path.startswith('system_parameters'):
+            return (1, param_path)
+        elif param_path.startswith('grid_parameters'):
+            return (2, param_path)
+        else:
+            return (3, param_path)
+
+    varying_params.sort(key=get_priority)
+    return varying_params[:max_params]
+
+
+def _create_label_from_params(job_idx, varying_params, values_for_job):
+    """Create a label string from varying parameters."""
+    if not varying_params:
+        return f'Job {job_idx}'
+
+    label_parts = []
+    for (param_path, all_values), value in zip(varying_params, values_for_job):
+        # Extract short name from path
+        param_name = param_path.split('.')[-1]
+
+        # Format value
+        if isinstance(value, float):
+            if 'temperature' in param_path.lower() or 'critical' in param_path.lower():
+                label_parts.append(f'{param_name}={value:.3f}')
+            else:
+                label_parts.append(f'{param_name}={value:.4g}')
+        else:
+            label_parts.append(f'{param_name}={value}')
+
+    return ', '.join(label_parts)
+
+
+def plot_gap_evolution_multi_jobs(timestamp, job_indices=None, save_plot=False,
+                                  save_dir=None, running_machine='laptop',
+                                  xlim_time=None, xlim_freq=None,
+                                  ylim_gap_t=None, ylim_gap_omega_re=None, ylim_gap_omega_im=None,
+                                  ylim_A_t=None, ylim_A_omega_re=None, ylim_A_omega_im=None):
+    """
+    Plot gap and vector potential evolution with time and frequency domain representations.
+
+    Creates a 2x3 plot showing:
+        - Top row (Gap): Gap(t), Re[Gap(ω)], Im[Gap(ω)]
+        - Bottom row (A): A(t), Re[A(ω)], Im[A(ω)]
+
+    FFTs are phase-corrected for pulses centered at t_0 ≠ 0.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_indices: List of job indices to plot. If None, plots all jobs in timestamp.
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        xlim_time: Tuple (xmin, xmax) for time domain x-axis (both Gap(t) and A(t))
+        xlim_freq: Tuple (xmin, xmax) for frequency domain x-axis (overrides automatic range)
+        ylim_gap_t: Tuple (ymin, ymax) for Gap(t) y-axis
+        ylim_gap_omega_re: Tuple (ymin, ymax) for Re[Gap(ω)] y-axis
+        ylim_gap_omega_im: Tuple (ymin, ymax) for Im[Gap(ω)] y-axis
+        ylim_A_t: Tuple (ymin, ymax) for A(t) y-axis
+        ylim_A_omega_re: Tuple (ymin, ymax) for Re[A(ω)] y-axis
+        ylim_A_omega_im: Tuple (ymin, ymax) for Im[A(ω)] y-axis
+
+    Returns:
+        A_data_list: List of vector potential arrays A(t), one per job
+        gap_data_list: List of gap arrays Δ(t), one per job (complex)
+        fig: matplotlib Figure object
+        axes: 2x3 numpy array of matplotlib Axes objects
+
+    Example:
+        A_data, gap_data, fig, axes = plot_gap_evolution_multi_jobs(
+            '20240615_143022',
+            job_indices=[0, 1, 2],
+            xlim_time=(-10, 10),
+            ylim_gap_t=(0, 2)
+        )
+    """
+    # Determine which jobs to plot
+    if job_indices is None:
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
+        job_indices = list(range(job_no))
+    else:
+        if not isinstance(job_indices, list):
+            job_indices = list(job_indices)
+
+    print(f"\n{'='*70}")
+    print(f"Plotting gap evolution for {len(job_indices)} jobs from timestamp: {timestamp}")
+    print(f"{'='*70}\n")
+
+    # Load all jobs and collect kwargs
+    all_data = []
+    all_kwargs = []
+
+    for job_idx in job_indices:
+        print(f"Loading job {job_idx}...")
+        data = load_simulation_data(timestamp, job_idx, running_machine=running_machine)
+        all_data.append(data)
+        all_kwargs.append(data['input_kwargs'])
+
+    # Find parameters that vary across jobs
+    varying_params = _find_varying_parameters(all_kwargs, max_params=3)
+
+    if varying_params:
+        print(f"\nDetected varying parameters:")
+        for param_path, values in varying_params:
+            print(f"  {param_path}: {values}")
+    else:
+        print("\nNo varying parameters detected - will use job index for labels")
+
+    # Create 2x3 figure
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    ax_gap_t = axes[0, 0]
+    ax_gap_omega_re = axes[0, 1]
+    ax_gap_omega_im = axes[0, 2]
+    ax_A_t = axes[1, 0]
+    ax_A_omega_re = axes[1, 1]
+    ax_A_omega_im = axes[1, 2]
+
+    # Define colormap
+    from matplotlib import cm
+    colors = cm.get_cmap('tab10', len(job_indices))
+
+    # Lists to collect data for return
+    A_data_list = []
+    gap_data_list = []
+
+    # Plot each job
+    field_type = None
+    for idx, (job_idx, data) in enumerate(zip(job_indices, all_data)):
+        # Extract data
+        times = data['times']
+        gaps = data['gaps']
+        vector_potentials = data['vector_potentials']
+        T_c = data['T_c']
+
+        # Store field type from first job
+        if field_type is None:
+            field_type = data['field_type']
+
+        # Create label from varying parameters
+        if varying_params:
+            values_for_job = [values[idx] for _, values in varying_params]
+            label = _create_label_from_params(job_idx, varying_params, values_for_job)
+        else:
+            label = f'Job {job_idx}'
+
+        # Store data for return (raw arrays)
+        A_data_list.append(vector_potentials)
+        gap_data_list.append(gaps)
+
+        # Time domain normalization
+        times_norm = times * T_c  # Dimensionless time
+        gap_norm = np.abs(gaps) / T_c  # Dimensionless gap
+        A_norm = vector_potentials  # Keep A in original units
+
+        # Compute FFT parameters
+        N_t = len(times)
+        dt = times[1] - times[0]
+
+        # Find pulse center (time of maximum |A|)
+        t_center_idx = np.argmax(np.abs(vector_potentials))
+        t_center = times[t_center_idx]
+
+        # Frequency grid
+        freq = np.fft.fftfreq(N_t, d=dt)
+        omega = 2 * np.pi * freq
+        omega_shifted = np.fft.fftshift(omega)
+
+        # FFT of gap deviation (remove DC component to see dynamics)
+        # Use absolute value of gap in time domain to avoid complex warnings
+        gap_abs = np.abs(gaps)
+        gap_deviation = gap_abs - gap_abs[0]  # δ|Δ|(t) = |Δ|(t) - |Δ|(0)
+        gap_fft_raw = np.fft.fft(gap_deviation) * dt  # Include dt for proper normalization
+        phase_correction = np.exp(-1j * omega * t_center)
+        gap_fft_corrected = gap_fft_raw * phase_correction
+        gap_fft_shifted = np.fft.fftshift(gap_fft_corrected)
+        gap_omega_re_norm = np.real(gap_fft_shifted) / T_c
+        gap_omega_im_norm = np.imag(gap_fft_shifted) / T_c
+
+        # FFT of vector potential with phase correction
+        A_fft_raw = np.fft.fft(vector_potentials) * dt
+        A_fft_corrected = A_fft_raw * phase_correction
+        A_fft_shifted = np.fft.fftshift(A_fft_corrected)
+        A_omega_re_norm = np.real(A_fft_shifted)
+        A_omega_im_norm = np.imag(A_fft_shifted)
+
+        # Plot time domain - Gap(t)
+        ax_gap_t.plot(times_norm, gap_norm, linewidth=2.5, label=label,
+                      alpha=0.8, color=colors(idx))
+
+        # Plot frequency domain - Re[Gap(ω)]
+        ax_gap_omega_re.plot(omega_shifted / T_c, gap_omega_re_norm, linewidth=2.5, label=label,
+                             alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+        # Plot frequency domain - Im[Gap(ω)]
+        ax_gap_omega_im.plot(omega_shifted / T_c, gap_omega_im_norm, linewidth=2.5, label=label,
+                             alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+        # Plot time domain - A(t)
+        ax_A_t.plot(times_norm, A_norm, linewidth=2.5, label=label,
+                    alpha=0.8, color=colors(idx))
+
+        # Plot frequency domain - Re[A(ω)]
+        ax_A_omega_re.plot(omega_shifted / T_c, A_omega_re_norm, linewidth=2.5, label=label,
+                           alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+        # Plot frequency domain - Im[A(ω)]
+        ax_A_omega_im.plot(omega_shifted / T_c, A_omega_im_norm, linewidth=2.5, label=label,
+                           alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+    # Add vertical lines at ±2*Δ(0) on frequency plots
+    # Use first job's equilibrium gap
+    first_gap_0 = np.abs(all_data[0]['gaps'][0])
+    first_T_c = all_data[0]['T_c']
+    two_gap_norm = 2 * first_gap_0 / first_T_c
+
+    ax_gap_omega_re.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_gap_omega_re.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_gap_omega_im.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_gap_omega_im.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_A_omega_re.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_A_omega_re.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_A_omega_im.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_A_omega_im.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+
+    # Configure Gap(t) plot
+    ax_gap_t.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=12)
+    ax_gap_t.set_ylabel(r'$|\Delta(t)| / T_c$', fontsize=12)
+    ax_gap_t.set_title(r'Gap: Time Domain', fontsize=13)
+    if xlim_time is not None:
+        ax_gap_t.set_xlim(xlim_time)
+    if ylim_gap_t is not None:
+        ax_gap_t.set_ylim(ylim_gap_t)
+    ax_gap_t.legend(fontsize=9, loc='best')
+    ax_gap_t.grid(True, alpha=0.3)
+
+    # Configure Re[Gap(ω)] plot
+    ax_gap_omega_re.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_gap_omega_re.set_ylabel(r'$\mathrm{Re}[\delta\tilde{\Delta}(\omega)] / T_c$', fontsize=12)
+    ax_gap_omega_re.set_title(r'Gap: Re[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_gap_omega_re.set_xlim(xlim_freq)
+    else:
+        ax_gap_omega_re.set_xlim(-3 * two_gap_norm, 3 * two_gap_norm)
+    if ylim_gap_omega_re is not None:
+        ax_gap_omega_re.set_ylim(ylim_gap_omega_re)
+    ax_gap_omega_re.legend(fontsize=9, loc='best')
+    ax_gap_omega_re.grid(True, alpha=0.3)
+
+    # Configure Im[Gap(ω)] plot
+    ax_gap_omega_im.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_gap_omega_im.set_ylabel(r'$\mathrm{Im}[\delta\tilde{\Delta}(\omega)] / T_c$', fontsize=12)
+    ax_gap_omega_im.set_title(r'Gap: Im[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_gap_omega_im.set_xlim(xlim_freq)
+    else:
+        ax_gap_omega_im.set_xlim(-3 * two_gap_norm, 3 * two_gap_norm)
+    if ylim_gap_omega_im is not None:
+        ax_gap_omega_im.set_ylim(ylim_gap_omega_im)
+    ax_gap_omega_im.legend(fontsize=9, loc='best')
+    ax_gap_omega_im.grid(True, alpha=0.3)
+
+    # Configure A(t) plot
+    ax_A_t.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=12)
+    ax_A_t.set_ylabel(r'$A(t)$', fontsize=12)
+    ax_A_t.set_title(r'Vector Potential: Time Domain', fontsize=13)
+    if xlim_time is not None:
+        ax_A_t.set_xlim(xlim_time)
+    if ylim_A_t is not None:
+        ax_A_t.set_ylim(ylim_A_t)
+    ax_A_t.legend(fontsize=9, loc='best')
+    ax_A_t.grid(True, alpha=0.3)
+
+    # Configure Re[A(ω)] plot
+    ax_A_omega_re.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_A_omega_re.set_ylabel(r'$\mathrm{Re}[\tilde{A}(\omega)]$', fontsize=12)
+    ax_A_omega_re.set_title(r'Vector Potential: Re[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_A_omega_re.set_xlim(xlim_freq)
+    else:
+        ax_A_omega_re.set_xlim(-5 * two_gap_norm, 5 * two_gap_norm)
+    if ylim_A_omega_re is not None:
+        ax_A_omega_re.set_ylim(ylim_A_omega_re)
+    ax_A_omega_re.legend(fontsize=9, loc='best')
+    ax_A_omega_re.grid(True, alpha=0.3)
+
+    # Configure Im[A(ω)] plot
+    ax_A_omega_im.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_A_omega_im.set_ylabel(r'$\mathrm{Im}[\tilde{A}(\omega)]$', fontsize=12)
+    ax_A_omega_im.set_title(r'Vector Potential: Im[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_A_omega_im.set_xlim(xlim_freq)
+    else:
+        ax_A_omega_im.set_xlim(-5 * two_gap_norm, 5 * two_gap_norm)
+    if ylim_A_omega_im is not None:
+        ax_A_omega_im.set_ylim(ylim_A_omega_im)
+    ax_A_omega_im.legend(fontsize=9, loc='best')
+    ax_A_omega_im.grid(True, alpha=0.3)
+
+    # Overall title
+    title = f'{field_type} pulse simulation' if field_type else 'Gap and vector potential evolution'
+    fig.suptitle(title, fontsize=15, y=0.995)
+
+    plt.tight_layout()
+
+    if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        job_str = f"jobs_{'_'.join(map(str, job_indices))}"
+        filename = os.path.join(save_dir, f'gap_evolution_2x3_{timestamp}_{job_str}.png')
+
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='plot_gap_evolution_multi_jobs',
+            additional_information=job_str,
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"\nPlot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
+
+    return A_data_list, gap_data_list, fig, axes
+
+
+def plot_current_evolution_multi_jobs(timestamp, job_indices=None, save_plot=False,
+                                      save_dir=None, running_machine='laptop',
+                                      xlim_time=None, xlim_freq=None,
+                                      ylim_current_t=None, ylim_current_omega_re=None, ylim_current_omega_im=None,
+                                      ylim_A_t=None, ylim_A_omega_re=None, ylim_A_omega_im=None):
+    """
+    Plot current and vector potential evolution with time and frequency domain representations.
+
+    Creates a 2x3 plot showing:
+        - Top row (Current): J(t), Re[J(ω)], Im[J(ω)]
+        - Bottom row (A): A(t), Re[A(ω)], Im[A(ω)]
+
+    FFTs are phase-corrected for pulses centered at t_0 ≠ 0.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_indices: List of job indices to plot. If None, plots all jobs in timestamp.
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        xlim_time: Tuple (xmin, xmax) for time domain x-axis (both J(t) and A(t))
+        xlim_freq: Tuple (xmin, xmax) for frequency domain x-axis (overrides automatic range)
+        ylim_current_t: Tuple (ymin, ymax) for J(t) y-axis
+        ylim_current_omega_re: Tuple (ymin, ymax) for Re[J(ω)] y-axis
+        ylim_current_omega_im: Tuple (ymin, ymax) for Im[J(ω)] y-axis
+        ylim_A_t: Tuple (ymin, ymax) for A(t) y-axis
+        ylim_A_omega_re: Tuple (ymin, ymax) for Re[A(ω)] y-axis
+        ylim_A_omega_im: Tuple (ymin, ymax) for Im[A(ω)] y-axis
+
+    Returns:
+        A_data_list: List of vector potential arrays A(t), one per job
+        current_data_list: List of current arrays J(t), one per job
+        fig: matplotlib Figure object
+        axes: 2x3 numpy array of matplotlib Axes objects
+
+    Example:
+        A_data, current_data, fig, axes = plot_current_evolution_multi_jobs(
+            '20240615_143022',
+            job_indices=[0, 1, 2],
+            xlim_time=(-10, 10),
+            ylim_current_t=(-0.5, 0.5)
+        )
+    """
+    # Determine which jobs to plot
+    if job_indices is None:
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
+        job_indices = list(range(job_no))
+    else:
+        if not isinstance(job_indices, list):
+            job_indices = list(job_indices)
+
+    print(f"\n{'='*70}")
+    print(f"Plotting current evolution for {len(job_indices)} jobs from timestamp: {timestamp}")
+    print(f"{'='*70}\n")
+
+    # Load all jobs and collect kwargs
+    all_data = []
+    all_kwargs = []
+
+    for job_idx in job_indices:
+        print(f"Loading job {job_idx}...")
+        data = load_simulation_data(timestamp, job_idx, running_machine=running_machine)
+        all_data.append(data)
+        all_kwargs.append(data['input_kwargs'])
+
+    # Find parameters that vary across jobs
+    varying_params = _find_varying_parameters(all_kwargs, max_params=3)
+
+    if varying_params:
+        print(f"\nDetected varying parameters:")
+        for param_path, values in varying_params:
+            print(f"  {param_path}: {values}")
+    else:
+        print("\nNo varying parameters detected - will use job index for labels")
+
+    # Create 2x3 figure
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    ax_current_t = axes[0, 0]
+    ax_current_omega_re = axes[0, 1]
+    ax_current_omega_im = axes[0, 2]
+    ax_A_t = axes[1, 0]
+    ax_A_omega_re = axes[1, 1]
+    ax_A_omega_im = axes[1, 2]
+
+    # Define colormap
+    from matplotlib import cm
+    colors = cm.get_cmap('tab10', len(job_indices))
+
+    # Lists to collect data for return
+    A_data_list = []
+    current_data_list = []
+
+    # Plot each job
+    field_type = None
+    for idx, (job_idx, data) in enumerate(zip(job_indices, all_data)):
+        # Extract data
+        times = data['times']
+        currents = data['currents']
+        vector_potentials = data['vector_potentials']
+        T_c = data['T_c']
+
+        # Store field type from first job
+        if field_type is None:
+            field_type = data['field_type']
+
+        # Create label from varying parameters
+        if varying_params:
+            values_for_job = [values[idx] for _, values in varying_params]
+            label = _create_label_from_params(job_idx, varying_params, values_for_job)
+        else:
+            label = f'Job {job_idx}'
+
+        # Store data for return (raw arrays)
+        A_data_list.append(vector_potentials)
+        current_data_list.append(currents)
+
+        # Time domain normalization
+        times_norm = times * T_c  # Dimensionless time
+        current_norm = currents  # Keep current in original units
+        A_norm = vector_potentials  # Keep A in original units
+
+        # Compute FFT parameters
+        N_t = len(times)
+        dt = times[1] - times[0]
+
+        # Find pulse center (time of maximum |A|)
+        t_center_idx = np.argmax(np.abs(vector_potentials))
+        t_center = times[t_center_idx]
+
+        # Frequency grid
+        freq = np.fft.fftfreq(N_t, d=dt)
+        omega = 2 * np.pi * freq
+        omega_shifted = np.fft.fftshift(omega)
+
+        # FFT of current deviation (remove DC component to see dynamics)
+        current_deviation = currents - currents[0]  # δJ(t) = J(t) - J(0)
+        current_fft_raw = np.fft.fft(current_deviation) * dt  # Include dt for proper normalization
+        phase_correction = np.exp(-1j * omega * t_center)
+        current_fft_corrected = current_fft_raw * phase_correction
+        current_fft_shifted = np.fft.fftshift(current_fft_corrected)
+        current_omega_re_norm = np.real(current_fft_shifted)
+        current_omega_im_norm = np.imag(current_fft_shifted)
+
+        # FFT of vector potential with phase correction
+        A_fft_raw = np.fft.fft(vector_potentials) * dt
+        A_fft_corrected = A_fft_raw * phase_correction
+        A_fft_shifted = np.fft.fftshift(A_fft_corrected)
+        A_omega_re_norm = np.real(A_fft_shifted)
+        A_omega_im_norm = np.imag(A_fft_shifted)
+
+        # Plot time domain - Current(t)
+        ax_current_t.plot(times_norm, current_norm, linewidth=2.5, label=label,
+                          alpha=0.8, color=colors(idx))
+
+        # Plot frequency domain - Re[Current(ω)]
+        ax_current_omega_re.plot(omega_shifted / T_c, current_omega_re_norm, linewidth=2.5, label=label,
+                                 alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+        # Plot frequency domain - Im[Current(ω)]
+        ax_current_omega_im.plot(omega_shifted / T_c, current_omega_im_norm, linewidth=2.5, label=label,
+                                 alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+        # Plot time domain - A(t)
+        ax_A_t.plot(times_norm, A_norm, linewidth=2.5, label=label,
+                    alpha=0.8, color=colors(idx))
+
+        # Plot frequency domain - Re[A(ω)]
+        ax_A_omega_re.plot(omega_shifted / T_c, A_omega_re_norm, linewidth=2.5, label=label,
+                           alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+        # Plot frequency domain - Im[A(ω)]
+        ax_A_omega_im.plot(omega_shifted / T_c, A_omega_im_norm, linewidth=2.5, label=label,
+                           alpha=0.8, color=colors(idx), marker='o', markersize=4)
+
+    # Add vertical lines at ±2*Δ(0) on frequency plots
+    # Use first job's equilibrium gap
+    first_gap_0 = np.abs(all_data[0]['gaps'][0])
+    first_T_c = all_data[0]['T_c']
+    two_gap_norm = 2 * first_gap_0 / first_T_c
+
+    ax_current_omega_re.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_current_omega_re.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_current_omega_im.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_current_omega_im.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_A_omega_re.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_A_omega_re.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax_A_omega_im.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
+    ax_A_omega_im.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+
+    # Configure Current(t) plot
+    ax_current_t.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=12)
+    ax_current_t.set_ylabel(r'$J(t)$', fontsize=12)
+    ax_current_t.set_title(r'Current: Time Domain', fontsize=13)
+    if xlim_time is not None:
+        ax_current_t.set_xlim(xlim_time)
+    if ylim_current_t is not None:
+        ax_current_t.set_ylim(ylim_current_t)
+    ax_current_t.legend(fontsize=9, loc='best')
+    ax_current_t.grid(True, alpha=0.3)
+
+    # Configure Re[Current(ω)] plot
+    ax_current_omega_re.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_current_omega_re.set_ylabel(r'$\mathrm{Re}[\delta\tilde{J}(\omega)]$', fontsize=12)
+    ax_current_omega_re.set_title(r'Current: Re[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_current_omega_re.set_xlim(xlim_freq)
+    else:
+        ax_current_omega_re.set_xlim(-3 * two_gap_norm, 3 * two_gap_norm)
+    if ylim_current_omega_re is not None:
+        ax_current_omega_re.set_ylim(ylim_current_omega_re)
+    ax_current_omega_re.legend(fontsize=9, loc='best')
+    ax_current_omega_re.grid(True, alpha=0.3)
+
+    # Configure Im[Current(ω)] plot
+    ax_current_omega_im.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_current_omega_im.set_ylabel(r'$\mathrm{Im}[\delta\tilde{J}(\omega)]$', fontsize=12)
+    ax_current_omega_im.set_title(r'Current: Im[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_current_omega_im.set_xlim(xlim_freq)
+    else:
+        ax_current_omega_im.set_xlim(-3 * two_gap_norm, 3 * two_gap_norm)
+    if ylim_current_omega_im is not None:
+        ax_current_omega_im.set_ylim(ylim_current_omega_im)
+    ax_current_omega_im.legend(fontsize=9, loc='best')
+    ax_current_omega_im.grid(True, alpha=0.3)
+
+    # Configure A(t) plot
+    ax_A_t.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=12)
+    ax_A_t.set_ylabel(r'$A(t)$', fontsize=12)
+    ax_A_t.set_title(r'Vector Potential: Time Domain', fontsize=13)
+    if xlim_time is not None:
+        ax_A_t.set_xlim(xlim_time)
+    if ylim_A_t is not None:
+        ax_A_t.set_ylim(ylim_A_t)
+    ax_A_t.legend(fontsize=9, loc='best')
+    ax_A_t.grid(True, alpha=0.3)
+
+    # Configure Re[A(ω)] plot
+    ax_A_omega_re.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_A_omega_re.set_ylabel(r'$\mathrm{Re}[\tilde{A}(\omega)]$', fontsize=12)
+    ax_A_omega_re.set_title(r'Vector Potential: Re[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_A_omega_re.set_xlim(xlim_freq)
+    else:
+        ax_A_omega_re.set_xlim(-5 * two_gap_norm, 5 * two_gap_norm)
+    if ylim_A_omega_re is not None:
+        ax_A_omega_re.set_ylim(ylim_A_omega_re)
+    ax_A_omega_re.legend(fontsize=9, loc='best')
+    ax_A_omega_re.grid(True, alpha=0.3)
+
+    # Configure Im[A(ω)] plot
+    ax_A_omega_im.set_xlabel(r'Frequency $\omega$ ($T_c$)', fontsize=12)
+    ax_A_omega_im.set_ylabel(r'$\mathrm{Im}[\tilde{A}(\omega)]$', fontsize=12)
+    ax_A_omega_im.set_title(r'Vector Potential: Im[FFT]', fontsize=13)
+    if xlim_freq is not None:
+        ax_A_omega_im.set_xlim(xlim_freq)
+    else:
+        ax_A_omega_im.set_xlim(-5 * two_gap_norm, 5 * two_gap_norm)
+    if ylim_A_omega_im is not None:
+        ax_A_omega_im.set_ylim(ylim_A_omega_im)
+    ax_A_omega_im.legend(fontsize=9, loc='best')
+    ax_A_omega_im.grid(True, alpha=0.3)
+
+    # Overall title
+    title = f'{field_type} pulse simulation' if field_type else 'Current and vector potential evolution'
+    fig.suptitle(title, fontsize=15, y=0.995)
+
+    plt.tight_layout()
+
+    if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        job_str = f"jobs_{'_'.join(map(str, job_indices))}"
+        filename = os.path.join(save_dir, f'current_evolution_2x3_{timestamp}_{job_str}.png')
+
+        # Save with metadata using extended_savefig
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='plot_current_evolution_multi_jobs',
+            additional_information=job_str,
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"\nPlot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
+
+    return A_data_list, current_data_list, fig, axes
 
 
 def compare_gap_across_timestamps(timestamps, sweep_parameter, label_parameter='dt',
@@ -1580,11 +2382,15 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
         plt.show()
 
 def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=None,
-                              n_average=100, save_plot=False, save_dir=None):
+                              n_average=100, save_plot=False, save_dir=None,
+                              times_external=None, gaps_external=None,
+                              currents_external=None, A_external=None,
+                              labels_external=None, align_pulses=True):
     """
     Plot gap, current, and vector potential vs time in a combined 3-panel figure.
 
     Optionally overlay equilibrium gap(Q) and current(Q) interpolated at instantaneous Q(t).
+    Can also overlay external data for comparison.
 
     Args:
         timestamp: Timestamp for time evolution data
@@ -1593,6 +2399,23 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
         n_average: Number of timesteps to average for equilibrium data (default 100)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots (default None uses Figures/ in project folder)
+        times_external: Optional external time values for comparison. Can be:
+                       - Single array: plots one external dataset
+                       - List of arrays: plots multiple external datasets
+        gaps_external: Optional external gap values. Can be:
+                      - Single array: plots one external dataset
+                      - List of arrays: plots multiple external datasets (must match times_external length)
+        currents_external: Optional external current values. Can be:
+                          - Single array: plots one external dataset
+                          - List of arrays: plots multiple external datasets (must match times_external length)
+        A_external: Optional external vector potential values. Can be:
+                   - Single array: plots one external dataset
+                   - List of arrays: plots multiple external datasets (must match times_external length)
+        labels_external: Optional labels for external datasets. Can be:
+                        - Single string: label for single external dataset
+                        - List of strings: labels for multiple external datasets (must match times_external length)
+                        - If not provided, defaults to 'External data' or 'External 1', 'External 2', etc.
+        align_pulses: If True, shift external time axes to align pulse maxima (default True)
     """
     # Determine which jobs to plot
     if job_index is None:
@@ -1771,12 +2594,75 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
             axes[1].plot(times_norm, current_eq_interp, '--', linewidth=2,
                         label=eq_label, alpha=0.7, color='red')
 
+    # Plot external data if provided
+    if times_external is not None:
+        # Normalize external data to lists
+        if not isinstance(times_external, list):
+            times_list = [times_external]
+            gaps_list = [gaps_external] if gaps_external is not None else [None]
+            currents_list = [currents_external] if currents_external is not None else [None]
+            A_list = [A_external] if A_external is not None else [None]
+            if labels_external is None:
+                label_list = ['External data']
+            elif isinstance(labels_external, str):
+                label_list = [labels_external]
+            else:
+                label_list = labels_external
+        else:
+            times_list = times_external
+            gaps_list = gaps_external if gaps_external is not None else [None] * len(times_list)
+            currents_list = currents_external if currents_external is not None else [None] * len(times_list)
+            A_list = A_external if A_external is not None else [None] * len(times_list)
+            if labels_external is None:
+                label_list = [f'External {i+1}' for i in range(len(times_list))]
+            else:
+                label_list = labels_external
+
+        # Get reference pulse maximum time from first job for alignment
+        if align_pulses:
+            ref_data = load_simulation_data(timestamp, job_indices[0])
+            ref_A = np.abs(ref_data['vector_potentials'])
+            ref_t_max = ref_data['times'][np.argmax(ref_A)]
+            print(f"\nPulse alignment enabled:")
+            print(f"  Reference pulse maximum at t = {ref_t_max:.3f}")
+
+        # Plot each external dataset
+        for i, (times_ext, gaps_ext, currents_ext, A_ext, label_ext) in enumerate(zip(times_list, gaps_list, currents_list, A_list, label_list)):
+            color_idx = i + 2  # Offset to avoid colors used for main data and equilibrium
+
+            # Compute time shift for pulse alignment
+            time_shift = 0.0
+            if align_pulses and A_ext is not None:
+                # Find time of maximum in external A pulse
+                ext_A_abs = np.abs(A_ext)
+                ext_t_max = times_ext[np.argmax(ext_A_abs)]
+                time_shift = ref_t_max - ext_t_max
+                print(f"  External dataset '{label_ext}': t_max = {ext_t_max:.3f}, shift = {time_shift:+.3f}")
+
+            # Apply time shift
+            times_ext_shifted = times_ext + time_shift
+
+            # Plot gap if provided
+            if gaps_ext is not None:
+                axes[0].plot(times_ext_shifted, gaps_ext, '--', linewidth=2,
+                           label=label_ext, alpha=0.7, color=f'C{color_idx}')
+
+            # Plot current if provided
+            if currents_ext is not None:
+                axes[1].plot(times_ext_shifted, currents_ext, '--', linewidth=2,
+                           label=label_ext, alpha=0.7, color=f'C{color_idx}')
+
+            # Plot vector potential if provided
+            if A_ext is not None:
+                axes[2].plot(times_ext_shifted, A_ext, '--', linewidth=2,
+                           label=label_ext, alpha=0.7, color=f'C{color_idx}')
+
     # Configure gap subplot
     axes[0].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
     axes[0].set_ylabel(r'$|\Delta(t)| / T_c$', fontsize=13)
     axes[0].set_title('Gap evolution', fontsize=14)
     axes[0].grid(True, alpha=0.3)
-    if plot_all or equilibrium_timestamp is not None:
+    if plot_all or equilibrium_timestamp is not None or times_external is not None:
         axes[0].legend(fontsize=10)
 
     # Configure current subplot
@@ -1784,7 +2670,7 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
     axes[1].set_ylabel(r'$J(t) / J_0$', fontsize=13)
     axes[1].set_title('Current evolution', fontsize=14)
     axes[1].grid(True, alpha=0.3)
-    if plot_all or equilibrium_timestamp is not None:
+    if plot_all or equilibrium_timestamp is not None or times_external is not None:
         axes[1].legend(fontsize=10)
 
     # Configure vector potential subplot
@@ -1793,7 +2679,7 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
     title_A = f'{field_type} pulse' if field_type else 'Vector potential'
     axes[2].set_title(title_A, fontsize=14)
     axes[2].grid(True, alpha=0.3)
-    if plot_all:
+    if plot_all or times_external is not None:
         axes[2].legend(fontsize=10)
 
     plt.tight_layout()

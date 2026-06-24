@@ -25,8 +25,7 @@ def compute_equilibrium_gap_vs_temperature(
     time_sampling=1501,
     time_duration=2 * np.pi * 5,
     save_results=True,
-    save_dir='equilibrium_results'
-):
+    save_dir='equilibrium_results'):
     """
     Compute equilibrium gap as a function of temperature.
 
@@ -183,8 +182,7 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
     time_sampling=1501,
     time_duration=2 * np.pi * 5,
     save_results=True,
-    save_dir='equilibrium_results'
-):
+    save_dir='equilibrium_results'):
     """
     Compute equilibrium gap and current as a function of vector potential.
 
@@ -359,7 +357,7 @@ if __name__ == "__main__":
 
     # Common parameters
     critical_temperature = 1.0
-    eta = 0.2
+    eta = 0.1
     time_sampling = 1501
     time_duration = 2 * np.pi * 30
     save_dir = 'equilibrium_results'
@@ -371,7 +369,7 @@ if __name__ == "__main__":
 
     temp_results = compute_equilibrium_gap_vs_temperature(
         T_min=0.1,
-        T_max=1.1,
+        T_max=1.2,
         n_points=30,
         critical_temperature=critical_temperature,
         eta=eta,
@@ -390,7 +388,7 @@ if __name__ == "__main__":
         A_min=0.0,
         A_max=0.9,
         n_points=20,
-        temperature=0.3,
+        temperature=0.5,
         critical_temperature=critical_temperature,
         eta=eta,
         time_sampling=time_sampling,

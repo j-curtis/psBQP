@@ -934,6 +934,7 @@ def plot_gap_evolution_multi_jobs(timestamp, job_indices=None, save_plot=False,
 
     # Plot each job
     field_type = None
+    is_current_driven = False
     for idx, (job_idx, data) in enumerate(zip(job_indices, all_data)):
         # Extract data
         times = data['times']
@@ -941,9 +942,13 @@ def plot_gap_evolution_multi_jobs(timestamp, job_indices=None, save_plot=False,
         vector_potentials = data['vector_potentials']
         T_c = data['T_c']
 
+        # Check for input pulse (for current-driven simulations)
+        input_pulse = data['save_data'].get('input_pulse', None)
+
         # Store field type from first job
         if field_type is None:
             field_type = data['field_type']
+            is_current_driven = field_type is not None and field_type.startswith('current_')
 
         # Create label from varying parameters
         if varying_params:
@@ -1005,8 +1010,15 @@ def plot_gap_evolution_multi_jobs(timestamp, job_indices=None, save_plot=False,
                              alpha=0.8, color=colors(idx), marker='o', markersize=4)
 
         # Plot time domain - A(t)
-        ax_A_t.plot(times_norm, A_norm, linewidth=2.5, label=label,
-                    alpha=0.8, color=colors(idx))
+        plot_label = label + ' (A)' if is_current_driven and input_pulse is not None else label
+        ax_A_t.plot(times_norm, A_norm, linewidth=2.5, label=plot_label,
+                    alpha=0.8, color=colors(idx), linestyle='-')
+
+        # Plot input pulse if current-driven
+        if is_current_driven and input_pulse is not None:
+            ax_A_t.plot(times_norm, input_pulse, linewidth=2.0,
+                       label=label + ' ($I_{in}$)',
+                       alpha=0.6, color=colors(idx), linestyle='--')
 
         # Plot frequency domain - Re[A(ω)]
         ax_A_omega_re.plot(omega_shifted / T_c, A_omega_re_norm, linewidth=2.5, label=label,
@@ -1070,8 +1082,12 @@ def plot_gap_evolution_multi_jobs(timestamp, job_indices=None, save_plot=False,
 
     # Configure A(t) plot
     ax_A_t.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=12)
-    ax_A_t.set_ylabel(r'$A(t)$', fontsize=12)
-    ax_A_t.set_title(r'Vector Potential: Time Domain', fontsize=13)
+    if is_current_driven:
+        ax_A_t.set_ylabel(r'$A(t)$, $I_{in}(t)$', fontsize=12)
+        ax_A_t.set_title(r'Vector Potential \& Input Current: Time Domain', fontsize=13)
+    else:
+        ax_A_t.set_ylabel(r'$A(t)$', fontsize=12)
+        ax_A_t.set_title(r'Vector Potential: Time Domain', fontsize=13)
     if xlim_time is not None:
         ax_A_t.set_xlim(xlim_time)
     if ylim_A_t is not None:
@@ -1234,6 +1250,7 @@ def plot_current_evolution_multi_jobs(timestamp, job_indices=None, save_plot=Fal
 
     # Plot each job
     field_type = None
+    is_current_driven = False
     for idx, (job_idx, data) in enumerate(zip(job_indices, all_data)):
         # Extract data
         times = data['times']
@@ -1241,9 +1258,13 @@ def plot_current_evolution_multi_jobs(timestamp, job_indices=None, save_plot=Fal
         vector_potentials = data['vector_potentials']
         T_c = data['T_c']
 
+        # Check for input pulse (for current-driven simulations)
+        input_pulse = data['save_data'].get('input_pulse', None)
+
         # Store field type from first job
         if field_type is None:
             field_type = data['field_type']
+            is_current_driven = field_type is not None and field_type.startswith('current_')
 
         # Create label from varying parameters
         if varying_params:
@@ -1303,8 +1324,15 @@ def plot_current_evolution_multi_jobs(timestamp, job_indices=None, save_plot=Fal
                                  alpha=0.8, color=colors(idx), marker='o', markersize=4)
 
         # Plot time domain - A(t)
-        ax_A_t.plot(times_norm, A_norm, linewidth=2.5, label=label,
-                    alpha=0.8, color=colors(idx))
+        plot_label = label + ' (A)' if is_current_driven and input_pulse is not None else label
+        ax_A_t.plot(times_norm, A_norm, linewidth=2.5, label=plot_label,
+                    alpha=0.8, color=colors(idx), linestyle='-')
+
+        # Plot input pulse if current-driven
+        if is_current_driven and input_pulse is not None:
+            ax_A_t.plot(times_norm, input_pulse, linewidth=2.0,
+                       label=label + ' ($I_{in}$)',
+                       alpha=0.6, color=colors(idx), linestyle='--')
 
         # Plot frequency domain - Re[A(ω)]
         ax_A_omega_re.plot(omega_shifted / T_c, A_omega_re_norm, linewidth=2.5, label=label,
@@ -1368,8 +1396,12 @@ def plot_current_evolution_multi_jobs(timestamp, job_indices=None, save_plot=Fal
 
     # Configure A(t) plot
     ax_A_t.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=12)
-    ax_A_t.set_ylabel(r'$A(t)$', fontsize=12)
-    ax_A_t.set_title(r'Vector Potential: Time Domain', fontsize=13)
+    if is_current_driven:
+        ax_A_t.set_ylabel(r'$A(t)$, $I_{in}(t)$', fontsize=12)
+        ax_A_t.set_title(r'Vector Potential \& Input Current: Time Domain', fontsize=13)
+    else:
+        ax_A_t.set_ylabel(r'$A(t)$', fontsize=12)
+        ax_A_t.set_title(r'Vector Potential: Time Domain', fontsize=13)
     if xlim_time is not None:
         ax_A_t.set_xlim(xlim_time)
     if ylim_A_t is not None:
@@ -2293,6 +2325,10 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
     """
     Plot current and vector potential vs time in dimensionless units.
 
+    Automatically detects current-driven simulations and creates appropriate layout:
+    - Current-driven: 3 panels (Current | Vector Potential | Input Current)
+    - Voltage-driven: 2 panels (Current | Vector Potential)
+
     Args:
         timestamp: Timestamp folder name
         job_index: Job index (default None plots all jobs in folder)
@@ -2309,9 +2345,22 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
         job_indices = [job_index]
         plot_all = False
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # Detect if current-driven by loading first job
+    data_first = load_simulation_data(timestamp, job_indices[0])
+    field_type = data_first['field_type']
+    is_current_driven = field_type is not None and field_type.startswith('current_')
+    has_input_pulse = 'input_pulse' in data_first['save_data']
 
-    field_type = None
+    # Create figure with appropriate number of subplots
+    if is_current_driven and has_input_pulse:
+        # Current-driven: 3 panels (Current | Vector Potential | Input Current)
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        ax_current, ax_A, ax_input = axes
+    else:
+        # Voltage-driven: 2 panels (Current | Vector Potential)
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        ax_current, ax_A = axes
+        ax_input = None
     for job_idx in job_indices:
         # Load data with normalization constants
         data = load_simulation_data(timestamp, job_idx)
@@ -2324,37 +2373,51 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
         A_values = np.real(data['vector_potentials']) if np.iscomplexobj(data['vector_potentials']) else data['vector_potentials']
         A_norm = A_values  # A / A_0
 
-        # Store field type from first job
-        if field_type is None:
-            field_type = data['field_type']
+        # Input pulse (for current-driven simulations)
+        input_pulse = data['save_data'].get('input_pulse', None)
 
+        # Create label
         label = f'Job {job_idx}' if plot_all else None
 
         # Plot current
-        axes[0].plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
+        ax_current.plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
 
         # Plot vector potential
-        axes[1].plot(times_norm, A_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
+        ax_A.plot(times_norm, A_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
+
+        # Plot input pulse on separate panel if current-driven
+        if is_current_driven and has_input_pulse and ax_input is not None:
+            ax_input.plot(times_norm, input_pulse, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
 
     # Configure current axis
-    axes[0].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
-    axes[0].set_ylabel(r'$J(t) / J_0$', fontsize=13)
-    title = f'{field_type} pulse simulation' if field_type else 'Current evolution'
-    axes[0].set_title(title, fontsize=14)
+    ax_current.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    ax_current.set_ylabel(r'$J(t)$', fontsize=13)
+    title = f'{field_type} - Supercurrent' if field_type else 'Supercurrent'
+    ax_current.set_title(title, fontsize=14)
     if plot_all:
-        axes[0].legend(fontsize=10)
-    axes[0].grid(True, alpha=0.3)
+        ax_current.legend(fontsize=10)
+    ax_current.grid(True, alpha=0.3)
 
     # Configure vector potential axis
-    axes[1].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
-    axes[1].set_ylabel(r'$A(t) / A_0$', fontsize=13)
-    title_A = f'{field_type} pulse - Vector potential' if field_type else 'Vector potential'
-    axes[1].set_title(title_A, fontsize=14)
+    ax_A.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    ax_A.set_ylabel(r'$A(t)$', fontsize=13)
+    title_A = f'{field_type} - Vector potential' if field_type else 'Vector potential'
+    ax_A.set_title(title_A, fontsize=14)
     if plot_all:
-        axes[1].legend(fontsize=10)
-    axes[1].grid(True, alpha=0.3)
+        ax_A.legend(fontsize=10)
+    ax_A.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    # Configure input current axis if it exists
+    if ax_input is not None:
+        ax_input.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+        ax_input.set_ylabel(r'$I_{in}(t)$', fontsize=13)
+        title_input = f'{field_type} - Input current' if field_type else 'Input current'
+        ax_input.set_title(title_input, fontsize=14)
+        if plot_all:
+            ax_input.legend(fontsize=10)
+        ax_input.grid(True, alpha=0.3)
+
+    fig.tight_layout()
 
     if save_plot:
         # Use Figures folder in project directory if no save_dir specified
@@ -2366,7 +2429,6 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
         job_str = f'job{job_index}' if job_index is not None else 'all_jobs'
         filename = os.path.join(save_dir, f'current_vs_time_{timestamp}_{job_str}.png')
 
-        # Save with metadata using extended_savefig
         extended_savefig(
             fig,
             filename,
@@ -2377,9 +2439,197 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
             bbox_inches='tight'
         )
         print(f"Plot saved to: {filename}")
-        plt.close()
+        plt.close(fig)
     else:
         plt.show()
+
+def plot_current_response(timestamp, job_index=None, save_plot=False, save_dir=None,
+                          running_machine='laptop'):
+    """
+    Plot current response analysis with linear response theory comparison.
+
+    Creates a 3-panel figure showing:
+    - Panel 1: Input current I_in(t) and supercurrent response J(t) in units of J_c
+                Plus linear response prediction I_linear(t) as dashed line
+    - Panel 2: Vector potential A(t) vs time
+    - Panel 3: Gap Δ(t) vs time
+
+    Linear response computed using:
+        Z(ω) = 1/(iω/L + 1) where L = Δ(0) * tanh(βΔ(0)/2)
+        I_linear(ω) = I_in(ω) * 2*Z_T / (2*Z_T + Z(ω))
+
+    Args:
+        timestamp: Timestamp folder name
+        job_index: Job index to plot (default None plots first job)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+
+    Returns:
+        dict: Contains times, currents, input_pulse, vector_potentials, gaps, linear_current
+    """
+    # Determine job index
+    if job_index is None:
+        job_index = 0
+
+    # Load data
+    data = load_simulation_data(timestamp, job_index, running_machine=running_machine)
+
+    # Check if current-driven
+    field_type = data['field_type']
+    is_current_driven = field_type is not None and field_type.startswith('current_')
+
+    if not is_current_driven:
+        print("Warning: This simulation is not current-driven. plot_current_response is designed for current-driven simulations.")
+
+    # Extract data
+    times = data['times']
+    gaps = data['gaps']
+    currents = data['currents']
+    vector_potentials = data['vector_potentials']
+    T_c = data['T_c']
+    input_pulse = data['save_data'].get('input_pulse', None)
+
+    # Normalize to dimensionless units
+    times_norm = times * T_c  # t * T_c (dimensionless)
+
+    # Normalize currents to J_c (critical current)
+    # For BCS: J_c ∝ Δ(0), use initial gap as reference
+    gap_initial = np.abs(gaps[0])
+    J_c = gap_initial  # Simple normalization: J_c ~ Δ(0)
+
+    currents_norm = np.real(currents) / J_c
+    input_pulse_norm = input_pulse / J_c if input_pulse is not None else None
+
+    # Normalize gap to T_c
+    gaps_norm = np.abs(gaps) / T_c
+
+    # Vector potential (keep in original units for now)
+    A_norm = np.real(vector_potentials) if np.iscomplexobj(vector_potentials) else vector_potentials
+
+    # Compute linear response for current
+    linear_current_norm = None
+    if input_pulse is not None:
+        # FFT parameters
+        N_t = len(times)
+        dt = times[1] - times[0]
+
+        # Compute FFT of input pulse
+        I_in_fft = np.fft.fft(input_pulse)
+        freq = np.fft.fftfreq(N_t, d=dt)
+        omega = 2 * np.pi * freq
+
+        # Get temperature and compute inverse temperature β
+        temperature = data['input_kwargs']['system_parameters']['temperature']
+        beta = 1.0 / temperature
+
+        # Compute inductance: L = Δ(0) * tanh(βΔ(0)/2)
+        gap_0 = gap_initial
+        L = gap_0 * np.tanh(beta * gap_0 / 2.0)
+
+        # Compute impedance: Z(ω) = 1/(iω/L + 1)
+        Z_omega = 1.0 / (1j * omega / L + 1.0)
+
+        # Get circuit impedance Z_T from circuit_params if available
+        circuit_params = data['input_kwargs'].get('circuit_params', None)
+        if circuit_params is not None and 'Z_T' in circuit_params:
+            Z_T = circuit_params['Z_T']
+        else:
+            # Default Z_T if not available (assume typical value)
+            Z_T = 1.0
+            print(f"Warning: Z_T not found in circuit_params, using default Z_T = {Z_T}")
+
+        # Apply linear response transfer function: 2*Z_T / (2*Z_T + Z(ω))
+        transfer_function = (2.0 * Z_T) / (2.0 * Z_T + Z_omega)
+
+        # Multiply input current by transfer function
+        I_linear_fft = I_in_fft * transfer_function
+
+        # Inverse FFT to get linear response in time domain
+        I_linear_t = np.fft.ifft(I_linear_fft)
+
+        # Normalize to J_c
+        linear_current_norm = np.real(I_linear_t) / J_c
+
+    # Create figure with 3 panels
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    ax_current, ax_A, ax_gap = axes
+
+    # Panel 1: Current response
+    if input_pulse_norm is not None:
+        ax_current.plot(times_norm, input_pulse_norm, linewidth=2.5,
+                       label=r'$I_{in}(t)$', alpha=0.8, color='C0', linestyle='-')
+
+    ax_current.plot(times_norm, currents_norm, linewidth=2.5,
+                   label=r'$J(t)$ (response)', alpha=0.8, color='C1', linestyle='-')
+
+    if linear_current_norm is not None:
+        ax_current.plot(times_norm, linear_current_norm, linewidth=2.0,
+                       label=r'$J_{linear}(t)$', alpha=0.6, color='C2', linestyle='--')
+
+    ax_current.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    ax_current.set_ylabel(r'Current ($J_c$)', fontsize=13)
+    ax_current.set_title(r'Current Response', fontsize=14)
+    ax_current.legend(fontsize=10)
+    ax_current.grid(True, alpha=0.3)
+
+    # Panel 2: Vector potential
+    ax_A.plot(times_norm, A_norm, linewidth=2.5, label=r'$A(t)$',
+             alpha=0.8, color='C3')
+
+    ax_A.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    ax_A.set_ylabel(r'$A(t)$', fontsize=13)
+    ax_A.set_title(r'Vector Potential', fontsize=14)
+    ax_A.legend(fontsize=10)
+    ax_A.grid(True, alpha=0.3)
+
+    # Panel 3: Gap evolution
+    ax_gap.plot(times_norm, gaps_norm, linewidth=2.5, label=r'$|\Delta(t)|$',
+               alpha=0.8, color='C4')
+
+    ax_gap.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
+    ax_gap.set_ylabel(r'$|\Delta(t)| / T_c$', fontsize=13)
+    ax_gap.set_title(r'Gap Evolution', fontsize=14)
+    ax_gap.legend(fontsize=10)
+    ax_gap.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        filename = os.path.join(save_dir, f'current_response_{timestamp}_job{job_index}.png')
+
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='plot_current_response',
+            additional_information=f'job{job_index}',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close(fig)
+    else:
+        plt.show()
+
+    # Return data for further analysis
+    return {
+        'times': times,
+        'times_norm': times_norm,
+        'currents': currents_norm,
+        'input_pulse': input_pulse_norm,
+        'vector_potentials': A_norm,
+        'gaps': gaps_norm,
+        'linear_current': linear_current_norm,
+        'J_c': J_c,
+        'T_c': T_c
+    }
 
 def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=None,
                               n_average=100, save_plot=False, save_dir=None,
@@ -2531,6 +2781,7 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
         print()
 
     field_type = None
+    is_current_driven = False
     for job_idx in job_indices:
         # Load time evolution data with normalization constants
         data = load_simulation_data(timestamp, job_idx)
@@ -2541,11 +2792,15 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
         current_norm = np.real(data['currents']) #/ data['J_0']
 
         # Vector potential (real part if complex)
-        A_values = np.real(data['vector_potentials']) 
+        A_values = np.real(data['vector_potentials'])
+
+        # Check for input pulse (for current-driven simulations)
+        input_pulse = data['save_data'].get('input_pulse', None)
 
         # Store field type from first job
         if field_type is None:
             field_type = data['field_type']
+            is_current_driven = field_type is not None and field_type.startswith('current_')
 
         # Debug output
         print(f"Job {job_idx}: Plotting {len(times_norm)} points")
@@ -2565,7 +2820,16 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
         # Plot time evolution on each subplot
         axes[0].plot(times_norm, gap_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
         axes[1].plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
-        axes[2].plot(times_norm, A_values, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
+
+        # Plot vector potential with label adjustment for current-driven
+        A_label = label + ' (A)' if is_current_driven and input_pulse is not None and label is not None else label
+        axes[2].plot(times_norm, A_values, linewidth=2.5, label=A_label, alpha=0.8, color=plot_color, linestyle='-')
+
+        # Plot input pulse if current-driven
+        if is_current_driven and input_pulse is not None:
+            I_label = label + ' ($I_{in}$)' if label is not None else '$I_{in}$'
+            axes[2].plot(times_norm, input_pulse, linewidth=2.0, label=I_label,
+                        alpha=0.6, color=plot_color, linestyle='--')
 
         # Compute and plot equilibrium reference if available
         if equilibrium_timestamp is not None:
@@ -2675,8 +2939,12 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
 
     # Configure vector potential subplot
     axes[2].set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
-    axes[2].set_ylabel(r'$A(t)$', fontsize=13)
-    title_A = f'{field_type} pulse' if field_type else 'Vector potential'
+    if is_current_driven:
+        axes[2].set_ylabel(r'$A(t)$, $I_{in}(t)$', fontsize=13)
+        title_A = f'{field_type} pulse' if field_type else 'Vector potential & input current'
+    else:
+        axes[2].set_ylabel(r'$A(t)$', fontsize=13)
+        title_A = f'{field_type} pulse' if field_type else 'Vector potential'
     axes[2].set_title(title_A, fontsize=14)
     axes[2].grid(True, alpha=0.3)
     if plot_all or times_external is not None:
@@ -3521,8 +3789,10 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
             components.append(np.array(component))
         return components
 
-    # Create tau_3 Pauli matrix for subtractions
-    tau_3 = NambuTensor(1.0, pauli_channel=3)
+    # Create tau_3 Pauli matrix for subtractions (broadcast to energy dimension)
+    import jax.numpy as jnp
+    energy_shape = gr_eq.data.shape[2:]  # Extract energy dimension shape
+    tau_3 = NambuTensor(jnp.ones(energy_shape), pauli_channel=3)
 
     # Subtract asymptotic/thermal components before comparison
     # This isolates the non-trivial energy dependence
@@ -3532,7 +3802,10 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         eq_nambu = gr_eq_subtracted
     elif green_function_type == 'gk':
         # Subtract 2 * f_thermal * τ₃ from g^K (equilibrium FDT contribution)
-        gk_eq_subtracted = gk_eq - 2.0 * f_thermal * tau_3
+        # Work around NambuTensor multiplication bug by accessing .data directly
+        thermal_term_data = f_thermal.data * tau_3.data * 2.0
+        thermal_term = NambuTensor(thermal_term_data, None)
+        gk_eq_subtracted = gk_eq - thermal_term
         eq_nambu = gk_eq_subtracted
     elif green_function_type == 'f':
         # Subtract f_thermal from f (equilibrium thermal distribution)
@@ -3564,7 +3837,6 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
     print(f"  Total time slices available: {len(energy_time_list)}")
     print(f"  Plotting every {plot_every} slice(s): {len(plot_indices)} lines")
     print(f"  Time range: [{time_values[0]:.2f}, {time_values[-1]:.2f}]")
-    print(f"  Energy grid points: {len(energy_grid)}")
     print(f"{'='*60}\n")
 
     # Plot both Pauli components

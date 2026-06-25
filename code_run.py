@@ -19,7 +19,7 @@ from usadel_keldysh_evolution import UsadelKeldyshEvolution
 from driving_field_utils import compute_driving_field
 
 
-def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, save_full_state=True, track_every_n=None):
+def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, circuit_params=None, save_full_state=True, track_every_n=None):
     """
     Evolve Keldysh Green's functions in real time.
 
@@ -37,8 +37,12 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         field_type: Optional field type string ('constant', 'gaussian', 'oscillatory', 'DC', 'step')
                     If provided, field_params must also be given
                     'gaussian' can be pure Gaussian (frequency=0) or modulated (frequency>0)
+                    For current-driven mode, use prefix 'current_' (e.g., 'current_gaussian')
         field_params: Optional dict with field-specific parameters
                       See driving_field_utils.compute_driving_field() for parameter details
+        circuit_params: Optional dict with circuit parameters for current-driven evolution
+                        Required fields: Z_T, R_n, J_DP_prime, I_DP
+                        If provided, enables Crank-Nicolson vector potential update
         save_full_state: If True, save full time history. If False, save only final timestep (default: True)
         track_every_n: If not None, compute and save energy-time representations (gr, gk, f) every
                        track_every_n timesteps to reduce memory usage. If None, energy-time
@@ -46,6 +50,16 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 
     Returns:
         0 on success
+
+    Saved data format:
+        Dictionary with keys:
+            - 'final_state': Final (or full) StateObject
+            - 'gaps': Gap evolution Δ(t) (length num_timesteps)
+            - 'currents': Supercurrent response J(t) (length num_timesteps)
+            - 'vector_potentials': Vector potential A(t) (length num_timesteps)
+            - 'times': Time array (length num_timesteps)
+            - 'input_pulse': Applied driving field (A(t) or I_in(t) for current-driven)
+            - 'gr_energy_time', 'gk_energy_time', 'f_energy_time': (if track_every_n is set)
     """
     #* Detect which machine we're running on
     if 'SLURM_JOB_ID' in os.environ:
@@ -152,7 +166,7 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     # Determine if we should track occupations
     track_occupations = (track_every_n is not None)
 
-    result = evolution.real_time_evolution(initial_state=initial_state, num_timesteps=num_timesteps, driving_field=prepared_driving_field, track_occupations=track_occupations)
+    result = evolution.real_time_evolution(initial_state=initial_state, num_timesteps=num_timesteps, driving_field=prepared_driving_field, circuit_params=circuit_params, track_occupations=track_occupations)
     final_state = result['final_state']
     gaps = result['gaps']
     currents = result['currents']
@@ -173,7 +187,7 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         final_state = reduced_state
 
     # Save results
-    result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': times}
+    result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': times, 'input_pulse': prepared_driving_field}
 
     # Add energy-time data if tracking was enabled, filtered by track_every_n
     if track_occupations:

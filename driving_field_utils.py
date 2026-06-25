@@ -2,7 +2,7 @@
 Driving field utilities for psBQP-keldysh simulations.
 
 Provides interface for specifying time-dependent driving fields
-(vector potentials) with various functional forms.
+(vector potentials) or current pulses with various functional forms.
 
 Supported field types:
     - 'constant': Constant amplitude field
@@ -11,6 +11,11 @@ Supported field types:
     - 'oscillatory': Cosine field
     - 'DC': Linear ramp
     - 'step': Step function at specified time
+
+Current-driven mode:
+    - Prefix field type with 'current_' (e.g., 'current_gaussian', 'current_oscillatory')
+    - Returns I_in(t) instead of A(t) with same pulse shape
+    - Use with circuit_params in evolution functions
 """
 
 import numpy as np
@@ -22,15 +27,18 @@ def compute_driving_field(field_type: str, params: dict, times: np.ndarray) -> n
     """
     Compute time-dependent driving field from explicit parameters.
 
-    Generates vector potential A(t) array from field type and parameters.
+    Generates vector potential A(t) or input current I_in(t) array from field type and parameters.
 
     Args:
         field_type: Type of driving field ('constant', 'gaussian', 'gaussian-electric', 'oscillatory', 'DC', 'step')
+                    For current-driven mode, prefix with 'current_' (e.g., 'current_gaussian')
         params: Dictionary of field-specific parameters
         times: Time array (1D numpy array, typically from np.arange(num_timesteps) * dt)
 
     Returns:
-        Vector potential array A(t) with shape matching times, dtype=complex
+        Field array with shape matching times, dtype=complex
+        - If field_type starts with 'current_': returns I_in(t) (input current)
+        - Otherwise: returns A(t) (vector potential)
 
     Supported field types:
 
@@ -83,23 +91,30 @@ def compute_driving_field(field_type: str, params: dict, times: np.ndarray) -> n
         TypeError: If parameter types are incorrect
     """
 
+    # Handle current-driven mode: strip 'current_' prefix
+    # The pulse shape generation is identical; only the physical interpretation differs
+    actual_field_type = field_type
+    if field_type.startswith('current_'):
+        actual_field_type = field_type[len('current_'):]
+
     # Dispatch to field-specific function
-    if field_type == 'constant':
+    if actual_field_type == 'constant':
         return _compute_constant_field(times, params)
-    elif field_type == 'gaussian':
+    elif actual_field_type == 'gaussian':
         return _compute_gaussian_field(times, params)
-    elif field_type == 'gaussian-electric':
+    elif actual_field_type == 'gaussian-electric':
         return _compute_gaussian_electric_field(times, params)
-    elif field_type == 'oscillatory':
+    elif actual_field_type == 'oscillatory':
         return _compute_oscillatory_field(times, params)
-    elif field_type == 'DC':
+    elif actual_field_type == 'DC':
         return _compute_dc_field(times, params)
-    elif field_type == 'step':
+    elif actual_field_type == 'step':
         return _compute_step_field(times, params)
     else:
         raise ValueError(
             f"Unknown field_type: '{field_type}'. "
-            f"Valid types: 'constant', 'gaussian', 'gaussian-electric', 'oscillatory', 'DC', 'step'"
+            f"Valid types: 'constant', 'gaussian', 'gaussian-electric', 'oscillatory', 'DC', 'step' "
+            f"(or prefix with 'current_' for current-driven mode)"
         )
 
 def _compute_constant_field(times: np.ndarray, params: dict) -> np.ndarray:

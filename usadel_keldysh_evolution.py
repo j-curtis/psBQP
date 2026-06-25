@@ -1472,6 +1472,11 @@ class UsadelKeldyshEvolution:
             # Pre-compute thermal sums over extended grid for precision
             self.get_thermal_sum(self.temperature)
 
+        #* we compute honest current at the same time, before evolving the state.
+        current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
+                                                   thermal_sum_left=self.thermal_sum_left,
+                                                   thermal_sum_right=self.thermal_sum_right)
+
         # Step 1: Update retarded Green's function (shifts gr matrix)
         new_gr_row, new_gr_diag = self._compute_new_gr_row(state, A_history=A_external)
         state.update_state_gr(new_gr_row, new_gr_diag)
@@ -1496,40 +1501,91 @@ class UsadelKeldyshEvolution:
         else:
             vector_potential_new = A_external[-1]
 
-        current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
-                                                   thermal_sum_left=self.thermal_sum_left,
-                                                   thermal_sum_right=self.thermal_sum_right)
-
         return gap_new, current_new, vector_potential_new
 
-    def update_vector_potential(self, old_vector_potential, driving_field):
+    def update_vector_potential(self, old_vector_potential, driving_field_current=None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None, state=None):
         """
-        Update vector potential using sliding window approach.
+        Update vector potential using sliding window or Crank-Nicolson scheme.
 
-        Appends new driving field value and removes oldest value to maintain
-        constant history length N_t.
+        Two modes:
+        1. Simple sliding window (circuit_params=None):
+           Append new driving_field_current value (interpreted as A(t))
+
+        2. Crank-Nicolson update (circuit_params provided):
+           Solve Eq. (262) from effective_circuit_model.tex for A'_(n+1)
+           Uses input current I_in(t) from driving_field_current and driving_field_next
 
         Args:
-            old_vector_potential: Current vector potential array (length N_t)
-            driving_field: Time-dependent driving field array (length num_timesteps) or None
-            time_index: Current timestep index
+            old_vector_potential: Current A_external array (length N_t)
+            driving_field_current: Field value at current timestep
+                                   - If circuit_params=None: interpreted as A(t)
+                                   - If circuit_params provided: interpreted as I_in(n)
+            driving_field_next: Field value at next timestep (only used if circuit_params provided)
+                                Interpreted as I_in(n+1)
+            current: Current J(t) at this timestep (required if circuit_params provided)
+            kernel_prefactor: Kernel trace tr(K_(t,t)) (required if circuit_params provided)
+            circuit_params: Dict with Z_T, R_n, J_DP_prime, I_DP (optional)
+            state: StateObject (required if circuit_params provided, for kernel and current computation)
 
         Returns:
             new_vector_potential: Updated array (length N_t)
         """
-        if driving_field is None:
-            # No driving - return zeros
-            return old_vector_potential
 
-        # Get new field value at this timestep
-        new_field_value = driving_field
+        # Mode 1: Simple sliding window (current behavior)
+        if circuit_params is None:
+            if driving_field_current is None:
+                return old_vector_potential
 
-        # Sliding window: remove first element, append new value
-        new_vector_potential = np.append(old_vector_potential[1:], new_field_value)
+            new_field_value = driving_field_current
+            new_vector_potential = np.append(old_vector_potential[1:], new_field_value)
+            return new_vector_potential
 
-        return new_vector_potential
+        # Mode 2: Crank-Nicolson update for current-driven evolution
+        else:
+            # Extract circuit parameters
+            z_t = circuit_params['Z_T']
+            r_n = circuit_params['R_n']
+            j_dp_prime = circuit_params['J_DP_prime']
 
-    def real_time_evolution(self, initial_state, num_timesteps, driving_field=None, track_occupations=False):
+            kernel_prefactor = state.get_current_kernel_prefactor(self.thermal_dist)
+            A_external_newest = np.append(old_vector_potential[1:], 0.0)
+
+            current_newest = state.get_current_at_time_t(A_external_newest, self.thermal_dist, self.thermal_integral,
+                                                   thermal_sum_left=self.thermal_sum_left,
+                                                   thermal_sum_right=self.thermal_sum_right, include_derivative = False)
+
+            # Get current I_in values at current and next timesteps (for Crank-Nicolson midpoint)
+            i_in_current = driving_field_current if driving_field_current is not None else 0.0
+            i_in_next = driving_field_next if driving_field_next is not None else i_in_current
+
+            # Get current J'(t) - this is passed from the evolution
+            j_prime_current = current if current is not None else 0.0
+
+            j_prime_hist = j_prime_current
+
+            # Get timestep from self
+            dt = self.delta_t
+
+            # Solve Crank-Nicolson equation (Eq. 262):
+            # [1 + i(πZ_T/8R_n)(dt)² tr(K)] A'_(n+1) =
+            #     A'_n + (2Z_T/R_n)dt [J'_hist - (J'_DP/2I_DP)(I_in,n + I_in,n+1)]
+
+            # Left-hand side coefficient
+
+            lhs_coeff = 1.0  - np.real(  (2.0 * z_t / (2.0 * r_n)) * (dt**2) * kernel_prefactor)
+
+            # Right-hand side
+            a_n = old_vector_potential[-1]  # Current value A'_n
+            #* the last division term comes from gradient exclusion in current expression
+            current_term = np.real((2.0 * z_t / r_n) * dt *j_dp_prime * ( (j_prime_hist + current_newest)/2.0 - (i_in_current + i_in_next)/2.0 ))/(1 + 2.0 * z_t / (r_n))
+            rhs = (a_n + current_term)/ lhs_coeff
+
+            # Update vector potential history using sliding window
+            new_vector_potential = np.append(old_vector_potential[1:], rhs)
+
+            return new_vector_potential
+
+    def real_time_evolution(self, initial_state, num_timesteps, driving_field=None, circuit_params=None, track_occupations=False):
         """
         Main real-time evolution loop.
 
@@ -1541,6 +1597,7 @@ class UsadelKeldyshEvolution:
         1. Initialize A_external as zeros (size N_t from initial_state)
         2. For each timestep:
             a. Update A_external using sliding window with new driving_field value
+               (or Crank-Nicolson update if circuit_params provided)
             b. Call _evolve_state_by_one_timestep() with updated A_external
             c. Store returned gap and current values
             d. If track_occupations=True, compute and store energy-time representations
@@ -1553,6 +1610,11 @@ class UsadelKeldyshEvolution:
                            If None, zero driving field is used. Can be:
                            - None: No driving (A_external remains zeros)
                            - 1D array (length num_timesteps): Time-dependent field values
+                           - If circuit_params=None: interpreted as A(t)
+                           - If circuit_params provided: interpreted as I_in(t)
+            circuit_params: Optional dict with circuit parameters for current-driven evolution
+                           Required fields: Z_T, R_n, J_DP_prime, I_DP
+                           If provided, enables Crank-Nicolson vector potential update
             track_occupations: If True, compute and store energy-time representations of gr, gk, and f
                                at each timestep (default: False)
 
@@ -1567,7 +1629,7 @@ class UsadelKeldyshEvolution:
             - 'f_energy_time': (only if track_occupations=True) List of energy-time representations of occupation function
 
         Calls:
-            - update_vector_potential(A_external, driving_field, time_index)
+            - update_vector_potential(A_external, driving_field, state, circuit_params, ...)
             - _evolve_state_by_one_timestep(state, A_external)
         """
         # Initialize arrays to track observables
@@ -1584,7 +1646,7 @@ class UsadelKeldyshEvolution:
         # Initialize A_external as zeros (history window)
         # Size N_t from initial_state's time grid
         N_t = initial_state.gr.data.shape[2]
-        if driving_field is None:
+        if driving_field is None or circuit_params is not None:
             A_external = np.zeros(N_t, dtype=complex)
         else:
             A_external = np.ones(N_t, dtype=complex) * driving_field[0]
@@ -1602,10 +1664,50 @@ class UsadelKeldyshEvolution:
         # Evolve over time with progress bar
         for time_index in tqdm(range(num_timesteps), desc="Real-time evolution", disable=disable_progress):
 
-            A_external = self.update_vector_potential(A_external, driving_field[time_index])
+            # Mode-dependent order of operations
+            if circuit_params is None:
+                # Mode 1: Simple voltage-driven (original behavior)
+                # Update A_external BEFORE evolving (using prescribed driving field)
 
-            gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
+                # Evolve state using updated A_external
+                gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
 
+                A_external = self.update_vector_potential(
+                    old_vector_potential=A_external,
+                    driving_field_current=driving_field[time_index] if driving_field is not None else None,
+                    driving_field_next=None,
+                    current=None,
+                    kernel_prefactor=None,
+                    circuit_params=None
+                )
+
+            else:
+                # Mode 2: Current-driven with Crank-Nicolson
+                # Evolve state FIRST to get current and kernel
+                # Compute kernel prefactor from evolved state
+
+                current_no_gradient = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
+                                                thermal_sum_left=self.thermal_sum_left,
+                                                thermal_sum_right=self.thermal_sum_right,include_derivative = False)
+
+                # Get driving field values (I_in at current and next timesteps)
+                gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
+             
+                driving_field_current = driving_field[time_index] 
+                driving_field_next = driving_field[time_index + 1] if time_index < num_timesteps - 1 else 0.0
+
+                # Update A_external using Crank-Nicolson
+                A_external = self.update_vector_potential(
+                    old_vector_potential=A_external,
+                    driving_field_current=driving_field_current,
+                    driving_field_next=driving_field_next,
+                    current=current_no_gradient,
+                    circuit_params=circuit_params,
+                    state=state
+                )
+            
+
+            # Store observables
             gaps += [gap_new]
             currents  += [current_new]
             vector_potentials += [vector_potential_new]

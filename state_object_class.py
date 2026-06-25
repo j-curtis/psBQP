@@ -86,8 +86,64 @@ class StateObject:
 
         return gap_history
 
+    def get_current_kernel_prefactor(self, thermal_dist, time_index=-1):
+        """
+        Compute current kernel prefactor: tr(K_(t,t)) for Crank-Nicolson update.
+
+        This is the trace of the kernel matrix at equal time, needed for the
+        Crank-Nicolson vector potential update (Eq. 262 in effective_circuit_model.tex).
+
+        Kernel matrix (Eq. 211-215):
+            K_(t,t) = τ₃ g'^R(t,t) τ₃ g'^K(t,t)
+                    + τ₃ g'^K(t,t) τ₃ g'^A(t,t)
+                    + 2τ₃ g'^R(t,t) F(t,t)
+                    + 2F(t,t) τ₃ g'^A(t,t)
+
+        Args:
+            thermal_dist: Thermal distribution F(t,t') - NambuKeldyshTensor
+            time_index: Time index to compute kernel at (default -1, supports negative indexing)
+
+        Returns:
+            complex: Trace of kernel matrix tr(K_(t,t))
+        """
+        # Handle negative indexing
+        N_t = self.gr.data.shape[2]
+        t_idx = time_index if time_index >= 0 else N_t + time_index
+
+        # Define τ₃ Pauli matrix
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+        # Get advanced Green's function
+        ga = self._r2a()
+
+        # Extract diagonal (equal-time) elements at time t_idx
+        gr_diag = self.gr[t_idx, t_idx]      # g'^R(t, t) - shape (2,2)
+        gk_diag = self.gk[t_idx, t_idx]      # g'^K(t, t) - shape (2,2)
+        ga_diag = ga[t_idx, t_idx]           # g'^A(t, t) - shape (2,2)
+        F_diag = thermal_dist[t_idx, t_idx]  # F(t, t) - shape (2,2)
+
+        # Term 1: τ₃ g'^R(t,t) τ₃ g'^K(t,t)
+        term1 = tau3 * gr_diag * tau3 * gk_diag
+
+        # Term 2: τ₃ g'^K(t,t) τ₃ g'^A(t,t)
+        term2 = tau3 * gk_diag * tau3 * ga_diag
+
+        # Term 3: 2τ₃ g'^R(t,t) F(t,t)
+        term3 = 2.0 * tau3 * gr_diag * F_diag
+
+        # Term 4: 2F(t,t) τ₃ g'^A(t,t)
+        term4 = 2.0 * F_diag * tau3 * ga_diag
+
+        # Sum all terms
+        kernel_matrix = term1 + term2 + term3 + term4
+
+        # Take trace over Nambu indices (pauli_index=0 gives identity component)
+        kernel_trace = kernel_matrix.trace(pauli_index=0)
+
+        return kernel_trace * (-1j * np.pi/4)
+
     def get_current_at_time_t(self, A_history, thermal_dist, thermal_integral, time_index=-1,
-                               thermal_sum_left=None, thermal_sum_right=None):
+                               thermal_sum_left=None, thermal_sum_right=None, include_derivative = True):
         """
         Compute current J(t) at specific time with thermal distribution (tex Eq. 942-945).
 
@@ -169,9 +225,13 @@ class StateObject:
         current = total.trace(pauli_index=0)
 
         # Apply prefactor -i(π / 4) [σ_n absorbed into normalization]
-        #* second term is the anomalous term coming from combination of delta(t-t') and f(t-t') limit at zero
-        current = -1j * np.pi / 4 * current - np.gradient(A_history, self.dt)[t_idx]
-
+        
+        current = -1j * np.pi / 4 * current 
+        
+        if include_derivative:
+            #* second term is the anomalous term coming from combination of delta(t-t') and f(t-t') limit at zero
+            current += - np.gradient(A_history, self.dt)[t_idx]
+        
         return current
 
     # ========== Utilities ==========
@@ -525,8 +585,8 @@ class StateObject:
         # Use d=dt (spacing in τ), then divide by 2 for ε
         freq = np.fft.fftfreq(N_t, d=self.dt)
         omega_grid = 2 * np.pi * freq  # ω = 2πf
-        energy_grid = omega_grid/2  # ε/2 (from g(ε,t) = G(2ε))
-        energy_grid = np.fft.fftshift(energy_grid)
+        energy_grid = omega_grid  # ε/2 (from g(ε,t) = G(2ε))
+        energy_grid = np.fft.fftshift(energy_grid)[::2]/2
 
         return { 'energy_grid': energy_grid, 'g_energy': g_energy}
 

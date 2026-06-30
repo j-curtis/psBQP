@@ -1028,20 +1028,29 @@ def plot_gap_evolution_multi_jobs(timestamp, job_indices=None, save_plot=False,
         ax_A_omega_im.plot(omega_shifted / T_c, A_omega_im_norm, linewidth=2.5, label=label,
                            alpha=0.8, color=colors(idx), marker='o', markersize=4)
 
-    # Add vertical lines at ±2*Δ(0) on frequency plots
+    # Add vertical lines at ±2*Δ(0) and ±Δ(0) on frequency plots
     # Use first job's equilibrium gap
     first_gap_0 = np.abs(all_data[0]['gaps'][0])
     first_T_c = all_data[0]['T_c']
+    gap_norm = first_gap_0 / first_T_c
     two_gap_norm = 2 * first_gap_0 / first_T_c
 
     ax_gap_omega_re.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
     ax_gap_omega_re.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
     ax_gap_omega_im.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
     ax_gap_omega_im.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+
+    # Add ±2Δ₀ lines to A(ω) plots
     ax_A_omega_re.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
     ax_A_omega_re.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
     ax_A_omega_im.axvline(two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, label=r'$\pm 2\Delta_0$')
     ax_A_omega_im.axvline(-two_gap_norm, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+
+    # Add ±Δ₀ lines to A(ω) plots (dotted, different color)
+    ax_A_omega_re.axvline(gap_norm, color='green', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$\pm \Delta_0$')
+    ax_A_omega_re.axvline(-gap_norm, color='green', linestyle=':', linewidth=1.5, alpha=0.7)
+    ax_A_omega_im.axvline(gap_norm, color='green', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$\pm \Delta_0$')
+    ax_A_omega_im.axvline(-gap_norm, color='green', linestyle=':', linewidth=1.5, alpha=0.7)
 
     # Configure Gap(t) plot
     ax_gap_t.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=12)
@@ -2056,7 +2065,7 @@ def compare_fdt_error_across_timestamps(timestamps, job_indices=None, x_paramete
 
 def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, save_dir=None,
                         omega_external=None, sigma_re_external=None, sigma_im_external=None,
-                        labels_external=None):
+                        labels_external=None, xlim=None, ylim_re=None, ylim_im=None):
     """
     Extract and plot optical conductivity σ(ω) = j(ω)/(iω A(ω)) from time-domain data.
 
@@ -2083,6 +2092,9 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
                         - Single string: label for single external dataset
                         - List of strings: labels for multiple external datasets (must match omega_external length)
                         - If not provided, defaults to 'External data' or 'External 1', 'External 2', etc.
+        xlim: Optional tuple (xmin, xmax) for x-axis limits on conductivity panels
+        ylim_re: Optional tuple (ymin, ymax) for y-axis limits on Re[σ(ω)] panel
+        ylim_im: Optional tuple (ymin, ymax) for y-axis limits on Im[σ(ω)] panel
 
     Returns:
         dict: {
@@ -2251,6 +2263,15 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
     axes[0, 0].legend(fontsize=10)
     axes[0, 1].legend(fontsize=10)
 
+    # Apply axis limits if specified
+    if xlim is not None:
+        axes[0, 0].set_xlim(xlim)
+        axes[0, 1].set_xlim(xlim)
+    if ylim_re is not None:
+        axes[0, 0].set_ylim(ylim_re)
+    if ylim_im is not None:
+        axes[0, 1].set_ylim(ylim_im)
+
     # Bottom left: j(ω)
     axes[1, 0].plot(omega_grid, np.real(j_omega), 'b-', linewidth=2, label=r'Re($j(\omega)$)')
     axes[1, 0].plot(omega_grid, np.imag(j_omega), 'b--', linewidth=2, alpha=0.7, label=r'Im($j(\omega)$)')
@@ -2321,19 +2342,23 @@ def extract_conductivity(timestamp, job_index, threshold=1e-6, save_plot=False, 
 
     return {'omega_grid': omega_grid, 'sigma': sigma}
 
-def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
+def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None, print_final=False):
     """
     Plot current and vector potential vs time in dimensionless units.
 
     Automatically detects current-driven simulations and creates appropriate layout:
-    - Current-driven: 3 panels (Current | Vector Potential | Input Current)
+    - Current-driven: 3 panels (Current with input overlay | Vector Potential | Input Current)
     - Voltage-driven: 2 panels (Current | Vector Potential)
+
+    For current-driven simulations, the input current is overlaid on the current panel
+    (dashed line) for direct comparison and also shown separately in the third panel.
 
     Args:
         timestamp: Timestamp folder name
         job_index: Job index (default None plots all jobs in folder)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots (default None uses Figures/ in project folder)
+        print_final: If True, print current and input current at the final time for each job
     """
     # Determine which jobs to plot
     if job_index is None:
@@ -2367,27 +2392,36 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
 
         # Extract normalized quantities
         times_norm = data['times'] * data['T_c']  # t * T_c (dimensionless)
-        current_norm = np.real(data['currents'])  # J / J_0
-
-        # Vector potential (real part if complex)
-        A_values = np.real(data['vector_potentials']) if np.iscomplexobj(data['vector_potentials']) else data['vector_potentials']
-        A_norm = A_values  # A / A_0
+        current_norm = np.real(data['currents'])
+        A_norm = np.real(data['vector_potentials'])
 
         # Input pulse (for current-driven simulations)
-        input_pulse = data['save_data'].get('input_pulse', None)
+        input_pulse_raw = data['save_data'].get('input_pulse', None)
+        input_pulse = np.real(input_pulse_raw) if input_pulse_raw is not None else None
 
         # Create label
         label = f'Job {job_idx}' if plot_all else None
 
         # Plot current
-        ax_current.plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
+        ax_current.plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8)
+
+        # Also plot input pulse on current panel if available (for comparison)
+        if input_pulse is not None:
+            label_input = f'Job {job_idx} (input)' if plot_all else 'Input current'
+            ax_current.plot(times_norm, input_pulse, '--', linewidth=2, label=label_input, alpha=0.6)
 
         # Plot vector potential
-        ax_A.plot(times_norm, A_norm, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
+        ax_A.plot(times_norm, A_norm, linewidth=2.5, label=label, alpha=0.8)
 
         # Plot input pulse on separate panel if current-driven
         if is_current_driven and has_input_pulse and ax_input is not None:
-            ax_input.plot(times_norm, input_pulse, linewidth=2.5, label=label, alpha=0.8, color=f'C{job_idx}')
+            ax_input.plot(times_norm, input_pulse, linewidth=2.5, label=label, alpha=0.8)
+
+        if print_final:
+            print(f'Job {job_idx}: J(t_final) = {current_norm[-1]:.6g}', end='')
+            if input_pulse is not None:
+                print(f',  I_in(t_final) = {input_pulse[-1]:.6g}', end='')
+            print()
 
     # Configure current axis
     ax_current.set_xlabel(r'Time ($T_c^{-1}$)', fontsize=13)
@@ -2442,6 +2476,604 @@ def plot_current(timestamp, job_index=None, save_plot=False, save_dir=None):
         plt.close(fig)
     else:
         plt.show()
+
+def extract_monochromatic_conductivity(timestamp, threshold=1e-6, save_plot=False, save_dir=None,
+                                      omega_external=None, sigma_re_external=None,
+                                      sigma_im_external=None, labels_external=None,
+                                      xlim=None, ylim_re=None, ylim_im=None):
+    """
+    Extract conductivity spectrum across multiple jobs.
+
+    For each job:
+    1. Fourier transform current j(t) → j(ω) and vector potential A(t) → A(ω)
+    2. Compute conductivity σ(ω) = j(ω) / (iω A(ω)) for all frequencies
+    3. Store all (ω, σ(ω)) pairs where |A(ω)| > threshold
+    4. Combine data from all jobs
+
+    Produces scatter plot of σ(ω) vs ω showing full frequency-resolved response.
+
+    Args:
+        timestamp: Timestamp folder name
+        threshold: Minimum |A(ω)| value for valid conductivity (default 1e-6)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        omega_external: Optional external frequency values
+        sigma_re_external: Optional external Re[σ(ω)] values
+        sigma_im_external: Optional external Im[σ(ω)] values
+        labels_external: Optional label for external data
+        xlim: Optional tuple (xmin, xmax) for x-axis limits
+        ylim_re: Optional tuple (ymin, ymax) for y-axis limits on Re[σ(ω)] panel
+        ylim_im: Optional tuple (ymin, ymax) for y-axis limits on Im[σ(ω)] panel
+
+    Returns:
+        dict: {
+            'omega': array - driving frequencies from all jobs
+            'sigma_re': array - real part of conductivity
+            'sigma_im': array - imaginary part of conductivity
+        }
+    """
+    # Read job information
+    lines = io.read_contents_readable_file(timestamp)
+    job_no = io.recover_job_no(lines)
+
+    # Extract equilibrium gap from first job for reference lines
+    first_job_data = load_job_data(timestamp, 0)
+    gaps_first = first_job_data[1]['gaps']
+    gap_eq = np.abs(gaps_first[0])  # Equilibrium gap (first timestep)
+
+    # Lists to store results from all jobs
+    omega_list = []
+    sigma_re_list = []
+    sigma_im_list = []
+
+    print(f"\n{'='*60}")
+    print(f"Extracting monochromatic conductivity (timestamp={timestamp}):")
+    print(f"  Equilibrium gap: Δ₀ = {gap_eq:.6f}")
+    print(f"{'='*60}")
+
+    # Loop over all jobs
+    for job_idx in range(job_no):
+        # Load data
+        input_kwargs, save_data = load_job_data(timestamp, job_idx)
+
+        # Extract current and vector potential
+        currents = save_data['currents']
+        vector_potentials = save_data['vector_potentials']
+
+        # Get time grid
+        if 'times' in save_data:
+            times = save_data['times']
+        else:
+            state = save_data['final_state']
+            N_t = len(currents)
+            dt = state.dt
+            times = np.linspace(0, N_t * dt, N_t)
+
+        dt = times[1] - times[0]
+        N_t = len(times)
+
+        # Construct frequency grid
+        freq = np.fft.fftfreq(N_t, d=dt)
+        omega_grid = 2 * np.pi * freq
+        omega_grid = np.fft.fftshift(omega_grid)
+
+        # Fourier transform with phase correction for centered pulse
+        t_center = (times[0] + times[-1]) / 2.0
+
+        # Fourier transform current: j(ω)
+        j_omega = np.fft.fft(currents)
+        j_omega = np.fft.fftshift(j_omega)
+
+        # Fourier transform vector potential: A(ω)
+        A_omega = np.fft.fft(vector_potentials)
+        A_omega = np.fft.fftshift(A_omega)
+
+        # Remove phase from centered pulse
+        phase_correction = np.exp(1j * omega_grid * t_center)
+        j_omega = j_omega * phase_correction
+        A_omega = A_omega * phase_correction
+
+        # Compute conductivity: σ(ω) = j(ω) / (iω A(ω))
+        sigma_omega = np.zeros_like(j_omega, dtype=complex)
+        mask = (np.abs(A_omega) > threshold) & (np.abs(omega_grid) > threshold)
+        sigma_omega[mask] = j_omega[mask] / (1j * omega_grid[mask] * A_omega[mask])
+
+        # Store all valid frequencies (positive frequencies only)
+        positive_freq_mask = (omega_grid > 0) & mask
+        n_valid = np.sum(positive_freq_mask)
+
+        if n_valid > 0:
+            # Extract all valid (ω, σ) pairs
+            omega_valid = omega_grid[positive_freq_mask]
+            sigma_valid = sigma_omega[positive_freq_mask]
+
+            # Extend lists with all valid points from this job
+            omega_list.extend(omega_valid)
+            sigma_re_list.extend(np.real(sigma_valid))
+            sigma_im_list.extend(np.imag(sigma_valid))
+
+            print(f"  Job {job_idx}: Stored {n_valid} frequency points")
+        else:
+            print(f"  Job {job_idx}: No valid frequency data (all |A(ω)| < threshold)")
+
+    # Convert to arrays
+    omega_array = np.array(omega_list)
+    sigma_re_array = np.array(sigma_re_list)
+    sigma_im_array = np.array(sigma_im_list)
+
+    print(f"{'='*60}")
+    print(f"Extracted {len(omega_array)} conductivity points")
+    print(f"  Frequency range: [{omega_array.min():.3f}, {omega_array.max():.3f}]")
+
+    # Check if real part is always positive
+    is_always_positive = np.all(sigma_re_array > 0)
+    min_re_sigma = sigma_re_array.min()
+    print(f"  Re[σ(ω)] always positive: {is_always_positive}")
+    if not is_always_positive:
+        print(f"    Minimum Re[σ(ω)]: {min_re_sigma:.6e}")
+
+    # Compute integrals (need to sort by frequency for proper integration)
+    if len(omega_array) > 1:
+        # Sort data by frequency
+        sort_indices = np.argsort(omega_array)
+        omega_sorted = omega_array[sort_indices]
+        sigma_re_sorted = sigma_re_array[sort_indices]
+        sigma_im_sorted = sigma_im_array[sort_indices]
+
+        # Numerical integration using trapezoidal rule
+        integral_re = np.trapz(sigma_re_sorted, omega_sorted)
+        integral_im = np.trapz(sigma_im_sorted, omega_sorted)
+
+        print(f"  ∫ Re[σ(ω)] dω = {integral_re:.6e}")
+        print(f"  ∫ Im[σ(ω)] dω = {integral_im:.6e}")
+    else:
+        print(f"  Not enough points for integration")
+
+    print(f"{'='*60}\n")
+
+    # Create figure with 2 subplots (Re[σ] and Im[σ])
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    ax_re, ax_im = axes
+
+    # Plot Re[σ(ω)]
+    ax_re.scatter(omega_array, sigma_re_array, s=80, alpha=0.8, label='Simulation', zorder=3)
+
+    # Plot Im[σ(ω)]
+    ax_im.scatter(omega_array, sigma_im_array, s=80, alpha=0.8, label='Simulation', zorder=3)
+
+    # Plot external data if provided
+    if omega_external is not None:
+        if sigma_re_external is not None:
+            ext_label_re = labels_external if labels_external is not None else 'External data'
+            ax_re.plot(omega_external, sigma_re_external, '--', linewidth=2,
+                      label=ext_label_re, alpha=0.7, color='C1')
+
+        if sigma_im_external is not None:
+            ext_label_im = labels_external if labels_external is not None else 'External data'
+            ax_im.plot(omega_external, sigma_im_external, '--', linewidth=2,
+                      label=ext_label_im, alpha=0.7, color='C1')
+
+    # Add vertical lines at gap and 2-gap
+    ax_re.axvline(gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$\Delta_0$', zorder=1)
+    ax_re.axvline(2*gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$2\Delta_0$', zorder=1)
+    ax_im.axvline(gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$\Delta_0$', zorder=1)
+    ax_im.axvline(2*gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$2\Delta_0$', zorder=1)
+
+    # Configure Re[σ] panel
+    ax_re.set_xlabel(r'Frequency $\omega$', fontsize=13)
+    ax_re.set_ylabel(r'Re($\sigma(\omega)$)', fontsize=13)
+    ax_re.set_title('Real part of conductivity', fontsize=14)
+    ax_re.legend(fontsize=10)
+    ax_re.grid(True, alpha=0.3)
+
+    # Configure Im[σ] panel
+    ax_im.set_xlabel(r'Frequency $\omega$', fontsize=13)
+    ax_im.set_ylabel(r'Im($\sigma(\omega)$)', fontsize=13)
+    ax_im.set_title('Imaginary part of conductivity', fontsize=14)
+    ax_im.legend(fontsize=10)
+    ax_im.grid(True, alpha=0.3)
+
+    # Apply axis limits if specified
+    if xlim is not None:
+        ax_re.set_xlim(xlim)
+        ax_im.set_xlim(xlim)
+    if ylim_re is not None:
+        ax_re.set_ylim(ylim_re)
+    if ylim_im is not None:
+        ax_im.set_ylim(ylim_im)
+
+    fig.tight_layout()
+
+    if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        filename = os.path.join(save_dir, f'monochromatic_conductivity_{timestamp}.png')
+
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='extract_monochromatic_conductivity',
+            additional_information='monochromatic_conductivity',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close(fig)
+    else:
+        plt.show()
+
+    # Return extracted data
+    return {
+        'omega': omega_array,
+        'sigma_re': sigma_re_array,
+        'sigma_im': sigma_im_array
+    }
+
+def extract_transmitivity(timestamp, save_plot=False, save_dir=None,
+                         ext_data_x=None, ext_data_y=None):
+    """
+    Plot transmitivity analysis for current-driven simulations.
+
+    Creates a 2-panel figure:
+    - Panel a: Transmitivity (J_max/I_in_max) vs maximum incoming current
+    - Panel b: Transmitivity (J_max/I_in_max) vs maximum transmitted current
+
+    For external data in panel b format (I_in_max, J_max):
+    - Panel a plots ext_data_x/ext_data_y vs ext_data_y
+    - Panel b plots ext_data_y vs ext_data_x/ext_data_y
+
+    Args:
+        timestamp: Timestamp folder name
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        ext_data_x: External data x-values (I_in_max values)
+        ext_data_y: External data y-values (J_max values)
+    """
+    # Read job information
+    lines = io.read_contents_readable_file(timestamp)
+    job_no = io.recover_job_no(lines)
+
+    # Arrays to store results
+    I_in_max_list = []
+    J_max_list = []
+    transmitivity_list = []
+
+    # Loop over all jobs
+    for job_idx in range(job_no):
+        # Load data
+        data = load_simulation_data(timestamp, job_idx)
+
+        # Extract currents
+        current_norm = np.real(data['currents'])
+        input_pulse_raw = data['save_data'].get('input_pulse', None)
+
+        if input_pulse_raw is None:
+            print(f"Warning: Job {job_idx} has no input pulse data. Skipping.")
+            continue
+
+        input_pulse = np.real(input_pulse_raw)
+
+        # Compute maxima
+        I_in_max = np.max(np.abs(input_pulse))
+        J_max = np.max(np.abs(current_norm))
+        transmitivity = J_max / I_in_max if I_in_max != 0 else 0
+
+        # Store results
+        I_in_max_list.append(I_in_max)
+        J_max_list.append(J_max)
+        transmitivity_list.append(transmitivity)
+
+    # Convert to arrays
+    I_in_max_array = np.array(I_in_max_list)
+    J_max_array = np.array(J_max_list)
+    transmitivity_array = np.array(transmitivity_list)
+
+    # Create figure with 2 subplots
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    ax_trans, ax_jmax = axes
+
+    # Panel a: Transmitivity vs I_in_max
+    ax_trans.plot(I_in_max_array, transmitivity_array, 'o-',
+                  linewidth=2.5, markersize=8, label='Simulation', alpha=0.8)
+
+    # Plot external data on panel a
+    if ext_data_x is not None and ext_data_y is not None:
+        ext_trans = ext_data_x / ext_data_y
+        ax_trans.plot(ext_trans, ext_data_y, 's--',
+                     linewidth=2, markersize=6, label='External data', alpha=0.8)
+
+    # Panel b: Transmitivity vs J_max
+    ax_jmax.plot(J_max_array, transmitivity_array, 'o-',
+                linewidth=2.5, markersize=8, label='Simulation', alpha=0.8)
+
+    # Plot external data on panel b
+    if ext_data_x is not None and ext_data_y is not None:
+        ext_trans = ext_data_x / ext_data_y
+        ax_jmax.plot(ext_data_x, ext_data_y, 's--',
+                    linewidth=2, markersize=6, label='External data', alpha=0.8)
+
+    # Configure panel a
+    ax_trans.set_xlabel(r'$I_{\mathrm{in,max}}$', fontsize=13)
+    ax_trans.set_ylabel(r'Transmitivity ($J_{\mathrm{max}}/I_{\mathrm{in,max}}$)', fontsize=13)
+    ax_trans.set_title('(a) Transmitivity vs Input Current', fontsize=14)
+    ax_trans.legend(fontsize=10)
+    ax_trans.grid(True, alpha=0.3)
+
+    # Configure panel b
+    ax_jmax.set_xlabel(r'$J_{\mathrm{max}}$', fontsize=13)
+    ax_jmax.set_ylabel(r'Transmitivity ($J_{\mathrm{max}}/I_{\mathrm{in,max}}$)', fontsize=13)
+    ax_jmax.set_title('(b) Transmitivity vs Transmitted Current', fontsize=14)
+    ax_jmax.legend(fontsize=10)
+    ax_jmax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        filename = os.path.join(save_dir, f'transmitivity_{timestamp}.png')
+
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='extract_transmitivity',
+            additional_information='transmitivity_analysis',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close(fig)
+    else:
+        plt.show()
+
+def extract_gap_response(timestamp, job_indices=None, threshold=1e-6, save_plot=False, save_dir=None,
+                        omega_external=None, chi_re_external=None,
+                        chi_im_external=None, labels_external=None,
+                        xlim=None, ylim_re=None, ylim_im=None):
+    """
+    Extract gap response spectrum across multiple jobs.
+
+    For each job:
+    1. Fourier transform gap Δ(t) → Δ(ω) and vector potential A(t) → A(ω)
+    2. Compute A²(t) and its Fourier transform FT[A²(t)]
+    3. Compute gap response χ(ω) = Δ(ω) / FT[A²(t)] for all frequencies
+    4. Store all (ω, χ(ω)) pairs where |FT[A²(t)]| > threshold
+
+    Each job is plotted with a different color for easy identification.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_indices: List of job indices to process (default None uses all jobs)
+        threshold: Minimum |FT[A²(t)]| value for valid response (default 1e-6)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        omega_external: Optional external frequency values
+        chi_re_external: Optional external Re[χ(ω)] values
+        chi_im_external: Optional external Im[χ(ω)] values
+        labels_external: Optional label for external data
+        xlim: Optional tuple (xmin, xmax) for x-axis limits
+        ylim_re: Optional tuple (ymin, ymax) for y-axis limits on Re[χ(ω)] panel
+        ylim_im: Optional tuple (ymin, ymax) for y-axis limits on Im[χ(ω)] panel
+
+    Returns:
+        dict: {
+            'omega': array - all frequencies from all jobs
+            'chi_re': array - real part of gap response
+            'chi_im': array - imaginary part of gap response
+            'job_indices': array - job index for each data point
+        }
+    """
+    # Read job information
+    lines = io.read_contents_readable_file(timestamp)
+    job_no = io.recover_job_no(lines)
+
+    # Determine which jobs to process
+    if job_indices is None:
+        job_indices = range(job_no)
+    else:
+        job_indices = list(job_indices)
+
+    # Extract equilibrium gap from first job for reference lines
+    first_job_data = load_job_data(timestamp, job_indices[0])
+    gaps_first = first_job_data[1]['gaps']
+    gap_eq = np.abs(gaps_first[0])  # Equilibrium gap (first timestep)
+
+    # Lists to store results from all jobs
+    omega_list = []
+    chi_re_list = []
+    chi_im_list = []
+    job_index_list = []  # Track which job each point comes from
+
+    print(f"\n{'='*60}")
+    print(f"Extracting gap response (timestamp={timestamp}):")
+    print(f"  Equilibrium gap: Δ₀ = {gap_eq:.6f}")
+    print(f"  Processing {len(job_indices)} jobs: {job_indices}")
+    print(f"{'='*60}")
+
+    # Loop over selected jobs
+    for job_idx in job_indices:
+        # Load data
+        input_kwargs, save_data = load_job_data(timestamp, job_idx)
+
+        # Extract gap and vector potential
+        gaps = save_data['gaps']
+        vector_potentials = save_data['vector_potentials']
+
+        # Get time grid
+        if 'times' in save_data:
+            times = save_data['times']
+        else:
+            state = save_data['final_state']
+            N_t = len(gaps)
+            dt = state.dt
+            times = np.linspace(0, N_t * dt, N_t)
+
+        dt = times[1] - times[0]
+        N_t = len(times)
+
+        # Construct frequency grid
+        freq = np.fft.fftfreq(N_t, d=dt)
+        omega_grid = 2 * np.pi * freq
+        omega_grid = np.fft.fftshift(omega_grid)
+
+        # Fourier transform with phase correction for centered pulse
+        t_center = (times[0] + times[-1]) / 2.0
+
+        # Fourier transform gap: Δ(ω)
+        Delta_omega = np.fft.fft(gaps)
+        Delta_omega = np.fft.fftshift(Delta_omega)
+
+        # Fourier transform vector potential: A(ω)
+        A_omega = np.fft.fft(vector_potentials)
+        A_omega = np.fft.fftshift(A_omega)
+
+        # Compute A²(t) and its Fourier transform
+        A_squared_t = vector_potentials ** 2
+        A_squared_omega = np.fft.fft(A_squared_t)
+        A_squared_omega = np.fft.fftshift(A_squared_omega)
+
+        # Remove phase from centered pulse
+        phase_correction = np.exp(1j * omega_grid * t_center)
+        Delta_omega = Delta_omega * phase_correction
+        A_omega = A_omega * phase_correction
+        A_squared_omega = A_squared_omega * phase_correction
+
+        # Compute gap response: χ(ω) = Δ(ω) / FT[A²(t)]
+        chi_omega = np.zeros_like(Delta_omega, dtype=complex)
+        mask = np.abs(A_squared_omega) > threshold
+        chi_omega[mask] = Delta_omega[mask] / A_squared_omega[mask]
+
+        # Store all valid frequencies (positive frequencies only)
+        positive_freq_mask = (omega_grid > 0) & mask
+        n_valid = np.sum(positive_freq_mask)
+
+        if n_valid > 0:
+            # Extract all valid (ω, χ) pairs
+            omega_valid = omega_grid[positive_freq_mask]
+            chi_valid = chi_omega[positive_freq_mask]
+
+            # Extend lists with all valid points from this job
+            omega_list.extend(omega_valid)
+            chi_re_list.extend(np.real(chi_valid))
+            chi_im_list.extend(np.imag(chi_valid))
+            job_index_list.extend([job_idx] * n_valid)  # Track job index for each point
+
+            print(f"  Job {job_idx}: Stored {n_valid} frequency points")
+        else:
+            print(f"  Job {job_idx}: No valid frequency data (all |A²(ω)| < threshold)")
+
+    # Convert to arrays
+    omega_array = np.array(omega_list)
+    chi_re_array = np.array(chi_re_list)
+    chi_im_array = np.array(chi_im_list)
+    job_index_array = np.array(job_index_list)
+
+    print(f"{'='*60}")
+    print(f"Extracted {len(omega_array)} gap response points")
+    print(f"  Frequency range: [{omega_array.min():.3f}, {omega_array.max():.3f}]")
+    print(f"{'='*60}\n")
+
+    # Create figure with 2 subplots (Re[χ] and Im[χ])
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    ax_re, ax_im = axes
+
+    # Plot each job with a different color
+    unique_jobs = np.unique(job_index_array)
+    for i, job_idx in enumerate(unique_jobs):
+        mask_job = job_index_array == job_idx
+        color = f'C{i % 10}'  # Cycle through matplotlib color palette
+
+        # Plot Re[χ(ω)] for this job
+        ax_re.scatter(omega_array[mask_job], chi_re_array[mask_job],
+                     s=60, alpha=0.7, color=color, label=f'Job {job_idx}', zorder=3)
+
+        # Plot Im[χ(ω)] for this job
+        ax_im.scatter(omega_array[mask_job], chi_im_array[mask_job],
+                     s=60, alpha=0.7, color=color, label=f'Job {job_idx}', zorder=3)
+
+    # Plot external data if provided
+    if omega_external is not None:
+        if chi_re_external is not None:
+            ext_label_re = labels_external if labels_external is not None else 'External data'
+            ax_re.plot(omega_external, chi_re_external, '--', linewidth=2,
+                      label=ext_label_re, alpha=0.7, color='C1')
+
+        if chi_im_external is not None:
+            ext_label_im = labels_external if labels_external is not None else 'External data'
+            ax_im.plot(omega_external, chi_im_external, '--', linewidth=2,
+                      label=ext_label_im, alpha=0.7, color='C1')
+
+    # Add vertical lines at gap and 2-gap
+    ax_re.axvline(gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$\Delta_0$', zorder=1)
+    ax_re.axvline(2*gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$2\Delta_0$', zorder=1)
+    ax_im.axvline(gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$\Delta_0$', zorder=1)
+    ax_im.axvline(2*gap_eq, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, label=r'$2\Delta_0$', zorder=1)
+
+    # Configure Re[χ] panel
+    ax_re.set_xlabel(r'Frequency $\omega$', fontsize=13)
+    ax_re.set_ylabel(r'Re($\chi(\omega)$)', fontsize=13)
+    ax_re.set_title(r'Real part of gap response $\Delta(\omega) / \mathcal{F}[A^2(t)]$', fontsize=14)
+    ax_re.legend(fontsize=10, loc='best')
+    ax_re.grid(True, alpha=0.3)
+
+    # Configure Im[χ] panel
+    ax_im.set_xlabel(r'Frequency $\omega$', fontsize=13)
+    ax_im.set_ylabel(r'Im($\chi(\omega)$)', fontsize=13)
+    ax_im.set_title(r'Imaginary part of gap response $\Delta(\omega) / \mathcal{F}[A^2(t)]$', fontsize=14)
+    ax_im.legend(fontsize=10, loc='best')
+    ax_im.grid(True, alpha=0.3)
+
+    # Apply axis limits if specified
+    if xlim is not None:
+        ax_re.set_xlim(xlim)
+        ax_im.set_xlim(xlim)
+    if ylim_re is not None:
+        ax_re.set_ylim(ylim_re)
+    if ylim_im is not None:
+        ax_im.set_ylim(ylim_im)
+
+    fig.tight_layout()
+
+    if save_plot:
+        # Use Figures folder in project directory if no save_dir specified
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        filename = os.path.join(save_dir, f'gap_response_{timestamp}.png')
+
+        extended_savefig(
+            fig,
+            filename,
+            data_source_timestamp=str(timestamp),
+            plot_generating_method='extract_gap_response',
+            additional_information='gap_response',
+            dpi=150,
+            bbox_inches='tight'
+        )
+        print(f"Plot saved to: {filename}")
+        plt.close(fig)
+    else:
+        plt.show()
+
+    # Return extracted data
+    return {
+        'omega': omega_array,
+        'chi_re': chi_re_array,
+        'chi_im': chi_im_array,
+        'job_indices': job_index_array
+    }
 
 def plot_current_response(timestamp, job_index=None, save_plot=False, save_dir=None,
                           running_machine='laptop'):
@@ -2635,7 +3267,7 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
                               n_average=100, save_plot=False, save_dir=None,
                               times_external=None, gaps_external=None,
                               currents_external=None, A_external=None,
-                              labels_external=None, align_pulses=True):
+                              labels_external=None, align_pulses=True, markers=False):
     """
     Plot gap, current, and vector potential vs time in a combined 3-panel figure.
 
@@ -2666,6 +3298,7 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
                         - List of strings: labels for multiple external datasets (must match times_external length)
                         - If not provided, defaults to 'External data' or 'External 1', 'External 2', etc.
         align_pulses: If True, shift external time axes to align pulse maxima (default True)
+        markers: If True, plot with circle markers (default False)
     """
     # Determine which jobs to plot
     if job_index is None:
@@ -2817,19 +3450,22 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
         else:
             plot_color = 'C0'  # Always blue for single job
 
+        # Marker style based on flag
+        marker_style = 'o' if markers else None
+
         # Plot time evolution on each subplot
-        axes[0].plot(times_norm, gap_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
-        axes[1].plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color)
+        axes[0].plot(times_norm, gap_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color, marker=marker_style)
+        axes[1].plot(times_norm, current_norm, linewidth=2.5, label=label, alpha=0.8, color=plot_color, marker=marker_style)
 
         # Plot vector potential with label adjustment for current-driven
         A_label = label + ' (A)' if is_current_driven and input_pulse is not None and label is not None else label
-        axes[2].plot(times_norm, A_values, linewidth=2.5, label=A_label, alpha=0.8, color=plot_color, linestyle='-')
+        axes[2].plot(times_norm, A_values, linewidth=2.5, label=A_label, alpha=0.8, color=plot_color, linestyle='-', marker=marker_style)
 
         # Plot input pulse if current-driven
         if is_current_driven and input_pulse is not None:
             I_label = label + ' ($I_{in}$)' if label is not None else '$I_{in}$'
             axes[2].plot(times_norm, input_pulse, linewidth=2.0, label=I_label,
-                        alpha=0.6, color=plot_color, linestyle='--')
+                        alpha=0.6, color=plot_color, linestyle='--', marker=marker_style)
 
         # Compute and plot equilibrium reference if available
         if equilibrium_timestamp is not None:
@@ -2854,9 +3490,9 @@ def plot_gap_current_combined(timestamp, job_index=None, equilibrium_timestamp=N
             # Plot equilibrium reference curves
             eq_label = 'Equilibrium' if job_idx == job_indices[0] else None
             axes[0].plot(times_norm, gap_eq_interp, '--', linewidth=2,
-                        label=eq_label, alpha=0.7, color='red')
+                        label=eq_label, alpha=0.7, color='red', marker=marker_style)
             axes[1].plot(times_norm, current_eq_interp, '--', linewidth=2,
-                        label=eq_label, alpha=0.7, color='red')
+                        label=eq_label, alpha=0.7, color='red', marker=marker_style)
 
     # Plot external data if provided
     if times_external is not None:
@@ -3644,6 +4280,7 @@ def _plot_time_translation(gr_tensor, gk_tensor, time_grid, num_rows, threshold,
 def plot_energy_time_representation(timestamp, job_index, green_function_type='f',
                                      pauli_components=None, plot_every=1, xlim=(-15, 15),
                                      x_external=None, y_external=None, labels_external=None,
+                                     markers=False, plot_eq=True,
                                      save_plot=False, save_dir='analysis_plots'):
     """
     Plot Green's function in energy-time representation.
@@ -3673,6 +4310,8 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         labels_external: Optional labels for external datasets. Can be:
                    - Single string: label for single external dataset
                    - List of strings: labels for multiple external datasets
+        markers: Whether to show markers on data points (default False)
+        plot_eq: Whether to plot equilibrium reference lines (default True)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots
 
@@ -3691,17 +4330,18 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
     data_key_map = {
         'gr': 'gr_energy_time',
         'gk': 'gk_energy_time',
-        'f': 'f_energy_time'
+        'f': 'f_energy_time',
+        'n': 'f_energy_time'  # n plots -f/2 from same data
     }
 
     if green_function_type not in data_key_map:
-        raise ValueError(f"green_function_type must be 'gr', 'gk', or 'f', got '{green_function_type}'")
+        raise ValueError(f"green_function_type must be 'gr', 'gk', 'f', or 'n', got '{green_function_type}'")
 
     data_key = data_key_map[green_function_type]
 
     # Set smart defaults for pauli_components if not provided
     if pauli_components is None:
-        if green_function_type == 'f':
+        if green_function_type in ['f', 'n']:
             pauli_components = (0, 3)
         else:
             pauli_components = (2, 3)
@@ -3721,6 +4361,26 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         time_values = times[time_indices]
     else:
         time_values = time_indices
+
+    # Get time window size to compute spectral function center time offset
+    # Energy-time representation uses anti-diagonal centered at (N_t-1)//2
+    if 'grid_parameters' in input_kwargs:
+        N_t = input_kwargs['grid_parameters']['time_sampling']
+    else:
+        # Fallback: try to get from final_state if full state was saved
+        final_state = save_data['final_state']
+        N_t = final_state.gr.data.shape[2]
+    spectrum_offset_timesteps = (N_t - 1) // 2
+
+    # Compute dt (time step)
+    if len(times) > 1:
+        dt = times[1] - times[0]
+    else:
+        dt = input_kwargs['grid_parameters']['time_duration'] / (N_t - 1) if 'grid_parameters' in input_kwargs else 1.0
+
+    # Compute actual center times for energy-time representations
+    # Spectrum at timestep n has center at n - spectrum_offset_timesteps
+    center_time_values = time_values - spectrum_offset_timesteps * dt
 
     # Select which times to plot
     plot_indices = np.arange(0, len(energy_time_list), plot_every)
@@ -3811,6 +4471,11 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         # Subtract f_thermal from f (equilibrium thermal distribution)
         f_eq_subtracted = f_eq - f_thermal
         eq_nambu = f_eq_subtracted
+    elif green_function_type == 'n':
+        # For n = -f/2, subtract -f_thermal/2
+        f_eq_subtracted = f_eq - f_thermal
+        eq_nambu_data = -f_eq_subtracted.data / 2
+        eq_nambu = NambuTensor(eq_nambu_data, None)
 
     # Extract only the Pauli components that will be plotted
     eq_pauli_components = extract_pauli_components_from_nambu(eq_nambu, pauli_components)
@@ -3832,11 +4497,14 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
     print(f"\n{'='*60}")
     print(f"Energy-Time Plot (timestamp={timestamp}, job_index={job_index}):")
     print(f"{'='*60}")
-    print(f"  Green's function type: g^{green_function_type}")
+    # Display name: 'f' and 'n' without 'g^', others with 'g^'
+    display_name = green_function_type if green_function_type in ['f', 'n'] else f"g^{green_function_type}"
+    print(f"  Green's function type: {display_name}")
     print(f"  Pauli components: {pauli_components}")
     print(f"  Total time slices available: {len(energy_time_list)}")
     print(f"  Plotting every {plot_every} slice(s): {len(plot_indices)} lines")
-    print(f"  Time range: [{time_values[0]:.2f}, {time_values[-1]:.2f}]")
+    print(f"  Time range (center times): [{center_time_values[0]:.2f}, {center_time_values[-1]:.2f}]")
+    print(f"  (Offset by {spectrum_offset_timesteps} timesteps = {spectrum_offset_timesteps * dt:.2f} time units)")
     print(f"{'='*60}\n")
 
     # Plot both Pauli components
@@ -3852,37 +4520,46 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
             # Extract Pauli component
             g_pauli = g_energy.trace(pauli_index=pauli_idx) / 2
 
+            # For 'n' type, plot -f/2 instead of f
+            if green_function_type == 'n':
+                g_pauli = -g_pauli / 2
+
             # Extract both real and imaginary parts
             g_real = np.real(g_pauli)
             g_imag = np.imag(g_pauli)
 
-            # Colors: darker for later times (skip first 2 colors to avoid white)
-            color_real = blues(i + 2)
-            color_imag = reds(i + 2)
+            # Colors: darker for later times (normalize to ensure darkest = latest)
+            # Map i from [0, n_plots-1] to colormap range [0.3, 1.0] (skip lightest colors)
+            color_idx = 0.3 + 0.7 * i / max(1, n_plots - 1)
+            color_real = blues(color_idx)
+            color_imag = reds(color_idx)
 
             # Time value for label (show only first 5 in legend to avoid clutter)
-            time_value = time_values[plot_indices[i]]
-            label_real = f'Re, $t = {time_value:.2f}$' if i < 5 else None
-            label_imag = f'Im, $t = {time_value:.2f}$' if i < 5 else None
+            # Use center time (accounting for anti-diagonal offset)
+            center_time = center_time_values[plot_indices[i]]
+            label_real = f'Re, $t = {center_time:.2f}$' if i < 5 else None
+            label_imag = f'Im, $t = {center_time:.2f}$' if i < 5 else None
 
             # Plot real part (blue)
-            ax.plot(energy_grid, g_real, '-', color=color_real, linewidth=1.5,
-                   alpha=0.8, label=label_real)
+            linestyle = '-o' if markers else '-'
+            ax.plot(energy_grid, g_real, linestyle, color=color_real, linewidth=2.5,
+                   alpha=1.0, label=label_real, zorder=i)
 
             # Plot imaginary part (red)
-            ax.plot(energy_grid, g_imag, '-', color=color_imag, linewidth=1.5,
-                   alpha=0.8, label=label_imag)
+            ax.plot(energy_grid, g_imag, linestyle, color=color_imag, linewidth=2.5,
+                   alpha=1.0, label=label_imag, zorder=i)
 
-        # Plot equilibrium Green's function (dashed lines)
-        eq_component_idx = pauli_components.index(pauli_idx)
-        eq_component = eq_pauli_components[eq_component_idx]
-        eq_real = np.real(eq_component)
-        eq_imag = np.imag(eq_component)
+        # Plot equilibrium Green's function (dashed lines) if requested
+        if plot_eq:
+            eq_component_idx = pauli_components.index(pauli_idx)
+            eq_component = eq_pauli_components[eq_component_idx]
+            eq_real = np.real(eq_component)
+            eq_imag = np.imag(eq_component)
 
-        ax.plot(energy_grid, eq_real, '--', color='black', linewidth=2,
-               alpha=0.9, label='Equilibrium (Re)')
-        ax.plot(energy_grid, eq_imag, '--', color='gray', linewidth=2,
-               alpha=0.9, label='Equilibrium (Im)')
+            ax.plot(energy_grid, eq_real, '--', color='black', linewidth=2.5,
+                   alpha=0.9, label='Equilibrium (Re)')
+            ax.plot(energy_grid, eq_imag, '--', color='gray', linewidth=2.5,
+                   alpha=0.9, label='Equilibrium (Im)')
 
         # Plot external data if provided
         if x_external is not None and y_external is not None:
@@ -3924,7 +4601,9 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         # Configure subplot
         ax.set_xlabel(r'Energy $\epsilon$', fontsize=12)
         ax.set_ylabel(f'{pauli_labels[pauli_idx]}', fontsize=12)
-        ax.set_title(f'$g^{{{green_function_type}}}$: {pauli_labels[pauli_idx]} (Blue=Re, Red=Im)',
+        # Display name: 'f' and 'n' without 'g^', others with 'g^'
+        title_name = f'${green_function_type}$' if green_function_type in ['f', 'n'] else f'$g^{{{green_function_type}}}$'
+        ax.set_title(f'{title_name}: {pauli_labels[pauli_idx]} (Blue=Re, Red=Im)',
                     fontsize=13)
         ax.grid(True, alpha=0.3)
 
@@ -3937,7 +4616,9 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
             ax.legend(fontsize=8, loc='best', ncol=2)
 
     # Overall title
-    fig.suptitle(f'Energy-Time Representation: $g^{{{green_function_type}}}$ '
+    # Display name: 'f' and 'n' without 'g^', others with 'g^'
+    suptitle_name = f'${green_function_type}$' if green_function_type in ['f', 'n'] else f'$g^{{{green_function_type}}}$'
+    fig.suptitle(f'Energy-Time Representation: {suptitle_name} '
                 f'(timestamp={timestamp}, job={job_index})',
                 fontsize=14, y=1.02)
 
@@ -3958,3 +4639,692 @@ def plot_energy_time_representation(timestamp, job_index, green_function_type='f
         'time_values': time_values[plot_indices],
         'data': [energy_time_list[i] for i in plot_indices]
     }
+
+
+def plot_energy_time_representation_slider(timestamp, job_index, green_function_type='f',
+                                             pauli_components=None, xlim=(-15, 15),
+                                             x_external=None, y_external=None, labels_external=None,
+                                             markers=False, plot_eq=True,
+                                             running_machine='laptop'):
+    """
+    Interactive version of plot_energy_time_representation with slider control.
+
+    Creates a 2-subplot figure showing energy cuts at a single time,
+    controlled by an interactive slider. Each time slice shows real (blue)
+    and imaginary (red) parts of two Pauli components.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_index: Job index
+        green_function_type: 'gr', 'gk', or 'f'
+        pauli_components: Tuple of two Pauli indices (0-3)
+            - For 'f': defaults to (0, 3)
+            - For 'gr'/'gk': defaults to (2, 3)
+        xlim: Energy axis limits (xmin, xmax) or None
+        x_external: Optional external x-values for comparison
+        y_external: Optional external y-values for comparison
+        labels_external: Labels for external datasets
+        markers: Show markers on data points (default False)
+        plot_eq: Plot equilibrium reference lines (default True)
+        running_machine: 'laptop' or 'cluster_euler'
+
+    Returns:
+        dict: {
+            'widget': ipywidgets.interactive object,
+            'energy_grid': energy array,
+            'time_indices': time indices array,
+            'time_values': time values array,
+            'equilibrium_data': precomputed equilibrium components
+        }
+
+    Requires:
+        - ipywidgets package
+        - Jupyter notebook environment
+
+    Example:
+        >>> result = plot_energy_time_representation_slider(
+        ...     timestamp='20240615_143022',
+        ...     job_index=0,
+        ...     green_function_type='gr',
+        ...     plot_eq=True
+        ... )
+        >>> # Use slider to explore time evolution interactively
+
+    See Also:
+        plot_energy_time_representation: Static version (all times stacked)
+    """
+
+    # Check for ipywidgets
+    try:
+        from ipywidgets import interactive, IntSlider, VBox, Label
+        from IPython.display import display
+    except ImportError:
+        raise ImportError(
+            "ipywidgets required for interactive plotting.\n"
+            "Install: pip install ipywidgets\n"
+            "Enable: jupyter nbextension enable --py widgetsnbextension"
+        )
+
+    # Check for Jupyter environment
+    try:
+        get_ipython()
+    except NameError:
+        raise RuntimeError(
+            "plot_energy_time_representation_slider() requires Jupyter.\n"
+            "Use plot_energy_time_representation() for non-interactive plots."
+        )
+
+    # Load data
+    input_kwargs, save_data = load_job_data(timestamp, job_index, running_machine)
+
+    # Map green_function_type to data key
+    data_key_map = {
+        'gr': 'gr_energy_time',
+        'gk': 'gk_energy_time',
+        'f': 'f_energy_time',
+        'n': 'f_energy_time'  # n plots -f/2 from same data
+    }
+
+    if green_function_type not in data_key_map:
+        raise ValueError(f"green_function_type must be 'gr', 'gk', 'f', or 'n', got '{green_function_type}'")
+
+    data_key = data_key_map[green_function_type]
+
+    # Set smart defaults for pauli_components if not provided
+    if pauli_components is None:
+        if green_function_type in ['f', 'n']:
+            pauli_components = (0, 3)
+        else:
+            pauli_components = (2, 3)
+
+    # Check if data exists
+    if data_key not in save_data:
+        raise ValueError(f"No {green_function_type} energy-time data found. "
+                        f"Simulation must be run with track_every_n parameter.")
+
+    # Extract data
+    energy_time_list = save_data[data_key]
+    time_indices = save_data['energy_time_indices']
+
+    # Validate data
+    if len(energy_time_list) == 0:
+        raise ValueError("No energy-time data. Check track_every_n parameter.")
+
+    # Get actual times from save_data
+    if 'times' in save_data:
+        times = save_data['times']
+        time_values = times[time_indices]
+    else:
+        time_values = time_indices
+
+    # Extract energy grid (same for all times)
+    energy_grid = energy_time_list[0]['energy_grid']
+
+    # Get time window size to compute spectral function timing offset
+    # Energy-time representation uses anti-diagonal: t + t' = N_t - 1
+    # Center time index: (N_t - 1) / 2, while gap is from index N_t - 1
+    # Offset: (N_t - 1) - (N_t - 1)/2 = (N_t - 1)/2
+    # Get N_t from grid_parameters (final_state may be reduced to save memory)
+    if 'grid_parameters' in input_kwargs:
+        N_t = input_kwargs['grid_parameters']['time_sampling']
+    else:
+        # Fallback: try to get from final_state if full state was saved
+        final_state = save_data['final_state']
+        N_t = final_state.gr.data.shape[2]
+    spectrum_offset = (N_t - 1) // 2
+
+    # Compute equilibrium Green's functions using Usadel methods
+    import sys
+    import os
+    equilibrium_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'equilibrium_python')
+    if equilibrium_path not in sys.path:
+        sys.path.insert(0, equilibrium_path)
+
+    from Usadel_methods import UsadelEvolution
+    from nambu_class import NambuTensor
+
+    # Extract parameters
+    system_params = input_kwargs['system_parameters']
+    eta = system_params['eta']
+    temperature = system_params['temperature']
+
+    # Get gap from gap history at t=0
+    gaps = save_data['gaps']
+    gap = np.abs(gaps[0])
+
+    # Grid parameters for UsadelEvolution
+    grid_parameters = {
+        'omega_grid': energy_grid,
+        'energy_cutoff': np.max(np.abs(energy_grid)),
+        'eta': eta
+    }
+
+    # System parameters for UsadelEvolution
+    system_parameters_usadel = {
+        'critical_temperature': system_params['critical_temperature'],
+        'temperature': temperature,
+        'current_maximum': 1.0
+    }
+
+    # Create UsadelEvolution object
+    usadel = UsadelEvolution(grid_parameters, system_parameters_usadel)
+
+    # Compute equilibrium Green's functions using Usadel methods with Q=0
+    import jax.numpy as jnp
+
+    # Thermal occupation function
+    f_thermal = NambuTensor(usadel._thermal_occupation_numbers(temperature), 0)
+
+    # Get h_r and convert to g_r
+    hr_eq = usadel._get_hr(Q=0.0, delta=gap, sigma_r=None)
+    gr_eq = usadel._hr2gr(hr_eq)
+
+    # Compute gk from gr and f: gk = gr @ f + f @ gr_involution
+    gk_eq = gr_eq @ f_thermal + f_thermal @ gr_eq._involution()
+
+    # For 'f', just use the thermal occupation directly
+    f_eq = f_thermal
+
+    # Extract Pauli components (convert jax arrays to numpy)
+    def extract_pauli_components_from_nambu(nambu_tensor, pauli_indices):
+        """Extract Pauli components from NambuTensor."""
+        components = []
+        for idx in pauli_indices:
+            component = nambu_tensor._trace(pauli_index=idx) / 2.0
+            components.append(np.array(component))
+        return components
+
+    # Create tau_3 Pauli matrix for subtractions (broadcast to energy dimension)
+    energy_shape = gr_eq.data.shape[2:]  # Extract energy dimension shape
+    tau_3 = NambuTensor(jnp.ones(energy_shape), pauli_channel=3)
+
+    # Subtract asymptotic/thermal components before comparison
+    if green_function_type == 'gr':
+        gr_eq_subtracted = gr_eq - tau_3
+        eq_nambu = gr_eq_subtracted
+    elif green_function_type == 'gk':
+        thermal_term_data = f_thermal.data * tau_3.data * 2.0
+        thermal_term = NambuTensor(thermal_term_data, None)
+        gk_eq_subtracted = gk_eq - thermal_term
+        eq_nambu = gk_eq_subtracted
+    elif green_function_type == 'f':
+        f_eq_subtracted = f_eq - f_thermal
+        eq_nambu = f_eq_subtracted
+    elif green_function_type == 'n':
+        # For n = -f/2, subtract -f_thermal/2
+        f_eq_subtracted = f_eq - f_thermal
+        eq_nambu_data = -f_eq_subtracted.data / 2
+        eq_nambu = NambuTensor(eq_nambu_data, None)
+
+    # Extract only the Pauli components that will be plotted
+    eq_pauli_components = extract_pauli_components_from_nambu(eq_nambu, pauli_components)
+
+    # Pauli component labels
+    pauli_labels = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+
+    # Compute snapshot offset to align spectrum with gap
+    # Spectrum offset in timesteps is (N_t-1)//2, convert to snapshot indices
+    if len(time_indices) > 1:
+        track_every_n = time_indices[1] - time_indices[0]
+        snapshot_offset = spectrum_offset // track_every_n
+        print(f"Alignment info: N_t={N_t}, spectrum_offset={spectrum_offset} timesteps, track_every_n={track_every_n}, snapshot_offset={snapshot_offset} snapshots")
+    else:
+        snapshot_offset = 0
+
+    # Create slider with max limited by forward shift
+    # At slider position time_idx, we access energy_time_list[time_idx + snapshot_offset]
+    # So max time_idx must satisfy: time_idx + snapshot_offset <= len(energy_time_list) - 1
+    max_time_idx = len(energy_time_list) - 1 - snapshot_offset
+    if max_time_idx < 0:
+        raise ValueError(f"Not enough snapshots for alignment: need at least {snapshot_offset + 1} snapshots, got {len(energy_time_list)}")
+
+    time_slider = IntSlider(
+        value=0,
+        min=0,
+        max=max_time_idx,
+        step=1,
+        description='Time Index:',
+        continuous_update=False,
+        readout=True,
+        readout_format='d'
+    )
+
+    # Create time display label
+    time_label = Label(value=f"Time: {time_values[0]:.4f}")
+
+    # Define plot update function
+    def update_plot(time_idx):
+        """Update plot when slider changes."""
+        plt.close('all')
+        time_label.value = f"Time: {time_values[time_idx]:.4f}"
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Apply forward shift to spectrum to align with gap timing
+        # Spectrum at index i has center time at time_indices[i] - (N_t-1)//2
+        # To get spectrum centered at time_indices[time_idx], need index time_idx + snapshot_offset
+        spectrum_idx = min(time_idx + snapshot_offset, len(energy_time_list) - 1)
+
+        # Debug: show which indices are being used
+        gap_timestep = time_indices[time_idx]
+        spectrum_timestep = time_indices[spectrum_idx] if spectrum_idx < len(time_indices) else time_indices[-1]
+        spectrum_center_time = spectrum_timestep - spectrum_offset
+        print(f"Slider idx={time_idx}: gap from timestep {gap_timestep}, spectrum from idx {spectrum_idx} (timestep {spectrum_timestep}, centered at ~{spectrum_center_time})")
+
+        # Extract data at shifted spectral index
+        g_data = energy_time_list[spectrum_idx]
+        g_energy = g_data['g_energy']
+
+        # Plot both Pauli components
+        for subplot_idx, pauli_idx in enumerate(pauli_components):
+            ax = axes[subplot_idx]
+
+            # Extract Pauli component
+            g_pauli = g_energy.trace(pauli_index=pauli_idx) / 2
+
+            # For 'n' type, plot -f/2 instead of f
+            if green_function_type == 'n':
+                g_pauli = -g_pauli / 2
+
+            g_real = np.real(g_pauli)
+            g_imag = np.imag(g_pauli)
+
+            # Plot current time data
+            linestyle = '-o' if markers else '-'
+            ax.plot(energy_grid, g_real, linestyle, color='blue',
+                   linewidth=2.5, alpha=0.8, label='Re')
+            ax.plot(energy_grid, g_imag, linestyle, color='red',
+                   linewidth=2.5, alpha=0.8, label='Im')
+
+            # Plot equilibrium (reuse cached data)
+            if plot_eq:
+                eq_component_idx = pauli_components.index(pauli_idx)
+                eq_component = eq_pauli_components[eq_component_idx]
+                ax.plot(energy_grid, np.real(eq_component), '--',
+                       color='black', linewidth=2.5, alpha=0.9,
+                       label='Equilibrium (Re)')
+                ax.plot(energy_grid, np.imag(eq_component), '--',
+                       color='gray', linewidth=2.5, alpha=0.9,
+                       label='Equilibrium (Im)')
+
+            # Plot external data if provided
+            if x_external is not None and y_external is not None:
+                if isinstance(y_external, dict):
+                    if pauli_idx in y_external:
+                        y_data = y_external[pauli_idx]
+                    else:
+                        y_data = None
+                else:
+                    y_data = y_external
+
+                if y_data is not None:
+                    if isinstance(x_external, list):
+                        ext_markers = ['x', 's', '^', 'd', 'v', '<', '>', 'p', '*', 'h']
+                        linestyles = ['--', '-.', ':', '--', '-.']
+                        y_list = y_data if isinstance(y_data, list) else [y_data]
+
+                        for idx, (x_ext, y_ext) in enumerate(zip(x_external, y_list)):
+                            marker = ext_markers[idx % len(ext_markers)]
+                            ls = linestyles[idx % len(linestyles)]
+                            if labels_external is not None:
+                                label = labels_external[idx] if isinstance(labels_external, list) else labels_external
+                            else:
+                                label = f'External {idx+1}' if len(x_external) > 1 else 'External'
+                            ax.plot(x_ext, y_ext, marker=marker, linestyle=ls,
+                                   linewidth=2, markersize=8, label=label, alpha=0.8, color='black')
+                    else:
+                        if labels_external is not None:
+                            label = labels_external if isinstance(labels_external, str) else labels_external[0]
+                        else:
+                            label = 'External'
+                        ax.plot(x_external, y_data, 'kx--', linewidth=2, markersize=8,
+                               label=label, alpha=0.8)
+
+            # Add vertical lines at ±gap(t)
+            gap_at_t = np.abs(gaps[time_indices[time_idx]])
+            ax.axvline(gap_at_t, color='green', linestyle=':', linewidth=2, alpha=0.5, label=r'$\pm\Delta(t)$')
+            ax.axvline(-gap_at_t, color='green', linestyle=':', linewidth=2, alpha=0.5)
+
+            # Configure subplot
+            ax.set_xlabel(r'Energy $\epsilon$', fontsize=12)
+            ax.set_ylabel(f'{pauli_labels[pauli_idx]}', fontsize=12)
+            # Display name: 'f' and 'n' without 'g^', others with 'g^'
+            title_name = f'${green_function_type}$' if green_function_type in ['f', 'n'] else f'$g^{{{green_function_type}}}$'
+            ax.set_title(f'{title_name}: {pauli_labels[pauli_idx]}',
+                        fontsize=13)
+            ax.grid(True, alpha=0.3)
+
+            if xlim is not None:
+                ax.set_xlim(xlim)
+
+            if subplot_idx == 0:
+                ax.legend(fontsize=10, loc='best')
+
+        # Overall title with current time
+        # Display name: 'f' and 'n' without 'g^', others with 'g^'
+        suptitle_name = f'${green_function_type}$' if green_function_type in ['f', 'n'] else f'$g^{{{green_function_type}}}$'
+        fig.suptitle(
+            f'Energy-Time: {suptitle_name} '
+            f'(t={time_values[time_idx]:.4f})',
+            fontsize=14, y=1.02
+        )
+
+        plt.tight_layout()
+        plt.show()
+
+    # Create interactive widget
+    interactive_plot = interactive(update_plot, time_idx=time_slider)
+
+    # Layout with time label
+    widget_layout = VBox([time_label, interactive_plot])
+    display(widget_layout)
+
+    # Print info
+    print(f"\n{'='*60}")
+    print(f"Interactive Energy-Time Plot")
+    print(f"  Function type: g^{green_function_type}")
+    print(f"  Pauli components: {pauli_components}")
+    print(f"  Total time slices: {len(energy_time_list)}")
+    print(f"  Time range: [{time_values[0]:.4f}, {time_values[-1]:.4f}]")
+    print(f"{'='*60}\n")
+
+    # Return data
+    return {
+        'widget': interactive_plot,
+        'energy_grid': energy_grid,
+        'time_indices': time_indices,
+        'time_values': time_values,
+        'equilibrium_data': eq_pauli_components
+    }
+
+
+def plot_two_time_pauli_components(timestamp, job_index, green_function_type='gk',
+                                    time_index=-1, vmin=None, vmax=None,
+                                    save_plot=False, save_dir='analysis_plots',
+                                    running_machine='laptop'):
+    """
+    Plot all Pauli components of two-time Green's function as 2D heatmaps.
+
+    Creates a 2x4 subplot grid showing real and imaginary parts of all four
+    Pauli components (tau_0, tau_1, tau_2, tau_3) in the two-time plane.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_index: Job index
+        green_function_type: 'gr' or 'gk' (default: 'gk')
+        time_index: Which time slice to extract if full history saved.
+                   -1 = last time (default), or specify index
+        vmin: Minimum value for colorbar (default: auto from data)
+        vmax: Maximum value for colorbar (default: auto from data)
+        save_plot: Whether to save plot (default: False)
+        save_dir: Directory for plots
+        running_machine: 'laptop' or 'cluster_euler'
+
+    Returns:
+        dict: {
+            'time_grid': time array,
+            'pauli_components': dict with keys 0,1,2,3 containing 2D arrays,
+            'time_index': actual time index used
+        }
+    """
+    input_kwargs, save_data = load_job_data(timestamp, job_index, running_machine)
+
+    final_state = save_data['final_state']
+
+    if green_function_type == 'gr':
+        g_tensor = final_state.gr
+        title_prefix = r'$g^R$'
+    elif green_function_type == 'gk':
+        g_tensor = final_state.gk
+        title_prefix = r'$g^K$'
+    else:
+        raise ValueError(f"green_function_type must be 'gr' or 'gk', got '{green_function_type}'")
+
+    print(f"Green's function tensor shape: {g_tensor.data.shape}")
+
+    # The tensor should be (2, 2, N_t, N_t) for the two-time plane
+    if g_tensor.data.ndim != 4:
+        raise ValueError(f"Expected 4D tensor, got {g_tensor.data.ndim}D with shape {g_tensor.data.shape}")
+
+    if g_tensor.data.shape[0] != 2 or g_tensor.data.shape[1] != 2:
+        raise ValueError(f"Expected Nambu structure (2, 2, ...), got shape {g_tensor.data.shape}")
+
+    # Check if this is already a square two-time matrix
+    if g_tensor.data.shape[2] == g_tensor.data.shape[3]:
+        # This is the two-time plane (2, 2, N_t, N_t)
+        g_two_time_data = g_tensor.data
+        N_t = g_tensor.data.shape[2]
+        actual_time_index = 0
+    else:
+        raise ValueError(f"Expected square two-time matrix, got shape {g_tensor.data.shape}")
+
+    dt = final_state.dt
+    time_grid = np.arange(N_t) * dt
+
+    pauli_labels = [r'$\tau_0$ (Identity)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+    pauli_components = {}
+
+    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+
+    g_two_time = NambuKeldyshTensor(g_two_time_data)
+
+    for pauli_idx in range(4):
+        g_pauli = g_two_time.trace(pauli_index=pauli_idx) / 2.0
+        pauli_components[pauli_idx] = g_pauli
+
+        g_real = np.real(g_pauli)
+        g_imag = np.imag(g_pauli)
+
+        if vmin is None:
+            vmin_real = np.min(g_real)
+            vmin_imag = np.min(g_imag)
+        else:
+            vmin_real = vmin_imag = vmin
+
+        if vmax is None:
+            vmax_real = np.max(g_real)
+            vmax_imag = np.max(g_imag)
+        else:
+            vmax_real = vmax_imag = vmax
+
+        extent = [time_grid[0], time_grid[-1], time_grid[0], time_grid[-1]]
+
+        ax_real = axes[0, pauli_idx]
+        im_real = ax_real.imshow(g_real, origin='lower', aspect='auto',
+                                 cmap='RdBu_r', extent=extent,
+                                 vmin=vmin_real, vmax=vmax_real)
+        ax_real.set_title(f'{title_prefix} {pauli_labels[pauli_idx]} (Real)', fontsize=11)
+        ax_real.set_xlabel(r"$t'$", fontsize=10)
+        ax_real.set_ylabel(r"$t$", fontsize=10)
+        plt.colorbar(im_real, ax=ax_real, fraction=0.046, pad=0.04)
+
+        ax_imag = axes[1, pauli_idx]
+        im_imag = ax_imag.imshow(g_imag, origin='lower', aspect='auto',
+                                 cmap='RdBu_r', extent=extent,
+                                 vmin=vmin_imag, vmax=vmax_imag)
+        ax_imag.set_title(f'{title_prefix} {pauli_labels[pauli_idx]} (Imag)', fontsize=11)
+        ax_imag.set_xlabel(r"$t'$", fontsize=10)
+        ax_imag.set_ylabel(r"$t$", fontsize=10)
+        plt.colorbar(im_imag, ax=ax_imag, fraction=0.046, pad=0.04)
+
+        print(f"\n{pauli_labels[pauli_idx]}:")
+        print(f"  Real: min={np.min(g_real):.3e}, max={np.max(g_real):.3e}")
+        print(f"  Imag: min={np.min(g_imag):.3e}, max={np.max(g_imag):.3e}")
+
+    fig.suptitle(f'Two-Time {title_prefix} Pauli Components (timestamp={timestamp}, job={job_index}, time_idx={actual_time_index})',
+                fontsize=14, y=0.995)
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        filename = f'two_time_{green_function_type}_pauli_{timestamp}_job{job_index}.png'
+        extended_savefig(os.path.join(save_dir, filename), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+    return {
+        'time_grid': time_grid,
+        'pauli_components': pauli_components,
+        'time_index': actual_time_index
+    }
+
+
+def plot_offdiagonal_matrix_element(timestamp, job_index, green_function_type='gk',
+                                     pauli_index=0, check_symmetry=True,
+                                     save_plot=False, save_dir='analysis_plots',
+                                     running_machine='laptop'):
+    """
+    Plot off-diagonal (anti-diagonal) of Green's function for a Pauli component.
+
+    Extracts g(t+tau, t-tau) as a function of tau from the anti-diagonal of the
+    two-time Green's function and plots the specified Pauli component.
+
+    Args:
+        timestamp: Timestamp folder name
+        job_index: Job index
+        green_function_type: 'gr' or 'gk' (default: 'gk')
+        pauli_index: Which Pauli component to plot (0=τ₀, 1=τ₁, 2=τ₂, 3=τ₃)
+                    τ₀ = identity (particle density)
+                    τ₁ = sigma_x
+                    τ₂ = sigma_y (anomalous/pairing)
+                    τ₃ = sigma_z (particle-hole asymmetry)
+        check_symmetry: If True, perform parity analysis
+        save_plot: Whether to save plot
+        save_dir: Directory for plots
+        running_machine: 'laptop' or 'cluster_euler'
+
+    Returns:
+        dict: {
+            'tau_grid': relative time array,
+            'g_tau': complex array of Green's function values,
+            'symmetry_test': dict with parity analysis (if check_symmetry=True)
+        }
+    """
+    input_kwargs, save_data = load_job_data(timestamp, job_index, running_machine)
+    final_state = save_data['final_state']
+
+    if green_function_type == 'gr':
+        g_tensor = final_state.gr
+        title_prefix = r'$g^R$'
+    elif green_function_type == 'gk':
+        g_tensor = final_state.gk
+        title_prefix = r'$g^K$'
+    else:
+        raise ValueError(f"green_function_type must be 'gr' or 'gk'")
+
+    if pauli_index not in [0, 1, 2, 3]:
+        raise ValueError(f"pauli_index must be in {{0,1,2,3}}, got {pauli_index}")
+
+    N_t = g_tensor.data.shape[2]
+    dt = final_state.dt
+
+    g_antidiag = g_tensor.off_diagonal()
+    g_antidiag_reversed = np.flip(g_antidiag, axis=2)
+
+    tau_grid = np.arange(N_t) * dt - (N_t - 1) * dt / 2.0
+
+    g_tau = NambuKeldyshTensor(g_antidiag_reversed).trace(pauli_index=pauli_index) / 2.0
+
+    g_real = np.real(g_tau)
+    g_imag = np.imag(g_tau)
+
+    pauli_labels = {
+        0: r'$\tau_0$ (Identity)',
+        1: r'$\tau_1$ (X)',
+        2: r'$\tau_2$ (Y, Anomalous)',
+        3: r'$\tau_3$ (Z)'
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    ax_real = axes[0]
+    ax_real.plot(tau_grid, g_real, 'b-', linewidth=2, label='Real part')
+    ax_real.axhline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+    ax_real.axvline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+    ax_real.set_xlabel(r'$\tau$', fontsize=12)
+    ax_real.set_ylabel(f'Re[{pauli_labels[pauli_index]}]', fontsize=12)
+    ax_real.set_title(f'{title_prefix} {pauli_labels[pauli_index]} - Real Part', fontsize=13)
+    ax_real.grid(True, alpha=0.3)
+    ax_real.legend()
+
+    ax_imag = axes[1]
+    ax_imag.plot(tau_grid, g_imag, 'r-', linewidth=2, label='Imaginary part')
+    ax_imag.axhline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+    ax_imag.axvline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+    ax_imag.set_xlabel(r'$\tau$', fontsize=12)
+    ax_imag.set_ylabel(f'Im[{pauli_labels[pauli_index]}]', fontsize=12)
+    ax_imag.set_title(f'{title_prefix} {pauli_labels[pauli_index]} - Imaginary Part', fontsize=13)
+    ax_imag.grid(True, alpha=0.3)
+    ax_imag.legend()
+
+    print(f"\n{'='*70}")
+    print(f"Off-diagonal Analysis: {title_prefix} Pauli component τ_{pauli_index}")
+    print(f"Timestamp: {timestamp}, Job: {job_index}")
+    print(f"{'='*70}")
+    print(f"Real part: min={np.min(g_real):.6e}, max={np.max(g_real):.6e}")
+    print(f"Imag part: min={np.min(g_imag):.6e}, max={np.max(g_imag):.6e}")
+    print(f"Edge values: g(τ_min)={np.abs(g_tau[0]):.6e}, g(τ_max)={np.abs(g_tau[-1]):.6e}")
+    print(f"Center value: g(0)={np.abs(g_tau[N_t//2]):.6e}")
+
+    symmetry_test = None
+    if check_symmetry:
+        center = N_t // 2
+        g_forward = g_tau[center:]
+        g_backward = g_tau[:center+1]
+        g_backward_flipped = np.flip(g_backward)
+
+        min_len = min(len(g_forward), len(g_backward_flipped))
+
+        even_part = (g_forward[:min_len] + g_backward_flipped[:min_len]) / 2.0
+        odd_part = (g_forward[:min_len] - g_backward_flipped[:min_len]) / 2.0
+
+        even_norm = np.linalg.norm(even_part)
+        odd_norm = np.linalg.norm(odd_part)
+        total_norm = np.linalg.norm(g_forward[:min_len])
+
+        even_frac = even_norm / total_norm if total_norm > 0 else 0
+        odd_frac = odd_norm / total_norm if total_norm > 0 else 0
+
+        print(f"\nParity analysis:")
+        print(f"  Even component norm: {even_norm:.6e} ({even_frac:.2%} of total)")
+        print(f"  Odd component norm:  {odd_norm:.6e} ({odd_frac:.2%} of total)")
+        print(f"  Dominant parity: {'EVEN' if even_norm > odd_norm else 'ODD'}")
+
+        test_points = [1, 10, 50, 100, 200, 500]
+        print(f"\nSymmetry check at specific points:")
+        for offset in test_points:
+            if center - offset >= 0 and center + offset < N_t:
+                left = g_tau[center - offset]
+                right = g_tau[center + offset]
+                diff = np.abs(left - right)
+                symm = np.abs(left + right)
+                print(f"  τ={offset*dt:7.3f}: |g(-τ) - g(+τ)| = {diff:.6e}, |g(-τ) + g(+τ)| = {symm:.6e}")
+
+        symmetry_test = {
+            'even_norm': even_norm,
+            'odd_norm': odd_norm,
+            'even_fraction': even_frac,
+            'odd_fraction': odd_frac,
+            'even_part': even_part,
+            'odd_part': odd_part
+        }
+
+    fig.suptitle(f'Off-diagonal: {title_prefix}$(t+\\tau, t-\\tau)$ component $\\tau_{pauli_index}$',
+                 fontsize=14, y=1.00)
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(save_dir, exist_ok=True)
+        filename = f'offdiag_{green_function_type}_tau{pauli_index}_{timestamp}_job{job_index}.png'
+        extended_savefig(os.path.join(save_dir, filename), dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+    result = {
+        'tau_grid': tau_grid,
+        'g_tau': g_tau,
+    }
+    if symmetry_test is not None:
+        result['symmetry_test'] = symmetry_test
+
+    return result

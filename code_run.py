@@ -138,7 +138,15 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         dt = initial_state.dt
         # Determine if we need to track occupations
         track_occupations = (track_every_n is not None)
+
+        # Save occupation_function before recreating StateObject
+        saved_occupation = initial_state.occupation_function
+
         initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, grid_params=grid_parameters)
+
+        # Restore occupation_function after StateObject creation
+        if saved_occupation is not None:
+            initial_state.occupation_function = saved_occupation
 
     else:
         #* generating initial state using equilibrium code

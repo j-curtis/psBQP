@@ -128,6 +128,7 @@ class StateObject:
         # Term 2: τ₃ g'^K(t,t) τ₃ g'^A(t,t)
         term2 = tau3 * gk_diag * tau3 * ga_diag
 
+        #? Do these term contribute in the end? g_3 around zero?
         # Term 3: 2τ₃ g'^R(t,t) F(t,t)
         term3 = 2.0 * tau3 * gr_diag * F_diag
 
@@ -140,7 +141,7 @@ class StateObject:
         # Take trace over Nambu indices (pauli_index=0 gives identity component)
         kernel_trace = kernel_matrix.trace(pauli_index=0)
 
-        return kernel_trace * (-1j * np.pi/4)
+        return kernel_trace * (-1j * np.pi/4)/2.0 # diving by 2 because its the midpoint contribution
 
     def get_current_at_time_t(self, A_history, thermal_dist, thermal_integral, time_index=-1,
                                thermal_sum_left=None, thermal_sum_right=None, include_derivative = True):
@@ -523,10 +524,6 @@ class StateObject:
         Extracts anti-diagonal elements in time-time plane and Fourier transforms:
         ĝ(ε) = ∫ dτ e^{i2ετ} ĝ(t=N_t-1-i, t'=i)
 
-        Applies exponential damping e^{-η|τ|} to suppress Gibbs oscillations and
-        account for finite quasiparticle lifetime (inelastic scattering).
-
-        Preserves full Nambu matrix structure (2x2).
 
         Args:
             green_function_type: 'gr', 'gk', or 'f' (occupation function)
@@ -564,29 +561,28 @@ class StateObject:
         # Reverse along time axis so τ increases with index (required for FFT convention)
         # After reversal: τ from -(N_t-1)·dt/2 to +(N_t-1)·dt/2 with spacing dt
         g_offdiag_reversed = np.flip(g_offdiag, axis=2)
-
-        # Apply exponential damping e^{-η|τ|} to suppress Gibbs oscillations
-        # This is physically motivated: accounts for finite quasiparticle lifetime
-
-        g_offdiag_regularized = g_offdiag_reversed
+        # Subtract asymptotic boundary values to remove wrap-around discontinuity
+        #g_asymptotic = (g_offdiag_reversed[:, :, :1] + g_offdiag_reversed[:, :, -1:]) / 2.0
+        g_offdiag_regularized = g_offdiag_reversed #- g_asymptotic
 
         # Standard Fourier transform: G(ω) = ∫ dτ e^{iω·τ} F(τ) with τ spacing = dt
         # Then g(ε,t) = G(2ε), so ε = ω/2
-        g_fft = np.fft.ifft(g_offdiag_regularized, axis=2) * N_t  # Remove 1/N normalization
+        # ifftshift centers τ=0 at index 0 (FFT convention) before transforming
+        g_fft = np.fft.ifft(np.fft.ifftshift(g_offdiag_regularized, axes=2), axis=2) * N_t
         g_fft *= self.dt  # Multiply by dτ = dt for integral approximation
 
         # Shift to center zero frequency
         g_energy_data = np.fft.fftshift(g_fft, axes=2)
 
         # Create NambuKeldyshTensor (keep all frequency points)
-        g_energy = NambuKeldyshTensor(g_energy_data)[::2] * 2
+        g_energy = NambuKeldyshTensor(g_energy_data) * 2 #[::2] 
 
         # Construct energy grid: standard FFT gives ω, then ε = ω/2
         # Use d=dt (spacing in τ), then divide by 2 for ε
         freq = np.fft.fftfreq(N_t, d=self.dt)
         omega_grid = 2 * np.pi * freq  # ω = 2πf
-        energy_grid = omega_grid  # ε/2 (from g(ε,t) = G(2ε))
-        energy_grid = np.fft.fftshift(energy_grid)[::2]/2
+        energy_grid = omega_grid/2  # ε/2 (from g(ε,t) = G(2ε))
+        energy_grid = np.fft.fftshift(energy_grid)#[::2]
 
         return { 'energy_grid': energy_grid, 'g_energy': g_energy}
 
@@ -607,6 +603,7 @@ class StateObject:
         Updates:
             self.occupation_function[time_index, :] with computed n(t,t') row
         """
+
         #* takes advantage of the fact that gr(t,t) and ga(t',t') have to be non tau_3 or tau_0 which is the jump condition
         time_index = -1
         N_t = self.gr.data.shape[2]
@@ -621,13 +618,13 @@ class StateObject:
         f_thermal_integral_row = f_thermal_integral[t_idx:t_idx+1, :]
         t_pos_precom = t_idx % thermal_sum_left.shape[2]
         thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
-        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=t_idx, precomputed_sum=thermal_sum_right) + ga.precise_convolution_right(f_thermal_row, f_thermal_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
-        rhs_vector += - gr_row[:,:-1] @ self.occupation_function[:-1,:]
+        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right) + ga.precise_convolution_right(f_thermal_row, f_thermal_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
+        rhs_vector += - gr_row[:,:-1] @ self.occupation_function[:-1,:] * self.dt
         solution_tensor = self.gr[-1,-1:] * 0
         for time in range(N_t):
             source_term = rhs_vector[-1,time] 
             if time != 0:
-                source_term += solution_tensor[1:] @ ga[:time,time]
+                source_term += solution_tensor[1:] @ ga[:time,time] * self.dt
             
             solution_tensor.append_right([source_term.trace(3) / 4.0, 0.0, 0.0, source_term.trace(0) / 4.0])
         

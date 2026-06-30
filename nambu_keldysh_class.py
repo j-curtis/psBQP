@@ -272,8 +272,6 @@ class NambuKeldyshTensor:
         N_t = other_integral.data.shape[2]
         positive_index = other_index % N_t
         positive_index_precomp = other_index % precomputed_sum.data.shape[2]
-        print(other_index)
-        print(positive_index_precomp)
         precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
         other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
         

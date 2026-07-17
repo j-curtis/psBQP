@@ -1438,6 +1438,7 @@ class UsadelKeldyshEvolution:
 
         # Extract diagonal element from unified result
         gk_diagonal_new = gk_new[-1]
+        #! overrides diagonal gk update to test if regularization is wrong somehow?
         #gk_diagonal_new = state.gk[-1,-1]
         return gk_new[:-1], gk_diagonal_new
 

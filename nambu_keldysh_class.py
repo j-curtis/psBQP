@@ -261,8 +261,8 @@ class NambuKeldyshTensor:
         # pauli_channel=0 automatically creates the (2,2) identity structure
         ones_data = np.ones((1, other.data.shape[-2]), dtype=complex)
         ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
-
-
+        
+ 
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
         first_endpoint_std = self[:,0:1] * other[0:1,:]
         last_endpoint_std = self[:,-1:] * other[-1:,:]
@@ -275,12 +275,18 @@ class NambuKeldyshTensor:
         precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
         other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
         
-        result_fact = self[-1:,:] * precomputed_sum_row
+        #* changed to be the last element
+        result_fact = self[-1:,-1:] * precomputed_sum_row
 
         # Analytic term (using integral)
-        result_anal = self[-1:,:] * other_integral_for_reg
+        result_anal = self[-1:,-1:] * other_integral_for_reg
+        test_filter = np.zeros((N_t), dtype=complex)
+        test_filter[-1] = 1.0
+        nambu_filter = NambuKeldyshTensor(test_filter, pauli_channel=0)
 
-        return (result_std + (- result_fact + result_anal) ) 
+        #* this could be causing a precision error that we are seeing with delta_t since they missmatch
+
+        return (result_std + (- result_fact + result_anal)) 
 
 
     def precise_convolution_right(self, other, other_integral, dt, self_index=-1, precomputed_sum=None):
@@ -345,6 +351,12 @@ class NambuKeldyshTensor:
         N_t = other.data.shape[-1]
         N_tprime = self.data.shape[-1]
 
+        test_filter = np.zeros((N_t), dtype=complex)
+        test_filter[-1] = 1.0
+        nambu_filter = NambuKeldyshTensor(test_filter, pauli_channel=0)
+
+        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
+        #* changed to be the last element
 
         is_other_row = (other.data.shape[2] == 1)
 
@@ -355,8 +367,10 @@ class NambuKeldyshTensor:
         result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
         self_for_reg = self[:, positive_index].transpose().complete_transpose() #self.diagonal_time()
+        self_for_reg = self.diagonal_time()
         positive_index_precomp = self_index % precomputed_sum.data.shape[2]
-
+        
+        #* changed to be the last element
         precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
         result_fact = precomputed_sum_row * self_for_reg
        

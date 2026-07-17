@@ -2714,8 +2714,8 @@ def extract_monochromatic_conductivity(timestamp, threshold=1e-6, save_plot=Fals
         'sigma_im': sigma_im_array
     }
 
-def extract_transmitivity(timestamp, save_plot=False, save_dir=None,
-                         ext_data_x=None, ext_data_y=None):
+def extract_transmitivity(timestamp_list, save_plot=False, save_dir=None,
+                         ext_data_x=None, ext_data_y=None, job_index_list = None):
     """
     Plot transmitivity analysis for current-driven simulations.
 
@@ -2734,68 +2734,62 @@ def extract_transmitivity(timestamp, save_plot=False, save_dir=None,
         ext_data_x: External data x-values (I_in_max values)
         ext_data_y: External data y-values (J_max values)
     """
-    # Read job information
-    lines = io.read_contents_readable_file(timestamp)
-    job_no = io.recover_job_no(lines)
-
-    # Arrays to store results
-    I_in_max_list = []
-    J_max_list = []
-    transmitivity_list = []
-
-    # Loop over all jobs
-    for job_idx in range(job_no):
-        # Load data
-        data = load_simulation_data(timestamp, job_idx)
-
-        # Extract currents
-        current_norm = np.real(data['currents'])
-        input_pulse_raw = data['save_data'].get('input_pulse', None)
-
-        if input_pulse_raw is None:
-            print(f"Warning: Job {job_idx} has no input pulse data. Skipping.")
-            continue
-
-        input_pulse = np.real(input_pulse_raw)
-
-        # Compute maxima
-        I_in_max = np.max(np.abs(input_pulse))
-        J_max = np.max(np.abs(current_norm))
-        transmitivity = J_max / I_in_max if I_in_max != 0 else 0
-
-        # Store results
-        I_in_max_list.append(I_in_max)
-        J_max_list.append(J_max)
-        transmitivity_list.append(transmitivity)
-
-    # Convert to arrays
-    I_in_max_array = np.array(I_in_max_list)
-    J_max_array = np.array(J_max_list)
-    transmitivity_array = np.array(transmitivity_list)
 
     # Create figure with 2 subplots
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     ax_trans, ax_jmax = axes
 
-    # Panel a: Transmitivity vs I_in_max
-    ax_trans.plot(I_in_max_array, transmitivity_array, 'o-',
-                  linewidth=2.5, markersize=8, label='Simulation', alpha=0.8)
+    # Read job information
+    for timestamp in timestamp_list:
+        lines = io.read_contents_readable_file(timestamp)
+        job_no = io.recover_job_no(lines)
 
-    # Plot external data on panel a
-    if ext_data_x is not None and ext_data_y is not None:
-        ext_trans = ext_data_x / ext_data_y
-        ax_trans.plot(ext_trans, ext_data_y, 's--',
-                     linewidth=2, markersize=6, label='External data', alpha=0.8)
+        # Arrays to store results
+        I_in_max_list = []
+        J_max_list = []
+        transmitivity_list = []
 
-    # Panel b: Transmitivity vs J_max
-    ax_jmax.plot(J_max_array, transmitivity_array, 'o-',
-                linewidth=2.5, markersize=8, label='Simulation', alpha=0.8)
+        job_indices = range(job_no) if job_index_list is None else job_index_list
 
-    # Plot external data on panel b
-    if ext_data_x is not None and ext_data_y is not None:
-        ext_trans = ext_data_x / ext_data_y
-        ax_jmax.plot(ext_data_x, ext_data_y, 's--',
-                    linewidth=2, markersize=6, label='External data', alpha=0.8)
+        # Loop over all jobs
+        for job_idx in job_indices:
+            # Load data
+            data = load_simulation_data(timestamp, job_idx)
+
+            # Extract currents
+            current_norm = np.real(data['currents'])
+            input_pulse_raw = data['save_data'].get('input_pulse', None)
+
+            if input_pulse_raw is None:
+                print(f"Warning: Job {job_idx} has no input pulse data. Skipping.")
+                continue
+
+            input_pulse = np.real(input_pulse_raw)
+
+            # Compute maxima
+            I_in_max = np.max(np.abs(input_pulse))
+            J_max = np.max(np.abs(current_norm))
+            transmitivity = J_max / I_in_max if I_in_max != 0 else 0
+
+            # Store results
+            I_in_max_list.append(I_in_max)
+            J_max_list.append(J_max)
+            transmitivity_list.append(transmitivity)
+
+        # Convert to arrays
+        I_in_max_array = np.array(I_in_max_list)
+        J_max_array = np.array(J_max_list)
+        transmitivity_array = np.array(transmitivity_list)
+
+
+        # Panel a: Transmitivity vs I_in_max
+        ax_trans.plot(I_in_max_array, transmitivity_array, 'o-',
+                    linewidth=2.5, markersize=8, label='Simulation', alpha=0.8)
+
+        # Panel b: Transmitivity vs J_max
+        ax_jmax.plot(J_max_array, transmitivity_array, 'o-',
+                    linewidth=2.5, markersize=8, label='Simulation', alpha=0.8)
+
 
     # Configure panel a
     ax_trans.set_xlabel(r'$I_{\mathrm{in,max}}$', fontsize=13)
@@ -2813,6 +2807,17 @@ def extract_transmitivity(timestamp, save_plot=False, save_dir=None,
 
     fig.tight_layout()
 
+    # Plot external data on panel a
+    if ext_data_x is not None and ext_data_y is not None:
+        ext_trans = ext_data_x / ext_data_y
+        ax_trans.plot(ext_trans, ext_data_y, 's--',
+                    linewidth=2, markersize=6, label='External data', alpha=0.8)
+
+    # Plot external data on panel b
+    if ext_data_x is not None and ext_data_y is not None:
+        ext_trans = ext_data_x / ext_data_y
+        ax_jmax.plot(ext_data_x, ext_data_y, 's--',
+                    linewidth=2, markersize=6, label='External data', alpha=0.8)
     if save_plot:
         # Use Figures folder in project directory if no save_dir specified
         if save_dir is None:
@@ -5328,3 +5333,217 @@ def plot_offdiagonal_matrix_element(timestamp, job_index, green_function_type='g
         result['symmetry_test'] = symmetry_test
 
     return result
+
+
+def get_current_kernel(timestamp, job_indices=None, running_machine='laptop',
+                       save_plot=False, save_dir='analysis_plots', yscale='linear'):
+    """
+    Plot current kernel K(t=-1, t') versus t' for different parameter values.
+
+    Extracts the kernel from the current formula J(t) = ∫ K(t,t') A(t') dt'
+    at the final time (t=-1) and plots Im[Tr[K(t=-1, t')]] vs t' for
+    comparison across jobs with different parameters.
+
+    The kernel has four terms:
+        K(t,t') = τ₃ g^R(t,t') τ₃ g^K(t',t)
+                + τ₃ g^K(t,t') τ₃ g^A(t',t)
+                + 2τ₃ g^R(t,t') F(t',t)
+                + 2F(t,t') τ₃ g^A(t',t)
+
+    Args:
+        timestamp: Simulation timestamp folder name
+        job_indices: List of job indices to compare (default: all jobs)
+        running_machine: 'laptop' or 'cluster_euler' (default 'laptop')
+        save_plot: Whether to save the plot (default False)
+        save_dir: Directory to save plots (default 'analysis_plots')
+        yscale: Y-axis scale, 'linear' or 'log' (default 'linear').
+                If 'log', plots |K(t,t')| instead of K(t,t')
+
+    Returns:
+        dict: {
+            'fig': matplotlib figure object,
+            'kernel_data': list of dicts with {
+                'job_index': int,
+                't_prime': array of t' values,
+                'kernel': array of Im[Tr[K(t=-1, t')]] values,
+                'parameter_label': str,
+                'parameter_value': float or int
+            }
+        }
+    """
+    from nambu_keldysh_class import NambuKeldyshTensor
+    import matplotlib.cm as cm
+
+    # Step 1: Load all jobs and identify parameters
+    if job_indices is None:
+        # Load all jobs in timestamp
+        lines = io.read_contents_readable_file(timestamp)
+        n_jobs = io.recover_job_no(lines)
+        job_indices = list(range(n_jobs))
+
+    # Auto-detect varying parameters
+    sweep_info = identify_sweep_parameters(
+        timestamp, running_machine=running_machine, max_params=3, verbose=False
+    )
+    varying_params = sweep_info['varying_parameters']
+
+    # Step 2: Compute kernel for each job
+    kernel_data = []
+
+    for job_idx in job_indices:
+        # Load simulation data
+        input_kwargs, save_data = load_job_data(timestamp, job_idx, running_machine)
+
+        # Check if final_state exists
+        if 'final_state' not in save_data or save_data['final_state'] is None:
+            continue
+
+        state = save_data['final_state']
+
+        # Extract grid parameters
+        N_t = state.gr.data.shape[2]
+        dt = state.dt
+        T_max = state.T_max
+        t_grid = np.linspace(-T_max, 0, N_t)
+
+        # Get thermal distributions
+        temperature = input_kwargs['system_parameters']['temperature']
+
+        # Get thermal distribution from evolution
+        from usadel_keldysh_evolution import UsadelKeldyshEvolution
+
+        grid_parameters = input_kwargs.get('grid_parameters', {})
+        system_parameters = input_kwargs['system_parameters']
+
+        evol = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+        evol.get_thermal_occupation(temperature)
+        thermal_dist = evol.thermal_dist
+
+        # Check if we have full time-time structure or just last row
+        gr_shape = state.gr.data.shape
+
+        # Create tau_3 Pauli matrix
+        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
+
+        if len(gr_shape) == 3:
+            # Only last row saved: (2, 2, N_t)
+            # state.gr already contains g^R(t=-1, t') with shape (2,2,N_t)
+            gr_row = state.gr
+            gk_row = state.gk
+
+            # For gk_col, we need g^K(t', t=-1) which is the involution
+            gk_col = state.gk.involution()
+
+            # For ga_col, we need g^A(t', t=-1) = -[g^R(t=-1, t')]†
+            ga_col = -state.gr.involution()
+
+            # Thermal distributions
+            F_col = thermal_dist[:, -1]
+            F_row = thermal_dist[-1, :]
+
+        elif len(gr_shape) == 4:
+            # Full time-time structure: (2, 2, N_t, N_t)
+            time_index = -1
+            t_idx = N_t + time_index
+
+            ga = state._r2a()
+            gr_row = state.gr[t_idx, :]
+            gk_row = state.gk[t_idx, :]
+            gk_col = state.gk.involution()[t_idx, :]
+            ga_col = ga[:, t_idx]
+            F_col = thermal_dist[:, t_idx]
+            F_row = thermal_dist[t_idx, :]
+        else:
+            raise ValueError(f"Unexpected Green's function shape: {gr_shape}")
+
+        # Compute 4 kernel terms for all t' at once
+        term1 = tau3 * gr_row * tau3 * gk_col
+        term2 = tau3 * gk_row * tau3 * ga_col
+        term3 = 2.0 * tau3 * gr_row * F_col
+        term4 = 2.0 * F_row * tau3 * ga_col
+
+        # Sum all terms
+        kernel_matrix = term1 + term2 + term3 + term4
+
+        # Take trace for all t' at once and extract imaginary part
+        kernel_vs_tprime = kernel_matrix.trace(pauli_index=0)
+        kernel_imag = np.real(-1j * np.pi/4 * np.array(kernel_vs_tprime))
+
+        # Create parameter label
+        if varying_params:
+            param_name, param_values = varying_params[0]
+            if job_idx < len(param_values):
+                param_value = param_values[job_idx]
+                label = f"{param_name.split('.')[-1]} = {param_value:.4g}"
+            else:
+                param_value = job_idx
+                label = f"Job {job_idx}"
+        else:
+            param_value = job_idx
+            label = f"Job {job_idx}"
+
+        # Store data
+        kernel_data.append({
+            'job_index': job_idx,
+            't_prime': t_grid,
+            'kernel': kernel_imag,
+            'parameter_label': label,
+            'parameter_value': param_value
+        })
+
+    # Step 3: Create plot
+    # Sort by parameter value for consistent ordering
+    kernel_data.sort(key=lambda x: x['parameter_value'])
+
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+    # Color map
+    colors = cm.get_cmap('viridis', len(kernel_data))
+
+    # Plot each job
+    for idx, data in enumerate(kernel_data):
+        t_prime = data['t_prime']
+        kernel = data['kernel']
+        label = data['parameter_label']
+
+        # Use absolute value for log scale
+        if yscale == 'log':
+            plot_data = np.abs(kernel)
+        else:
+            plot_data = kernel
+
+        ax.plot(t_prime, plot_data, linewidth=2.5, label=label,
+                color=colors(idx), alpha=0.8)
+
+    # Labels and formatting
+    ax.set_xlabel(r'$t^\prime$', fontsize=14)
+
+    # Adjust y-label based on scale
+    if yscale == 'log':
+        ax.set_ylabel(r'$|K(t,t^\prime)|$', fontsize=14)
+    else:
+        ax.set_ylabel(r'$K(t,t^\prime)$', fontsize=14)
+
+    ax.set_title(f'Current Kernel vs Time\nTimestamp: {timestamp}', fontsize=16)
+    ax.set_xlim(-10, 0.02)
+    ax.set_yscale(yscale)
+    ax.legend(loc='best', fontsize=12)
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save if requested
+    if save_plot:
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        filename = f'current_kernel_{timestamp}.pdf'
+        filepath = os.path.join(save_dir, filename)
+        fig.savefig(filepath, bbox_inches='tight', dpi=300)
+
+    plt.show()
+
+    return {
+        'fig': fig,
+        'kernel_data': kernel_data
+    }

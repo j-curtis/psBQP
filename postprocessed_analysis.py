@@ -15,6 +15,13 @@ from demler_tools.data_analysis.image_file_tools import extended_savefig
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Matplotlib configuration for all plots - use LaTeX article style fonts
+plt.rcParams['text.usetex'] = True
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Computer Modern Roman']
+plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath} \usepackage{amssymb}'
+plt.rcParams['font.size'] = 20
+
 
 def load_postprocessed_data(timestamp, directory_job_index=0, running_machine='laptop'):
     """
@@ -51,7 +58,8 @@ def load_postprocessed_data(timestamp, directory_job_index=0, running_machine='l
 
 
 def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=None, plot_pulses=False,
-                               save_plot=False, save_dir=None, running_machine='laptop'):
+                               save_plot=False, save_dir=None, running_machine='laptop', colormap='Blues',
+                               xlim_pulses=None):
     """
     Plot transmitivity analysis from postprocessed data.
 
@@ -65,6 +73,8 @@ def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=Non
         save_plot: Whether to save plots (default False)
         save_dir: Directory for plots (default None uses Figures/ in project folder)
         running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        colormap: Colormap name for line colors (default 'Blues')
+        xlim_pulses: Tuple (xmin, xmax) for x-axis limits on pulse plots (default None = auto)
 
     Returns:
         dict or list: Loaded postprocessed data (dict if single index, list if multiple)
@@ -79,8 +89,9 @@ def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=Non
     fig_trans, axes = plt.subplots(1, 2, figsize=(12, 5))
     ax_trans, ax_jmax = axes
 
-    # Color cycle for different directory job indices
-    colors = plt.cm.tab10(np.linspace(0, 1, len(directory_job_indices)))
+    # Color cycle for different directory job indices using continuous colormap
+    cmap = plt.get_cmap(colormap)
+    colors = cmap(np.linspace(0.3, 0.9, len(directory_job_indices)))
 
     # Store loaded data
     loaded_data_list = []
@@ -108,37 +119,33 @@ def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=Non
 
         # Build legend label with available parameters (using LaTeX formatting)
         label_parts = []
-        if len(directory_job_indices) > 1:
-            label_parts.append(f'Job {dir_job_idx}')
         if temperature is not None:
-            label_parts.append(f'$T={temperature:.3g}$')
+            label_parts.append(r'$T/T_c=' + str(np.round(temperature, 3)) + r'$')
         if eta is not None:
-            label_parts.append(f'$\\eta={eta:.3g}$')
+            label_parts.append(r'$ \eta/T_c=' + str(np.round(eta, 3)) + r'$')
         if fwhm is not None:
-            label_parts.append(f'FWHM$={fwhm:.3g}$')
+            label_parts.append(r'$\mathrm{FWHM}\cdot T_c=' + str(np.round(fwhm, 3)) + r'$')
         legend_label = ', '.join(label_parts)
 
         # Panel a: Transmitivity vs I_in_max
-        ax_trans.plot(I_in_max_array, transmitivity_array, 'o-',
-                     color=color, linewidth=2.5, markersize=8, label=legend_label, alpha=0.8)
+        ax_trans.plot(I_in_max_array, transmitivity_array, '-',
+                     color=color, linewidth=3, label=legend_label, alpha=0.8)
 
         # Panel b: Transmitivity vs I_T_max
-        ax_jmax.plot(J_max_array, transmitivity_array, 'o-',
-                    color=color, linewidth=2.5, markersize=8, label=legend_label, alpha=0.8)
+        ax_jmax.plot(J_max_array, transmitivity_array, '-',
+                    color=color, linewidth=3, label=legend_label, alpha=0.8)
 
     # Configure panel a
-    ax_trans.set_xlabel(r'$I_{\mathrm{in,max}}$', fontsize=13)
-    ax_trans.set_ylabel(r'Transmitivity ($I_{\mathrm{T,max}}/I_{\mathrm{in,max}}$)', fontsize=13)
-    ax_trans.set_title(r'(a) Transmitivity vs Input Current', fontsize=14)
-    ax_trans.legend(fontsize=10)
-    ax_trans.grid(True, alpha=0.3)
+    ax_trans.set_xlabel(r'$I_{in,\mathrm{max}}$', fontsize=21)
+    ax_trans.set_ylabel(r'$T\,(I_{T,\mathrm{max}}/I_{in,\mathrm{max}})$', fontsize=21)
+    ax_trans.set_title(r'Transmitivity vs Input Current', fontsize=23)
+    ax_trans.legend(fontsize=12)
 
     # Configure panel b
-    ax_jmax.set_xlabel(r'$I_{\mathrm{T,max}}$', fontsize=13)
-    ax_jmax.set_ylabel(r'Transmitivity ($I_{\mathrm{T,max}}/I_{\mathrm{in,max}}$)', fontsize=13)
-    ax_jmax.set_title(r'(b) Transmitivity vs Transmitted Current', fontsize=14)
-    ax_jmax.legend(fontsize=10)
-    ax_jmax.grid(True, alpha=0.3)
+    ax_jmax.set_xlabel(r'$I_{T,\mathrm{max}}$', fontsize=21)
+    ax_jmax.set_ylabel(r'$T\,(I_{T,\mathrm{max}}/I_{in,\mathrm{max}})$', fontsize=21)
+    ax_jmax.set_title(r'Transmitivity vs Transmitted Current', fontsize=23)
+    ax_jmax.legend(fontsize=12)
 
     fig_trans.tight_layout()
 
@@ -152,7 +159,7 @@ def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=Non
     if save_plot:
         # Format job indices for filename
         jobs_str = '_'.join(map(str, directory_job_indices))
-        save_path = os.path.join(save_dir, f'transmitivity_analysis_{timestamp}_jobs{jobs_str}.png')
+        save_path = os.path.join(save_dir, f'transmitivity_analysis_{timestamp}_jobs{jobs_str}.svg')
         extended_savefig(fig_trans, save_path, timestamp)
 
     # Create pulse traces plot if requested (one plot per directory job index)
@@ -177,15 +184,20 @@ def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=Non
 
             # Create 2x2 plot
             fig_pulses, axes = plt.subplots(2, 2, figsize=(14, 10))
-            ax_gap, ax_vpot = axes[0]
-            ax_current, ax_input = axes[1]
+            ax_input, ax_vpot = axes[0]
+            ax_gap, ax_current = axes[1]
 
-            # Color cycle for different jobs
-            colors_jobs = plt.cm.tab10(np.linspace(0, 1, len(plot_job_indices)))
+            # Color cycle for different jobs using continuous colormap
+            cmap = plt.get_cmap(colormap)
+            colors_jobs = cmap(np.linspace(0.3, 0.9, len(plot_job_indices)))
+
+            # Get critical current and temperature for labels/normalization
+            system_params = data['system_parameters'][0]
+            I_c = system_params.get('critical_current', 1.0)
+            T_c = system_params.get('critical_temperature', 1.0)
 
             for idx, job_idx in enumerate(plot_job_indices):
                 color = colors_jobs[idx]
-                label = f'Job {job_idx}'
 
                 # Extract data for this job
                 times_job = times[job_idx]
@@ -194,56 +206,64 @@ def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=Non
                 vpot_job = vector_potential_evolution[job_idx]
                 input_job = incoming_current_pulses[job_idx]
 
-                # Plot gap vs time
-                ax_gap.plot(times_job, gaps_job, '-', color=color, linewidth=2, label=label, alpha=0.8)
+                # Normalize time by T_c
+                times_norm = times_job * T_c
 
-                # Plot vector potential vs time
-                ax_vpot.plot(times_job, vpot_job, '-', color=color, linewidth=2, label=label, alpha=0.8)
+                # Compute max incoming current for label
+                I_in_max = np.max(np.abs(input_job))
+                label = r'$I_{in}/I_c=' + str(np.round(I_in_max/I_c, 3)) + r'$'
 
-                # Plot current vs time
-                ax_current.plot(times_job, current_job, '-', color=color, linewidth=2, label=label, alpha=0.8)
+                # Plot gap vs time (no label)
+                ax_gap.plot(times_norm, gaps_job, '-', color=color, linewidth=3, alpha=0.8)
 
-                # Plot incoming current vs time
-                ax_input.plot(times_job, input_job, '-', color=color, linewidth=2, label=label, alpha=0.8)
+                # Plot vector potential vs time (no label)
+                ax_vpot.plot(times_norm, vpot_job, '-', color=color, linewidth=3, alpha=0.8)
+
+                # Plot current vs time (no label)
+                ax_current.plot(times_norm, current_job, '-', color=color, linewidth=3, alpha=0.8)
+
+                # Plot incoming current vs time (with label)
+                ax_input.plot(times_norm, input_job, '-', color=color, linewidth=3, label=label, alpha=0.8)
 
             # Configure gap plot
-            ax_gap.set_xlabel(r'Time', fontsize=12)
-            ax_gap.set_ylabel(r'$|\Delta(t)|$', fontsize=12)
-            ax_gap.set_title(r'(a) Gap Evolution', fontsize=13)
-            ax_gap.legend(fontsize=9)
-            ax_gap.grid(True, alpha=0.3)
+            ax_gap.set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            ax_gap.set_ylabel(r'$|\Delta(t)|$', fontsize=21)
+            ax_gap.set_title(r'Gap Evolution', fontsize=23)
+            if xlim_pulses is not None:
+                ax_gap.set_xlim(xlim_pulses)
 
             # Configure vector potential plot
-            ax_vpot.set_xlabel(r'Time', fontsize=12)
-            ax_vpot.set_ylabel(r'$A(t)$', fontsize=12)
-            ax_vpot.set_title(r'(b) Vector Potential', fontsize=13)
-            ax_vpot.legend(fontsize=9)
-            ax_vpot.grid(True, alpha=0.3)
+            ax_vpot.set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            ax_vpot.set_ylabel(r'$A(t)$', fontsize=21)
+            ax_vpot.set_title(r'Vector Potential', fontsize=23)
+            if xlim_pulses is not None:
+                ax_vpot.set_xlim(xlim_pulses)
 
             # Configure current plot
-            ax_current.set_xlabel(r'Time', fontsize=12)
-            ax_current.set_ylabel(r'$I_{\mathrm{T}}(t)$', fontsize=12)
-            ax_current.set_title(r'(c) Transmitted Current', fontsize=13)
-            ax_current.legend(fontsize=9)
-            ax_current.grid(True, alpha=0.3)
+            ax_current.set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            ax_current.set_ylabel(r'$I_{T}(t)$', fontsize=21)
+            ax_current.set_title(r'Transmitted Current', fontsize=23)
+            if xlim_pulses is not None:
+                ax_current.set_xlim(xlim_pulses)
 
             # Configure incoming current plot
-            ax_input.set_xlabel(r'Time', fontsize=12)
-            ax_input.set_ylabel(r'$I_{\mathrm{in}}(t)$', fontsize=12)
-            ax_input.set_title(r'(d) Incoming Current Pulse', fontsize=13)
-            ax_input.legend(fontsize=9)
-            ax_input.grid(True, alpha=0.3)
+            ax_input.set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            ax_input.set_ylabel(r'$I_{in}(t)$', fontsize=21)
+            ax_input.set_title(r'Incoming Current Pulse', fontsize=23)
+            ax_input.legend(fontsize=13)
+            if xlim_pulses is not None:
+                ax_input.set_xlim(xlim_pulses)
 
             # Add overall title if multiple directory jobs
             if len(directory_job_indices) > 1:
-                fig_pulses.suptitle(f'Directory Job {dir_job_idx}', fontsize=15, y=0.995)
+                fig_pulses.suptitle(f'Directory Job {dir_job_idx}', fontsize=23, y=0.995)
 
             fig_pulses.tight_layout()
 
             if save_plot:
                 # Format plotted job indices for filename
                 pulse_jobs_str = '_'.join(map(str, plot_job_indices))
-                save_path = os.path.join(save_dir, f'pulse_traces_{timestamp}_pulses_{pulse_jobs_str}_dirjob{dir_job_idx}.png')
+                save_path = os.path.join(save_dir, f'pulse_traces_{timestamp}_pulses_{pulse_jobs_str}_dirjob{dir_job_idx}.svg')
                 extended_savefig(fig_pulses, save_path, timestamp)
 
     plt.show()
@@ -253,3 +273,1090 @@ def plot_transmitivity_results(timestamp, directory_job_index=0, job_indices=Non
         return loaded_data_list[0]
     else:
         return loaded_data_list
+
+
+def plot_spectral_signatures(timestamp, directory_job_index=0, plot_jobs=None,
+                             save_plot=False, save_dir=None, running_machine='laptop', colormap='Blues',
+                             xlim=None, ylim=None, plot_FT=False):
+    """
+    Plot spectral analysis from postprocessed data.
+
+    Creates a 3x3 plot (if FFT data available or plot_FT=True) showing time and frequency domains,
+    or a 1x3 plot (if only time data available and plot_FT=False) showing time domain only.
+
+    Args:
+        timestamp: Postprocessed timestamp folder
+        directory_job_index: Index or list of indices of postprocessed result files to load (default 0)
+        plot_jobs: List of job indices to plot. If None, plots all jobs. If list, plots only specified.
+        save_plot: Whether to save plots (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        colormap: Colormap name for line colors (default 'Blues')
+        xlim: Tuple (xmin, xmax) for x-axis limits on frequency domain plots (default None = auto)
+        ylim: Tuple (ymin, ymax) for y-axis limits on all plots (default None = auto)
+        plot_FT: If True, compute FFT on the fly even if not pre-computed (default False)
+
+    Returns:
+        dict or list: Loaded postprocessed data (dict if single index, list if multiple)
+    """
+    # Normalize directory_job_index to list
+    if isinstance(directory_job_index, int):
+        directory_job_indices = [directory_job_index]
+    else:
+        directory_job_indices = directory_job_index
+
+    # Set up save directory if needed
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+    # Store loaded data
+    loaded_data_list = []
+
+    # Process each directory job index
+    for dir_idx, dir_job_idx in enumerate(directory_job_indices):
+        # Load postprocessed data
+        data = load_postprocessed_data(timestamp, dir_job_idx, running_machine)
+        loaded_data_list.append(data)
+
+        # Extract time series data
+        gap_evolution = data['gap_evolution']
+        current_evolution = data['current_evolution']
+        vector_potential_evolution = data['vector_potential_evolution']
+        times = data['times']
+
+        # Check if FFT data available
+        has_fft = 'gap_fft' in data
+
+        # Determine which jobs to plot
+        if plot_jobs is None:
+            plot_job_indices = range(len(gap_evolution))
+        else:
+            plot_job_indices = plot_jobs
+
+        # Get T_c for normalization
+        T_c = data['system_parameters'][0]['critical_temperature']
+
+        # Compute FFT on the fly if requested
+        if plot_FT:
+            gap_fft = []
+            current_fft = []
+            vpot_fft = []
+            omega = []
+
+            for job_idx in range(len(gap_evolution)):
+                times_job = times[job_idx]
+                gaps_job = gap_evolution[job_idx]
+                currents_job = current_evolution[job_idx]
+                vector_potentials_job = vector_potential_evolution[job_idx]
+
+                # Compute FFT following run_postprocessor.py conventions
+                dt = times_job[1] - times_job[0]
+                N_t = len(times_job)
+
+                # Frequency grid construction
+                freq = np.fft.fftfreq(N_t, d=dt)
+                omega_job = 2 * np.pi * freq
+                omega_shifted = np.fft.fftshift(omega_job)
+                omega.append(omega_shifted)
+
+                # Phase correction (center pulse at t=0)
+                t_center_idx = np.argmax(np.abs(vector_potentials_job))
+                t_center = times_job[t_center_idx]
+                phase_correction = np.exp(-1j * omega_job * t_center)
+
+                # Gap FFT (operates on gap deviation - DC removal)
+                gap_abs = np.abs(gaps_job)
+                gap_deviation = gap_abs - gap_abs[0]
+                gap_fft_raw = np.fft.fft(gap_deviation) * dt
+                gap_fft_corrected = gap_fft_raw * phase_correction
+                gap_fft_shifted = np.fft.fftshift(gap_fft_corrected)
+                gap_fft.append(gap_fft_shifted)
+
+                # Current FFT (use full time series - no DC removal)
+                current_fft_raw = np.fft.fft(np.real(currents_job)) * dt
+                current_fft_corrected = current_fft_raw * phase_correction
+                current_fft_shifted = np.fft.fftshift(current_fft_corrected)
+                current_fft.append(current_fft_shifted)
+
+                # Vector potential FFT (use full time series)
+                A_fft_raw = np.fft.fft(vector_potentials_job) * dt
+                A_fft_corrected = A_fft_raw * phase_correction
+                A_fft_shifted = np.fft.fftshift(A_fft_corrected)
+                vpot_fft.append(A_fft_shifted)
+
+            # Mark as having FFT data
+            has_fft = True
+        elif has_fft:
+            # Extract pre-computed FFT data
+            gap_fft = data['gap_fft']
+            current_fft = data['current_fft']
+            vpot_fft = data['vpot_fft']
+            omega = data['omega']
+
+        if has_fft:
+
+            # Extract incoming current pulses for labeling
+            incoming_current_pulses = data.get('incoming_current_pulses', None)
+            field_params = data.get('field_params', [{}])
+
+            # Create 3x3 plot
+            fig, axes = plt.subplots(3, 3, figsize=(18, 14))
+
+            # Color cycle for different jobs using continuous colormap
+            cmap = plt.get_cmap(colormap)
+            colors_jobs = cmap(np.linspace(0.3, 0.9, len(plot_job_indices)))
+
+            for idx, job_idx in enumerate(plot_job_indices):
+                color = colors_jobs[idx]
+
+                # Create label from amplitude and FWHM
+                label_parts = []
+                try:
+                    if incoming_current_pulses is not None and job_idx < len(incoming_current_pulses):
+                        I_in_max = np.max(np.abs(incoming_current_pulses[job_idx]))
+                        label_parts.append(r'I_{\mathrm{max}}=' + str(np.round(I_in_max, 2)))
+
+                    if field_params is not None and job_idx < len(field_params):
+                        fwhm = field_params[job_idx].get('FWHM', None)
+                        if fwhm is not None:
+                            label_parts.append(r'FWHM \cdot T_c=' + str(np.round(fwhm, 2)))
+
+                    if label_parts:
+                        label = '$' + ', '.join(label_parts) + '$'
+                    else:
+                        label = str(job_idx)
+                except (IndexError, KeyError, TypeError):
+                    label = str(job_idx)
+
+                # Extract data for this job
+                times_job = times[job_idx]
+                gaps_job = np.abs(gap_evolution[job_idx])
+                current_job = current_evolution[job_idx]
+                vpot_job = vector_potential_evolution[job_idx]
+
+                # Normalize time by T_c
+                times_norm = times_job * T_c
+
+                # FFT data for this job
+                gap_fft_job = gap_fft[job_idx]
+                current_fft_job = current_fft[job_idx]
+                vpot_fft_job = vpot_fft[job_idx]
+                omega_job = omega[job_idx]
+
+                # Normalize omega by T_c
+                omega_norm = omega_job / T_c
+
+                # Row 0: Vector Potential
+                axes[0, 0].plot(times_norm, vpot_job, '-', color=color, linewidth=2, label=label, alpha=0.8)
+                axes[0, 1].plot(omega_norm, np.real(vpot_fft_job), '-', color=color, linewidth=2, label=label, alpha=0.8)
+                axes[0, 2].plot(omega_norm, np.imag(vpot_fft_job), '-', color=color, linewidth=2, label=label, alpha=0.8)
+
+                # Row 1: Gap (no labels)
+                axes[1, 0].plot(times_norm, gaps_job / T_c, '-', color=color, linewidth=2, alpha=0.8)
+                axes[1, 1].plot(omega_norm, np.real(gap_fft_job) / T_c, '-', color=color, linewidth=2, alpha=0.8)
+                axes[1, 2].plot(omega_norm, np.imag(gap_fft_job) / T_c, '-', color=color, linewidth=2, alpha=0.8)
+
+                # Row 2: Current (no labels)
+                axes[2, 0].plot(times_norm, current_job, '-', color=color, linewidth=2, alpha=0.8)
+                axes[2, 1].plot(omega_norm, np.real(current_fft_job), '-', color=color, linewidth=2, alpha=0.8)
+                axes[2, 2].plot(omega_norm, np.imag(current_fft_job), '-', color=color, linewidth=2, alpha=0.8)
+
+            # Get gap at t=0 from first plotted job for reference lines
+            first_job_idx = plot_job_indices[0]
+            gap_t0 = np.abs(gap_evolution[first_job_idx][0]) / T_c
+
+            # Determine xlim for frequency plots
+            freq_xlim = xlim if xlim is not None else (-10, 10)
+
+            # Configure axes - Row 0 (Vector Potential)
+            axes[0, 0].set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            axes[0, 0].set_ylabel(r'$A(t)$', fontsize=21)
+            axes[0, 0].set_title(r'Vector Potential', fontsize=23)
+            axes[0, 0].legend(fontsize=13)
+            if ylim is not None:
+                axes[0, 0].set_ylim(ylim)
+
+            axes[0, 1].set_xlabel(r'$\omega/T_c$', fontsize=21)
+            axes[0, 1].set_ylabel(r'$Re[A(\omega)]$', fontsize=21)
+            axes[0, 1].set_title(r'Real', fontsize=23)
+            axes[0, 1].set_xlim(freq_xlim)
+            if ylim is not None:
+                axes[0, 1].set_ylim(ylim)
+            # Add reference lines for ±Δ and ±2Δ
+            for delta_val, label_text in [(gap_t0, r'$\Delta$'), (2*gap_t0, r'$2\Delta$')]:
+                axes[0, 1].axvline(delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[0, 1].axvline(-delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[0, 1].text(delta_val + 0.3, 0.95, label_text, transform=axes[0, 1].get_xaxis_transform(),
+                               ha='left', va='top', fontsize=18, color='gray')
+
+            axes[0, 2].set_xlabel(r'$\omega/T_c$', fontsize=21)
+            axes[0, 2].set_ylabel(r'$Im[A(\omega)]$', fontsize=21)
+            axes[0, 2].set_title(r'Imaginary', fontsize=23)
+            axes[0, 2].set_xlim(freq_xlim)
+            if ylim is not None:
+                axes[0, 2].set_ylim(ylim)
+            # Add reference lines for ±Δ and ±2Δ
+            for delta_val, label_text in [(gap_t0, r'$\Delta$'), (2*gap_t0, r'$2\Delta$')]:
+                axes[0, 2].axvline(delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[0, 2].axvline(-delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[0, 2].text(delta_val + 0.3, 0.95, label_text, transform=axes[0, 2].get_xaxis_transform(),
+                               ha='left', va='top', fontsize=18, color='gray')
+
+            # Configure axes - Row 1 (Gap)
+            axes[1, 0].set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            axes[1, 0].set_ylabel(r'$|\Delta(t)|/T_c$', fontsize=21)
+            axes[1, 0].set_title(r'Gap', fontsize=23)
+            if ylim is not None:
+                axes[1, 0].set_ylim(ylim)
+
+            axes[1, 1].set_xlabel(r'$\omega/T_c$', fontsize=21)
+            axes[1, 1].set_ylabel(r'$Re[\Delta(\omega)]/T_c$', fontsize=21)
+            axes[1, 1].set_title(r'Real', fontsize=23)
+            axes[1, 1].set_xlim(freq_xlim)
+            if ylim is not None:
+                axes[1, 1].set_ylim(ylim)
+            else:
+                axes[1, 1].set_ylim(-0.4, 0.4)
+            # Add reference lines for ±Δ and ±2Δ
+            for delta_val, label_text in [(gap_t0, r'$\Delta$'), (2*gap_t0, r'$2\Delta$')]:
+                axes[1, 1].axvline(delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[1, 1].axvline(-delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[1, 1].text(delta_val + 0.3, 0.95, label_text, transform=axes[1, 1].get_xaxis_transform(),
+                               ha='left', va='top', fontsize=18, color='gray')
+
+            axes[1, 2].set_xlabel(r'$\omega/T_c$', fontsize=21)
+            axes[1, 2].set_ylabel(r'$Im[\Delta(\omega)]/T_c$', fontsize=21)
+            axes[1, 2].set_title(r'Imaginary', fontsize=23)
+            axes[1, 2].set_xlim(freq_xlim)
+            if ylim is not None:
+                axes[1, 2].set_ylim(ylim)
+            else:
+                axes[1, 2].set_ylim(-0.4, 0.4)
+            # Add reference lines for ±Δ and ±2Δ
+            for delta_val, label_text in [(gap_t0, r'$\Delta$'), (2*gap_t0, r'$2\Delta$')]:
+                axes[1, 2].axvline(delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[1, 2].axvline(-delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[1, 2].text(delta_val + 0.3, 0.95, label_text, transform=axes[1, 2].get_xaxis_transform(),
+                               ha='left', va='top', fontsize=18, color='gray')
+
+            # Configure axes - Row 2 (Current)
+            axes[2, 0].set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            axes[2, 0].set_ylabel(r'$I(t)$', fontsize=21)
+            axes[2, 0].set_title(r'Current', fontsize=23)
+            if ylim is not None:
+                axes[2, 0].set_ylim(ylim)
+
+            axes[2, 1].set_xlabel(r'$\omega/T_c$', fontsize=21)
+            axes[2, 1].set_ylabel(r'$Re[I(\omega)]$', fontsize=21)
+            axes[2, 1].set_title(r'Real', fontsize=23)
+            axes[2, 1].set_xlim(freq_xlim)
+            if ylim is not None:
+                axes[2, 1].set_ylim(ylim)
+            # Add reference lines for ±Δ and ±2Δ
+            for delta_val, label_text in [(gap_t0, r'$\Delta$'), (2*gap_t0, r'$2\Delta$')]:
+                axes[2, 1].axvline(delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[2, 1].axvline(-delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[2, 1].text(delta_val + 0.3, 0.95, label_text, transform=axes[2, 1].get_xaxis_transform(),
+                               ha='left', va='top', fontsize=18, color='gray')
+
+            axes[2, 2].set_xlabel(r'$\omega/T_c$', fontsize=21)
+            axes[2, 2].set_ylabel(r'$Im[I(\omega)]$', fontsize=21)
+            axes[2, 2].set_title(r'Imaginary', fontsize=23)
+            axes[2, 2].set_xlim(freq_xlim)
+            if ylim is not None:
+                axes[2, 2].set_ylim(ylim)
+            # Add reference lines for ±Δ and ±2Δ
+            for delta_val, label_text in [(gap_t0, r'$\Delta$'), (2*gap_t0, r'$2\Delta$')]:
+                axes[2, 2].axvline(delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[2, 2].axvline(-delta_val, color='gray', linestyle=':', linewidth=1.5, alpha=0.7)
+                axes[2, 2].text(delta_val + 0.3, 0.95, label_text, transform=axes[2, 2].get_xaxis_transform(),
+                               ha='left', va='top', fontsize=18, color='gray')
+
+            # Add overall title if multiple directory jobs
+            if len(directory_job_indices) > 1:
+                fig.suptitle(f'Directory Job {dir_job_idx}', fontsize=21, y=0.998)
+
+            fig.tight_layout()
+
+            if save_plot:
+                # Format plotted job indices for filename
+                pulse_jobs_str = '_'.join(map(str, plot_job_indices))
+                save_path = os.path.join(save_dir, f'spectral_analysis_{timestamp}_jobs{pulse_jobs_str}_dirjob{dir_job_idx}.svg')
+                extended_savefig(fig, save_path, timestamp)
+
+        else:
+            # No FFT data - create 1x3 plot (time domain only)
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+            # Color cycle for different jobs using continuous colormap
+            cmap = plt.get_cmap(colormap)
+            colors_jobs = cmap(np.linspace(0.3, 0.9, len(plot_job_indices)))
+
+            # Extract incoming current pulses for labeling
+            incoming_current_pulses = data.get('incoming_current_pulses', None)
+            field_params = data.get('field_params', [{}])
+
+            for idx, job_idx in enumerate(plot_job_indices):
+                color = colors_jobs[idx]
+
+                # Create label from amplitude and FWHM
+                label_parts = []
+                try:
+                    if incoming_current_pulses is not None and job_idx < len(incoming_current_pulses):
+                        I_in_max = np.max(np.abs(incoming_current_pulses[job_idx]))
+                        label_parts.append(r'I_{\mathrm{max}}=' + str(np.round(I_in_max, 2)))
+
+                    if field_params is not None and job_idx < len(field_params):
+                        fwhm = field_params[job_idx].get('FWHM', None)
+                        if fwhm is not None:
+                            label_parts.append(r'FWHM \cdot T_c=' + str(np.round(fwhm, 2)))
+
+                    if label_parts:
+                        label = '$' + ', '.join(label_parts) + '$'
+                    else:
+                        label = str(job_idx)
+                except (IndexError, KeyError, TypeError):
+                    label = str(job_idx)
+
+                # Extract data for this job
+                times_job = times[job_idx]
+                gaps_job = np.abs(gap_evolution[job_idx])
+                current_job = current_evolution[job_idx]
+                vpot_job = vector_potential_evolution[job_idx]
+
+                # Normalize time by T_c
+                times_norm = times_job * T_c
+
+                # Plot time domain only - reordered: vector potential, gap, current
+                axes[0].plot(times_norm, vpot_job, '-', color=color, linewidth=2, label=label, alpha=0.8)
+                axes[1].plot(times_norm, gaps_job / T_c, '-', color=color, linewidth=2, label=label, alpha=0.8)
+                axes[2].plot(times_norm, current_job, '-', color=color, linewidth=2, label=label, alpha=0.8)
+
+            # Configure axes - reordered: vector potential, gap, current
+            axes[0].set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            axes[0].set_ylabel(r'$A(t)$', fontsize=21)
+            axes[0].set_title(r'Vector Potential', fontsize=23)
+            axes[0].legend(fontsize=13)
+            if xlim is not None:
+                axes[0].set_xlim(xlim)
+
+            axes[1].set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            axes[1].set_ylabel(r'$|\Delta(t)|/T_c$', fontsize=21)
+            axes[1].set_title(r'Gap', fontsize=23)
+            if xlim is not None:
+                axes[1].set_xlim(xlim)
+
+            axes[2].set_xlabel(r'$t \cdot T_c$', fontsize=21)
+            axes[2].set_ylabel(r'$I(t)$', fontsize=21)
+            axes[2].set_title(r'Current', fontsize=23)
+            if xlim is not None:
+                axes[2].set_xlim(xlim)
+
+            # Add overall title if multiple directory jobs
+            if len(directory_job_indices) > 1:
+                fig.suptitle(f'Directory Job {dir_job_idx}', fontsize=23, y=0.995)
+
+            fig.tight_layout()
+
+            if save_plot:
+                # Format plotted job indices for filename
+                pulse_jobs_str = '_'.join(map(str, plot_job_indices))
+                save_path = os.path.join(save_dir, f'state_evolution_{timestamp}_jobs{pulse_jobs_str}_dirjob{dir_job_idx}.svg')
+                extended_savefig(fig, save_path, timestamp)
+
+    plt.show()
+
+    # Return single dict if single index, list if multiple
+    if len(loaded_data_list) == 1:
+        return loaded_data_list[0]
+    else:
+        return loaded_data_list
+
+
+def plot_gap_normalized_by_A2(timestamp, directory_job_index=0, plot_jobs=None,
+                              cutoff=1e-6, save_plot=False, save_dir=None,
+                              running_machine='laptop', colormap='Blues'):
+    """
+    Plot gap(ω) normalized by FT(A²(t)).
+
+    Computes the Fourier transform of A²(t) using the same conventions as the
+    gap FFT, then plots the ratio gap_fft / A²_fft. Only plots frequencies where
+    |A²_fft| > cutoff to avoid division by near-zero values.
+
+    Args:
+        timestamp: Postprocessed timestamp folder with spectral analysis data
+        directory_job_index: Index or list of indices of postprocessed result files (default 0)
+        plot_jobs: List of job indices to plot. If None, plots all jobs.
+        cutoff: Threshold for |FT(A²)|. Only plot where |FT(A²)| > cutoff (default 1e-6)
+        save_plot: Whether to save plots (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        colormap: Colormap name for line colors (default 'Blues')
+
+    Returns:
+        dict: Contains omega, gap_normalized, and mask for each job
+              Format: {job_idx: {'omega': array, 'gap_norm': array, 'mask': array}}
+    """
+    # Normalize directory_job_index to list
+    if isinstance(directory_job_index, int):
+        directory_job_indices = [directory_job_index]
+    else:
+        directory_job_indices = directory_job_index
+
+    # Set up save directory if needed
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+    # Store results
+    all_results = {}
+
+    # Process each directory job index
+    for dir_idx, dir_job_idx in enumerate(directory_job_indices):
+        # Load postprocessed data
+        data = load_postprocessed_data(timestamp, dir_job_idx, running_machine)
+
+        # Check if FFT data available
+        if 'gap_fft' not in data:
+            raise ValueError(f"Spectral analysis data not found for timestamp {timestamp}, "
+                           f"job {dir_job_idx}. Run postprocessor with compute_keywords=['spectral_analysis'] first.")
+
+        # Extract data
+        gap_fft = data['gap_fft']
+        gap_evolution = data['gap_evolution']
+        vector_potential_evolution = data['vector_potential_evolution']
+        times = data['times']
+        omega = data['omega']
+        T_c = data['T_c'][0]
+
+        # Get gap at t=0 from first job for reference lines
+        gap_0 = np.abs(gap_evolution[0][0])
+        gap_0_norm = gap_0 / T_c
+
+        # Determine which jobs to plot
+        if plot_jobs is None:
+            plot_job_indices = range(len(gap_fft))
+        else:
+            plot_job_indices = plot_jobs
+
+        # Create figure with 2 subplots (real and imaginary parts)
+        fig, (ax_re, ax_im) = plt.subplots(1, 2, figsize=(16, 6))
+
+        # Color cycle using continuous colormap
+        cmap = plt.get_cmap(colormap)
+        colors_jobs = cmap(np.linspace(0.3, 0.9, len(plot_job_indices)))
+
+        # Track valid omega range across all jobs
+        omega_min = np.inf
+        omega_max = -np.inf
+
+        for idx, job_idx in enumerate(plot_job_indices):
+            color = colors_jobs[idx]
+            label = str(job_idx)
+
+            # Extract data for this job
+            times_job = times[job_idx]
+            vpot_job = vector_potential_evolution[job_idx]
+            gap_fft_job = gap_fft[job_idx]
+            omega_job = omega[job_idx]
+
+            # Compute A²(t)
+            A_squared = vpot_job ** 2
+
+            # Compute FT(A²(t)) using same conventions as gap FFT
+            dt = times_job[1] - times_job[0]
+            N_t = len(times_job)
+
+            # Frequency grid (should match omega_job from data)
+            freq = np.fft.fftfreq(N_t, d=dt)
+            omega_check = 2 * np.pi * freq
+
+            # Phase correction (same as in spectral analysis)
+            t_center_idx = np.argmax(np.abs(vpot_job))
+            t_center = times_job[t_center_idx]
+            phase_correction = np.exp(-1j * omega_check * t_center)
+
+            # Compute FT(A²(t))
+            A2_fft_raw = np.fft.fft(A_squared) * dt
+            A2_fft_corrected = A2_fft_raw * phase_correction
+            A2_fft_shifted = np.fft.fftshift(A2_fft_corrected)
+
+            # Compute normalized gap
+            gap_normalized = gap_fft_job / A2_fft_shifted
+
+            # Apply cutoff: only keep frequencies where |FT(A²)| > cutoff
+            mask = np.abs(A2_fft_shifted) > cutoff
+
+            # Normalize omega by T_c
+            omega_norm = omega_job / T_c
+
+            # Store results
+            all_results[job_idx] = {
+                'omega': omega_norm[mask],
+                'gap_norm': gap_normalized[mask],
+                'mask': mask,
+                'A2_fft': A2_fft_shifted
+            }
+
+            # Update valid omega range
+            if np.any(mask):
+                omega_min = min(omega_min, np.min(omega_norm[mask]))
+                omega_max = max(omega_max, np.max(omega_norm[mask]))
+
+            # Plot real and imaginary parts separately
+            ax_re.plot(omega_norm[mask], np.real(gap_normalized[mask]), '-',
+                      color=color, linewidth=2, label=label, alpha=0.8)
+            ax_im.plot(omega_norm[mask], np.imag(gap_normalized[mask]), '-',
+                      color=color, linewidth=2, label=label, alpha=0.8)
+
+        # Add vertical reference lines for gap(t=0) and 2*gap(t=0) to both plots
+        for ax in [ax_re, ax_im]:
+            ax.axvline(gap_0_norm, color='gray', linestyle=':', linewidth=2,
+                      label=r'$\Delta_0/T_c$', alpha=0.7)
+            ax.axvline(2*gap_0_norm, color='darkgray', linestyle=':', linewidth=2,
+                      label=r'$2\Delta_0/T_c$', alpha=0.7)
+            ax.axvline(-gap_0_norm, color='gray', linestyle=':', linewidth=2, alpha=0.7)
+            ax.axvline(-2*gap_0_norm, color='darkgray', linestyle=':', linewidth=2, alpha=0.7)
+
+        # Configure real part axes
+        ax_re.set_xlabel(r'$\omega/T_c$', fontsize=21)
+        ax_re.set_ylabel(r'$Re[\tilde{\Delta}(\omega) / FT[A^2(t)]]$', fontsize=21)
+        ax_re.set_title(r' mathrm{(a) Real Part}', fontsize=23)
+
+        # Configure imaginary part axes
+        ax_im.set_xlabel(r'$\omega/T_c$', fontsize=21)
+        ax_im.set_ylabel(r'$Im[\tilde{\Delta}(\omega) / FT[A^2(t)]]$', fontsize=21)
+        ax_im.set_title(r' mathrm{(b) Imaginary Part}', fontsize=23)
+
+        # Set xlim based on valid omega range (where |FT(A²)| > cutoff)
+        if omega_min < omega_max:
+            # Add small margin (5%)
+            margin = 0.05 * (omega_max - omega_min)
+            for ax in [ax_re, ax_im]:
+                ax.set_xlim(omega_min - margin, omega_max + margin)
+
+        # Add legends
+        ax_re.legend(fontsize=12)
+        ax_im.legend(fontsize=12)
+
+        # Add overall title if multiple directory jobs
+        if len(directory_job_indices) > 1:
+            fig.suptitle(f'Directory Job {dir_job_idx}', fontsize=23, y=0.995)
+
+        fig.tight_layout()
+
+        if save_plot:
+            pulse_jobs_str = '_'.join(map(str, plot_job_indices))
+            save_path = os.path.join(save_dir,
+                                    f'gap_norm_A2_{timestamp}_jobs{pulse_jobs_str}_dirjob{dir_job_idx}.svg')
+            extended_savefig(fig, save_path, timestamp)
+
+    plt.show()
+
+    return all_results
+
+
+def plot_two_time_greens_function(timestamp, directory_job_index=None, component='gr',
+                                   tau_component=None, plot_part='both', vmin=None, vmax=None,
+                                   cmap='RdBu_r', t_lim=None, tprime_lim=None,
+                                   save_plot=False, save_dir=None, running_machine='laptop'):
+    """
+    Plot two-time Green's function (gr or gk) Pauli components.
+
+    Green's function has shape (2, 2, N_t, N_t) where N_t x N_t are the two time dimensions.
+    Plots either all 4 Pauli components or a specific component.
+
+    Args:
+        timestamp: Timestamp folder identifier (raw simulation data, not postprocessed)
+        directory_job_index: Index of result file to load. If None, will ask user (default None)
+        component: Which Green's function to plot: 'gr' or 'gk' (default 'gr')
+        tau_component: Which Pauli component to plot (0=I, 1=X, 2=Y, 3=Z).
+                      If None, plots all 4 components (default None)
+        plot_part: Which part to plot: 'real', 'imag', or 'both' (default 'both')
+        vmin, vmax: Optional colorbar limits (if None, auto-scale per component)
+        cmap: Colormap to use (default 'RdBu_r' for diverging red-blue)
+        t_lim: Optional tuple (t_min, t_max) to zoom into specific t range
+        tprime_lim: Optional tuple (tprime_min, tprime_max) to zoom into specific t' range
+        save_plot: Whether to save the plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: 'laptop' or 'cluster_euler'
+
+    Returns:
+        dict: Loaded data dictionary
+    """
+    # Initialize path management if needed
+    if not hasattr(path_management, 'project_data'):
+        path_management.initialize(project_name='psBQP-keldysh')
+
+    # Normalize directory_job_index (handle if passed as list)
+    if isinstance(directory_job_index, list):
+        if len(directory_job_index) == 1:
+            directory_job_index = directory_job_index[0]
+        else:
+            raise ValueError(f"directory_job_index must be a single integer, got list with {len(directory_job_index)} elements")
+
+    # If job index not provided, check how many jobs exist and ask user
+    if directory_job_index is None:
+        simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
+        timestamp_dir = os.path.join(simulation_data_path, str(timestamp))
+
+        # Check archive if not in simulation data path
+        if not os.path.exists(timestamp_dir):
+            archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
+            timestamp_dir = os.path.join(archive_path, str(timestamp))
+
+        if not os.path.exists(timestamp_dir):
+            raise FileNotFoundError(f"Timestamp directory not found: {timestamp}")
+
+        # Count available job files
+        job_files = [f for f in os.listdir(timestamp_dir) if f.startswith('result_') and f.endswith('.pkl')]
+        num_jobs = len(job_files)
+
+        if num_jobs == 0:
+            raise FileNotFoundError(f"No result files found in {timestamp_dir}")
+        elif num_jobs == 1:
+            directory_job_index = 0
+        else:
+            # Ask user which job to plot
+            print(f"Found {num_jobs} jobs in timestamp {timestamp}")
+            directory_job_index = int(input(f"Enter job index (0-{num_jobs-1}): "))
+
+    # Construct path to raw result file
+    simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
+    result_file = os.path.join(simulation_data_path, str(timestamp),
+                               path_management.relative_path_raw_result_file().format(directory_job_index))
+
+    # Check archive path if not found
+    if not os.path.exists(result_file):
+        archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
+        result_file = os.path.join(archive_path, str(timestamp),
+                                   path_management.relative_path_raw_result_file().format(directory_job_index))
+
+    if not os.path.exists(result_file):
+        raise FileNotFoundError(f"Data file not found for timestamp {timestamp}, job {directory_job_index}")
+
+    # Load the data
+    with open(result_file, 'rb') as f:
+        data = pickle.load(f)
+
+    # Extract the Green's function
+    final_state = data['final_state']
+    if component == 'gr':
+        greens_function = final_state.gr
+    elif component == 'gk':
+        greens_function = final_state.gk
+    else:
+        raise ValueError(f"component must be 'gr' or 'gk', got '{component}'")
+
+    # greens_function.data has shape (2, 2, N_t, N_t)
+    # Import locally to create NambuKeldyshTensor
+    from nambu_keldysh_class import NambuKeldyshTensor
+
+    # Get time grid from state
+    T_max = final_state.T_max
+    N_t = greens_function.data.shape[-1]
+    time_grid = np.linspace(0, T_max, N_t)
+
+    # Pauli component labels
+    pauli_labels = ['I (Identity)', 'X ($\\sigma_x$)', 'Y ($\\sigma_y$)', 'Z ($\\sigma_z$)']
+
+    # Time extent for imshow (smallest times in top-left corner)
+    t_min, t_max = time_grid[0], time_grid[-1]
+    extent = [t_min, t_max, t_max, t_min]  # [left, right, bottom, top] with origin='upper'
+
+    if tau_component is not None:
+        # Extract Pauli component using trace (divide by 2 for normalization)
+        component_data = greens_function.trace(pauli_index=tau_component) / 2
+
+        # Component name with superscript notation (g^r or g^k) and time arguments
+        superscript = 'r' if component == 'gr' else 'k'
+        component_prefix = r"g^{" + superscript + r"}_{" + str(tau_component) + r"}(t, t')"
+
+        if plot_part == 'both':
+            # Plot both real and imaginary in 1x2 grid
+            fig, (ax_real, ax_imag) = plt.subplots(1, 2, figsize=(12, 5))
+
+            # Real part
+            im_real = ax_real.imshow(np.real(component_data), aspect='auto', origin='upper',
+                                     extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
+            ax_real.set_title(r"$\Re[" + component_prefix + r"]$", fontsize=21)
+            ax_real.set_xlabel(r"$t \cdot T_c$", fontsize=18)
+            ax_real.set_ylabel(r"$t' \cdot T_c$", fontsize=18)
+            if t_lim is not None:
+                ax_real.set_xlim(t_lim)
+            if tprime_lim is not None:
+                ax_real.set_ylim(tprime_lim[1], tprime_lim[0])
+            plt.colorbar(im_real, ax=ax_real, fraction=0.046, pad=0.04)
+
+            # Imaginary part
+            im_imag = ax_imag.imshow(np.imag(component_data), aspect='auto', origin='upper',
+                                     extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
+            ax_imag.set_title(r"$\Im[" + component_prefix + r"]$", fontsize=21)
+            ax_imag.set_xlabel(r"$t \cdot T_c$", fontsize=18)
+            ax_imag.set_ylabel(r"$t' \cdot T_c$", fontsize=18)
+            if t_lim is not None:
+                ax_imag.set_xlim(t_lim)
+            if tprime_lim is not None:
+                ax_imag.set_ylim(tprime_lim[1], tprime_lim[0])
+            plt.colorbar(im_imag, ax=ax_imag, fraction=0.046, pad=0.04)
+
+        else:
+            # Plot only real or imaginary in single plot
+            fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+            if plot_part == 'real':
+                plot_data = np.real(component_data)
+                part_symbol = r"\Re"
+            elif plot_part == 'imag':
+                plot_data = np.imag(component_data)
+                part_symbol = r"\Im"
+            else:
+                raise ValueError("plot_part must be 'real', 'imag', or 'both', got '" + str(plot_part) + "'")
+
+            im = ax.imshow(plot_data, aspect='auto', origin='upper',
+                          extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
+            ax.set_title(r"$" + part_symbol + r"[" + component_prefix + r"]$", fontsize=18)
+            ax.set_xlabel(r"$t \cdot T_c$", fontsize=18)
+            ax.set_ylabel(r"$t' \cdot T_c$", fontsize=18)
+            if t_lim is not None:
+                ax.set_xlim(t_lim)
+            if tprime_lim is not None:
+                ax.set_ylim(tprime_lim[1], tprime_lim[0])
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    else:
+        # Plot all 4 Pauli components in 2x4 grid
+        fig, axes = plt.subplots(2, 4, figsize=(18, 9))
+
+        for pauli_idx in range(4):
+            # Extract Pauli component using trace (divide by 2 for normalization)
+            component_data = greens_function.trace(pauli_index=pauli_idx) / 2
+
+            # Real part (top row)
+            ax_real = axes[0, pauli_idx]
+            im_real = ax_real.imshow(np.real(component_data), aspect='auto', origin='upper',
+                                     extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
+            ax_real.set_title(f"{pauli_labels[pauli_idx]} - Real", fontsize=12)
+            if pauli_idx == 0:
+                ax_real.set_ylabel(r"$t' \cdot T_c$", fontsize=18, fontweight='bold')
+            else:
+                ax_real.set_ylabel(r"$t' \cdot T_c$", fontsize=21)
+            if t_lim is not None:
+                ax_real.set_xlim(t_lim)
+            if tprime_lim is not None:
+                ax_real.set_ylim(tprime_lim[1], tprime_lim[0])
+            plt.colorbar(im_real, ax=ax_real, fraction=0.046, pad=0.04)
+
+            # Imaginary part (bottom row)
+            ax_imag = axes[1, pauli_idx]
+            im_imag = ax_imag.imshow(np.imag(component_data), aspect='auto', origin='upper',
+                                     extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
+            ax_imag.set_title(f"{pauli_labels[pauli_idx]} - Imaginary", fontsize=12)
+            ax_imag.set_xlabel(r"$t \cdot T_c$", fontsize=18, fontweight='bold')
+            if pauli_idx == 0:
+                ax_imag.set_ylabel(r"$t' \cdot T_c$", fontsize=18, fontweight='bold')
+            else:
+                ax_imag.set_ylabel(r"$t' \cdot T_c$", fontsize=21)
+            if t_lim is not None:
+                ax_imag.set_xlim(t_lim)
+            if tprime_lim is not None:
+                ax_imag.set_ylim(tprime_lim[1], tprime_lim[0])
+            plt.colorbar(im_imag, ax=ax_imag, fraction=0.046, pad=0.04)
+
+        # Overall title
+        component_name = "Retarded" if component == 'gr' else "Keldysh"
+        title = f"{component_name} Green's Function - All Pauli Components"
+        fig.suptitle(title, fontsize=21, fontweight='bold', y=0.995)
+
+    fig.tight_layout()
+
+    # Save if requested
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        if tau_component is not None:
+            part_str = f'_{plot_part}' if plot_part != 'both' else ''
+            save_path = os.path.join(save_dir,
+                                    f'{component}_two_time_{timestamp}_job{directory_job_index}_pauli{tau_component}{part_str}.svg')
+        else:
+            save_path = os.path.join(save_dir,
+                                    f'{component}_two_time_{timestamp}_job{directory_job_index}_all.svg')
+        extended_savefig(fig, save_path, timestamp)
+
+    plt.show()
+
+    return data
+
+
+def plot_static_observables(timestamp, directory_job_index=0, parameter=None,
+                            save_plot=False, save_dir=None, running_machine='laptop',
+                            colormap='Blues', marker='o'):
+    """
+    Plot gap and current vs vector potential from static postprocessed data.
+
+    Creates a 2-panel plot showing time-averaged gap (left) and current (right)
+    vs averaged vector potential.
+
+    Args:
+        timestamp: Postprocessed timestamp folder (must have been processed with 'static' keyword)
+        directory_job_index: Index of postprocessed result file to load (default 0)
+        parameter: Deprecated parameter (kept for backward compatibility, not used)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        colormap: Colormap name for marker colors (default 'Blues')
+        marker: Marker style (default 'o')
+
+    Returns:
+        dict: Loaded postprocessed data
+    """
+    # Normalize directory_job_index if passed as list
+    if isinstance(directory_job_index, list):
+        directory_job_index = directory_job_index[0]
+
+    # Load postprocessed data
+    data = load_postprocessed_data(timestamp, directory_job_index, running_machine)
+
+    # Extract averaged observables
+    averaged_gaps = data['averaged_gaps']
+    averaged_currents = data['averaged_currents']
+    averaged_vector_potentials = data['averaged_vector_potentials']
+    system_parameters_list = data['system_parameters']
+
+    # Extract normalization constants from first job
+    T_c = system_parameters_list[0].get('critical_temperature', 1.0)
+    sigma_n = system_parameters_list[0].get('normal_conductivity', 1.0)
+
+    # Normalize vector potential by its maximum value (A_0)
+    A_0 = np.max(np.abs(averaged_vector_potentials))
+    if A_0 < 1e-12:
+        A_0 = 1.0
+
+    A_normalized = averaged_vector_potentials / A_0
+
+    # Normalize gap by T_c
+    gap_normalized = np.abs(averaged_gaps) / T_c
+
+    # Normalize current by sigma_n * A_0 * T_c
+    current_normalized = np.abs(averaged_currents) / (sigma_n * A_0 * T_c)
+
+    # Critical current (maximum of normalized current)
+    J_c = np.max(current_normalized)
+
+    # Create figure with 2 subplots
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    ax_gap, ax_current = axes
+
+    # Get colormap
+    cmap = plt.get_cmap(colormap)
+    color = cmap(0.6)  # Single color from colormap
+
+    # Plot gap vs vector potential (left panel)
+    ax_gap.plot(A_normalized, gap_normalized, marker=marker,
+                color=color, linewidth=3, markersize=8, alpha=0.8)
+    ax_gap.set_xlabel(r'$A/A_0$', fontsize=21)
+    ax_gap.set_ylabel(r'$|\Delta|/T_c$', fontsize=21)
+    ax_gap.set_title(r' mathrm{Gap vs Vector Potential}', fontsize=23)
+    ax_gap.set_xlim(-0.05, 0.825)
+
+    # Plot current vs vector potential (right panel)
+    ax_current.plot(A_normalized, current_normalized, marker=marker,
+                   color=color, linewidth=3, markersize=8, alpha=0.8)
+
+    # Add horizontal dotted line at J_c
+    ax_current.axhline(y=J_c, color='gray', linestyle=':', linewidth=2)
+
+    # Add text label for J_c below the line
+    ax_current.text(0.75, J_c * 0.98, r'$J_c$', fontsize=18, verticalalignment='top')
+
+    ax_current.set_xlabel(r'$A/A_0$', fontsize=21)
+    ax_current.set_ylabel(r'$J_s(A)/(\sigma_n A_0 T_c)$', fontsize=21)
+    ax_current.set_title(r' mathrm{Current vs Vector Potential}', fontsize=23)
+    ax_current.set_xlim(-0.05, 0.825)
+
+    fig.tight_layout()
+
+    # Set up save directory if needed
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        save_path = os.path.join(save_dir, f'static_observables_{timestamp}_job{directory_job_index}.svg')
+        extended_savefig(fig, save_path, timestamp)
+
+    plt.show()
+
+    return data
+
+
+def _auto_detect_parameter(system_parameters_list, field_params_list):
+    """
+    Auto-detect which parameter varies across jobs.
+
+    Args:
+        system_parameters_list: List of system parameter dicts
+        field_params_list: List of field parameter dicts
+
+    Returns:
+        str: Parameter name (e.g., 'temperature', 'field_params:amplitude')
+    """
+    n_jobs = len(system_parameters_list)
+    if n_jobs <= 1:
+        return 'temperature'  # Default if only one job
+
+    # Check common parameters in system_parameters
+    for key in ['temperature', 'eta']:
+        values = [system_parameters_list[i].get(key, None) for i in range(n_jobs)]
+        if len(set(values)) > 1:  # More than one unique value
+            return key
+
+    # Check common parameters in field_params
+    for key in ['amplitude', 'FWHM', 'frequency']:
+        values = [field_params_list[i].get(key, None) for i in range(n_jobs)]
+        if len(set(values)) > 1:
+            return f'field_params:{key}'
+
+    # Default fallback
+    return 'temperature'
+
+
+def _format_parameter_label(parameter):
+    """
+    Format parameter name for plot labels.
+
+    Args:
+        parameter: Parameter name string
+
+    Returns:
+        str: LaTeX-formatted label
+    """
+    if parameter == 'temperature':
+        return r'$T/T_c$'
+    elif parameter == 'eta':
+        return r'$\eta/T_c$'
+    elif parameter == 'vector_potential':
+        return r'$A$'
+    elif parameter.startswith('field_params:'):
+        key = parameter.split(':', 1)[1]
+        if key == 'amplitude':
+            return r'$A_0$'
+        elif key == 'FWHM':
+            return r'$\mathrm{FWHM}\cdot T_c$'
+        elif key == 'frequency':
+            return r'$\omega/T_c$'
+        else:
+            return r'$' + key + r'$'
+    elif parameter.startswith('system_parameters:'):
+        key = parameter.split(':', 1)[1]
+        return r'$' + key + r'$'
+    else:
+        return r'$' + parameter + r'$'
+
+
+def plot_xy_data(x_data_list, y_data_list, label_list=None,
+                 xlabel=None, ylabel=None, title=None,
+                 colormap='Blues', marker='', linestyle='-', linewidth=3, markersize=6,
+                 figsize=(10, 6), xlim=None, ylim=None,
+                 save_plot=False, save_dir=None, save_name='xy_plot.svg'):
+    """
+    Plot x-y data with consistent styling.
+
+    Creates a plot with multiple datasets using the same style as other plotting functions.
+
+    Args:
+        x_data_list: List of x-data arrays (or single array for one dataset)
+        y_data_list: List of y-data arrays (or single array for one dataset)
+        label_list: List of labels for each dataset (optional)
+        xlabel: X-axis label (LaTeX string, optional)
+        ylabel: Y-axis label (LaTeX string, optional)
+        title: Plot title (LaTeX string, optional)
+        colormap: Colormap name for line colors (default 'Blues')
+        marker: Marker style (default '')
+        linestyle: Line style (default '-')
+        linewidth: Line width (default 3)
+        markersize: Marker size (default 6)
+        figsize: Figure size tuple (default (10, 6))
+        xlim: Tuple (xmin, xmax) for x-axis limits (default None = auto)
+        ylim: Tuple (ymin, ymax) for y-axis limits (default None = auto)
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        save_name: Filename for saved plot (default 'xy_plot.svg')
+
+    Returns:
+        fig, ax: Matplotlib figure and axes objects
+    """
+    # Normalize inputs to lists
+    if not isinstance(x_data_list, list):
+        x_data_list = [x_data_list]
+    if not isinstance(y_data_list, list):
+        y_data_list = [y_data_list]
+
+    n_datasets = len(x_data_list)
+
+    # Create default labels if not provided
+    if label_list is None:
+        label_list = [None] * n_datasets
+    elif not isinstance(label_list, list):
+        label_list = [label_list]
+
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+
+    # Get colors from colormap
+    cmap = plt.get_cmap(colormap)
+    colors = cmap(np.linspace(0.3, 0.9, n_datasets))
+
+    # Plot each dataset
+    for idx in range(n_datasets):
+        x_data = x_data_list[idx]
+        y_data = y_data_list[idx]
+        label = label_list[idx]
+        color = colors[idx]
+
+        ax.plot(x_data, y_data, linestyle=linestyle, marker=marker,
+                color=color, linewidth=linewidth, markersize=markersize,
+                label=label, alpha=0.8)
+
+    # Set labels and title
+    if xlabel is not None:
+        ax.set_xlabel(xlabel, fontsize=21)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, fontsize=21)
+    if title is not None:
+        ax.set_title(title, fontsize=23)
+
+    # Add legend if labels were provided
+    if any(label is not None for label in label_list):
+        ax.legend(fontsize=15)
+
+    # Set axis limits if provided
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    fig.tight_layout()
+
+    # Save plot if requested
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        save_path = os.path.join(save_dir, save_name)
+        fig.savefig(save_path, bbox_inches='tight', dpi=300)
+
+    plt.show()
+
+    return fig, ax

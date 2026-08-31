@@ -178,6 +178,198 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         with open(save_filename, 'wb') as f:
             pickle.dump(result_data, f)
 
+    elif 'state_evolution' in compute_keywords:
+        # Initialize storage lists
+        system_parameters_list = []
+        field_params_list = []
+        gap_evolution_list = []
+        current_evolution_list = []
+        vector_potential_evolution_list = []
+        times_list = []
+
+        # Loop over all jobs
+        for job_idx in job_indices:
+            # Load data
+            input_kwargs, save_data = load_job_data(timestamp, job_idx, running_machine)
+
+            # Extract system parameters and field parameters
+            system_parameters = input_kwargs['system_parameters']
+            field_params = input_kwargs.get('field_params', {})
+            system_parameters_list.append(system_parameters)
+            field_params_list.append(field_params)
+
+            # Extract time series data from save_data
+            gaps = save_data['gaps']
+            currents = save_data['currents']
+            vector_potentials = save_data['vector_potentials']
+            times = save_data.get('times', None)
+
+            # Store time series
+            gap_evolution_list.append(gaps)
+            current_evolution_list.append(np.real(currents))
+            vector_potential_evolution_list.append(vector_potentials)
+            times_list.append(times)
+
+        # Package results
+        result_data = {
+            'system_parameters': system_parameters_list,
+            'field_params': field_params_list,
+            'gap_evolution': gap_evolution_list,
+            'current_evolution': current_evolution_list,
+            'vector_potential_evolution': vector_potential_evolution_list,
+            'times': times_list
+        }
+
+        # Save results
+        with open(save_filename, 'wb') as f:
+            pickle.dump(result_data, f)
+
+    elif 'spectral_analysis' in compute_keywords:
+        # Initialize storage lists
+        system_parameters_list = []
+        field_params_list = []
+        gap_evolution_list = []
+        current_evolution_list = []
+        vector_potential_evolution_list = []
+        times_list = []
+        gap_fft_list = []
+        current_fft_list = []
+        vpot_fft_list = []
+        omega_list = []
+        T_c_list = []
+
+        # Loop over all jobs
+        for job_idx in job_indices:
+            # Load data
+            input_kwargs, save_data = load_job_data(timestamp, job_idx, running_machine)
+
+            # Extract system parameters and field parameters
+            system_parameters = input_kwargs['system_parameters']
+            field_params = input_kwargs.get('field_params', {})
+            T_c = system_parameters['critical_temperature']
+
+            system_parameters_list.append(system_parameters)
+            field_params_list.append(field_params)
+            T_c_list.append(T_c)
+
+            # Extract time series data from save_data
+            gaps = save_data['gaps']
+            currents = save_data['currents']
+            vector_potentials = save_data['vector_potentials']
+            times = save_data.get('times', None)
+
+            # Store time series
+            gap_evolution_list.append(gaps)
+            current_evolution_list.append(np.real(currents))
+            vector_potential_evolution_list.append(vector_potentials)
+            times_list.append(times)
+
+            # Compute FFT (following plot_gap_evolution_multi_jobs conventions)
+            dt = times[1] - times[0]
+            N_t = len(times)
+
+            # Frequency grid construction
+            freq = np.fft.fftfreq(N_t, d=dt)
+            omega = 2 * np.pi * freq
+            omega_shifted = np.fft.fftshift(omega)
+            omega_list.append(omega_shifted)
+
+            # Phase correction (center pulse at t=0)
+            t_center_idx = np.argmax(np.abs(vector_potentials))
+            t_center = times[t_center_idx]
+            phase_correction = np.exp(-1j * omega * t_center)
+
+            # Gap FFT (operates on gap deviation - DC removal)
+            gap_abs = np.abs(gaps)
+            gap_deviation = gap_abs - gap_abs[0]
+            gap_fft_raw = np.fft.fft(gap_deviation) * dt
+            gap_fft_corrected = gap_fft_raw * phase_correction
+            gap_fft_shifted = np.fft.fftshift(gap_fft_corrected)
+            gap_fft_list.append(gap_fft_shifted)
+
+            # Current FFT (use full time series - no DC removal)
+            current_fft_raw = np.fft.fft(np.real(currents)) * dt
+            current_fft_corrected = current_fft_raw * phase_correction
+            current_fft_shifted = np.fft.fftshift(current_fft_corrected)
+            current_fft_list.append(current_fft_shifted)
+
+            # Vector potential FFT (use full time series)
+            A_fft_raw = np.fft.fft(vector_potentials) * dt
+            A_fft_corrected = A_fft_raw * phase_correction
+            A_fft_shifted = np.fft.fftshift(A_fft_corrected)
+            vpot_fft_list.append(A_fft_shifted)
+
+        # Package results
+        result_data = {
+            'system_parameters': system_parameters_list,
+            'field_params': field_params_list,
+            'gap_evolution': gap_evolution_list,
+            'current_evolution': current_evolution_list,
+            'vector_potential_evolution': vector_potential_evolution_list,
+            'times': times_list,
+            'gap_fft': gap_fft_list,
+            'current_fft': current_fft_list,
+            'vpot_fft': vpot_fft_list,
+            'omega': omega_list,
+            'T_c': T_c_list
+        }
+
+        # Save results
+        with open(save_filename, 'wb') as f:
+            pickle.dump(result_data, f)
+
+    elif 'static' in compute_keywords:
+        # Initialize storage lists
+        system_parameters_list = []
+        field_params_list = []
+        averaged_gaps = []
+        averaged_currents = []
+        averaged_vector_potentials = []
+
+        # Loop over all jobs
+        for job_idx in job_indices:
+            # Load data
+            input_kwargs, save_data = load_job_data(timestamp, job_idx, running_machine)
+
+            # Extract system parameters and field parameters
+            system_parameters = input_kwargs['system_parameters']
+            field_params = input_kwargs.get('field_params', {})
+            system_parameters_list.append(system_parameters)
+            field_params_list.append(field_params)
+
+            # Extract time series data from save_data
+            gaps = save_data['gaps']
+            currents = save_data['currents']
+            vector_potentials = save_data['vector_potentials']
+
+            # Compute averages over last 50 timesteps
+            avg_gap = np.mean(gaps[-50:])
+            avg_current = np.mean(currents[-50:])
+            avg_vpot = np.mean(vector_potentials[-50:])
+
+            # Store averaged values
+            averaged_gaps.append(avg_gap)
+            averaged_currents.append(avg_current)
+            averaged_vector_potentials.append(avg_vpot)
+
+        # Convert to arrays
+        averaged_gaps = np.array(averaged_gaps)
+        averaged_currents = np.array(averaged_currents)
+        averaged_vector_potentials = np.array(averaged_vector_potentials)
+
+        # Package results
+        result_data = {
+            'system_parameters': system_parameters_list,
+            'field_params': field_params_list,
+            'averaged_gaps': averaged_gaps,
+            'averaged_currents': averaged_currents,
+            'averaged_vector_potentials': averaged_vector_potentials
+        }
+
+        # Save results
+        with open(save_filename, 'wb') as f:
+            pickle.dump(result_data, f)
+
     else:
         raise ValueError(f"Unknown compute keyword(s): {compute_keywords}")
 

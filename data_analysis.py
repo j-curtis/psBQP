@@ -2706,7 +2706,6 @@ def extract_monochromatic_conductivity(timestamp, threshold=1e-6, save_plot=Fals
         plt.close(fig)
     else:
         plt.show()
-
     # Return extracted data
     return {
         'omega': omega_array,

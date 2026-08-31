@@ -1,0 +1,43 @@
+===============================================
+TODO LIST - psBQP-keldysh Project
+===============================================
+
+READING
+-------
+[ ] Read eliashberg paper [medium]
+[ ] Read higgs paper [medium]
+[ ] Read soliton paper [easy]
+[ ] Read kamenev paper with higgs [medium]
+[ ] Find phonon 2-time self-energy papers [medium]
+
+
+RUNNING-CODE
+------------
+[ ] Reproduce results from eliashberg paper [easy]
+[ ] Reproduce results from higgs paper [easy]
+[ ] Reproduce results from soliton paper [easy]
+[ ] Reproduce results from kamenev paper [easy]
+[ ] Compare with eliashberg analytics [easy]
+[ ] Code error scaling [easy]
+[ ] Long-pulse evolution [medium]
+
+
+ANALYTICS
+---------
+[ ] Derive eliashberg effect [medium]
+[ ] Understand two-time self energy derivation [hard]
+[ ] Derive the phonon self-energy [hard]
+[ ] Derive the self-energy with g shifts [easy]
+[ ] Deriving gauge-invariant equations [hard]
+
+
+CODING
+------
+[ ] LaTeX eliashberg effect [medium]
+[ ] Code error understanding [hard]
+[ ] Improve code for higher precision/speed [hard]
+[ ] Extend the code to include self-energy terms [hard]
+[ ] Code phonon self-energy [medium]
+
+
+===============================================

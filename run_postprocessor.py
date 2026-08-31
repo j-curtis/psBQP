@@ -13,6 +13,8 @@ from demler_tools.file_manager import path_management, io
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from usadel_keldysh_evolution import UsadelKeldyshEvolution
+
 
 def load_job_data(timestamp, job_index, running_machine='laptop'):
     """Load raw simulation data (input_kwargs, save_data) using demler_tools."""
@@ -322,9 +324,15 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         # Initialize storage lists
         system_parameters_list = []
         field_params_list = []
+        grid_parameters_list = []
         averaged_gaps = []
         averaged_currents = []
         averaged_vector_potentials = []
+
+        # FDT and normalization check storage (4 Pauli components per job)
+        gr_normalization_errors_list = []  # List of arrays shape (4,)
+        gk_normalization_errors_list = []  # List of arrays shape (4,)
+        fdt_errors_list = []  # List of arrays shape (4,)
 
         # Loop over all jobs
         for job_idx in job_indices:
@@ -334,8 +342,10 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             # Extract system parameters and field parameters
             system_parameters = input_kwargs['system_parameters']
             field_params = input_kwargs.get('field_params', {})
+            grid_parameters = input_kwargs.get('grid_parameters', {})
             system_parameters_list.append(system_parameters)
             field_params_list.append(field_params)
+            grid_parameters_list.append(grid_parameters)
 
             # Extract time series data from save_data
             gaps = save_data['gaps']
@@ -352,18 +362,79 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             averaged_currents.append(avg_current)
             averaged_vector_potentials.append(avg_vpot)
 
+            # Compute FDT and normalization checks for last row [-1, :]
+            try:
+                # Load state object
+                final_state = save_data.get('final_state', None)
+
+                if final_state is not None:
+                    # Create evolution object to get thermal distributions
+                    evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+                    evolution.get_thermal_occupation(system_parameters['temperature'])
+                    evolution.get_thermal_integral(system_parameters['temperature'])
+                    evolution.get_thermal_sum(system_parameters['temperature'])
+
+                    # Check g^R normalization at last row
+                    gr_errors, gr_totals = final_state.check_gr_normalization(t1_idx=-1)
+                    # gr_totals has shape (4, N_t), extract last element for each Pauli component
+                    gr_errors_last = gr_totals[:, -1]  # Shape (4,)
+
+                    # Check Keldysh normalization at last row
+                    gk_errors, gk_totals, gk_components = final_state.check_keldysh_normalization(
+                        -1, evolution.thermal_dist, evolution.thermal_integral,
+                        thermal_sum_left=evolution.thermal_sum_left,
+                        thermal_sum_right=evolution.thermal_sum_right
+                    )
+                    # gk_totals has shape (4, N_t), extract last element for each Pauli component
+                    gk_errors_last = gk_totals[:, -1]  # Shape (4,)
+
+                    # Check FDT relation at last row
+                    gk_fdt_row, gk_actual_row, error_row, max_error = final_state.check_fdt(
+                        evolution.thermal_dist, evolution.thermal_integral, time_index=-1,
+                        thermal_sum_left=evolution.thermal_sum_left,
+                        thermal_sum_right=evolution.thermal_sum_right
+                    )
+                    # Extract FDT error for each Pauli component at last element
+                    fdt_errors_pauli = np.zeros(4)
+                    for pauli_idx in range(4):
+                        error_pauli = error_row.trace(pauli_idx) / 2  # Extract Pauli component
+                        if error_pauli.ndim == 2:
+                            error_pauli = error_pauli[0, :]  # shape (N_t,)
+                        fdt_errors_pauli[pauli_idx] = np.abs(error_pauli[-1])  # Value at last element
+
+                    gr_normalization_errors_list.append(gr_errors_last)
+                    gk_normalization_errors_list.append(gk_errors_last)
+                    fdt_errors_list.append(fdt_errors_pauli)
+                else:
+                    # If state not available, store NaN
+                    gr_normalization_errors_list.append(np.full(4, np.nan))
+                    gk_normalization_errors_list.append(np.full(4, np.nan))
+                    fdt_errors_list.append(np.full(4, np.nan))
+            except Exception as e:
+                print(f"Warning: Could not compute consistency checks for job {job_idx}: {e}")
+                gr_normalization_errors_list.append(np.full(4, np.nan))
+                gk_normalization_errors_list.append(np.full(4, np.nan))
+                fdt_errors_list.append(np.full(4, np.nan))
+
         # Convert to arrays
         averaged_gaps = np.array(averaged_gaps)
         averaged_currents = np.array(averaged_currents)
         averaged_vector_potentials = np.array(averaged_vector_potentials)
+        gr_normalization_errors = np.array(gr_normalization_errors_list)  # Shape (N_jobs, 4)
+        gk_normalization_errors = np.array(gk_normalization_errors_list)  # Shape (N_jobs, 4)
+        fdt_errors = np.array(fdt_errors_list)  # Shape (N_jobs, 4)
 
         # Package results
         result_data = {
             'system_parameters': system_parameters_list,
             'field_params': field_params_list,
+            'grid_parameters': grid_parameters_list,
             'averaged_gaps': averaged_gaps,
             'averaged_currents': averaged_currents,
-            'averaged_vector_potentials': averaged_vector_potentials
+            'averaged_vector_potentials': averaged_vector_potentials,
+            'gr_normalization_errors': gr_normalization_errors,
+            'gk_normalization_errors': gk_normalization_errors,
+            'fdt_errors': fdt_errors
         }
 
         # Save results

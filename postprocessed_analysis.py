@@ -1098,58 +1098,97 @@ def plot_two_time_greens_function(timestamp, directory_job_index=None, component
 
 def plot_static_observables(timestamp, directory_job_index=0, parameter=None,
                             save_plot=False, save_dir=None, running_machine='laptop',
-                            colormap='Blues', marker='o'):
+                            colormap='Blues', marker='o', ylim_gap=None, ylim_current=None):
     """
-    Plot gap and current vs vector potential from static postprocessed data.
+    Plot gap and current vs specified parameter from static postprocessed data.
 
-    Creates a 2-panel plot showing time-averaged gap (left) and current (right)
-    vs averaged vector potential.
+    Creates a 2-panel plot showing time-averaged gap (left) and current (right).
+    Data structure: Each job has ONE averaged gap, current, and vector potential value.
 
     Args:
         timestamp: Postprocessed timestamp folder (must have been processed with 'static' keyword)
         directory_job_index: Index of postprocessed result file to load (default 0)
-        parameter: Deprecated parameter (kept for backward compatibility, not used)
+        parameter: What to plot on X-axis (default None = auto-detect or 'vector_potential')
+                  - None: Auto-detect which parameter varies across jobs
+                  - 'temperature': X-axis = T/T_c (each job = different temperature)
+                  - 'field_params:amplitude': X-axis = A (each job = different amplitude)
+                  - Other field_params keys supported
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots (default None uses Figures/ in project folder)
         running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
         colormap: Colormap name for marker colors (default 'Blues')
         marker: Marker style (default 'o')
+        ylim_gap: Tuple (ymin, ymax) for gap axis limits (default None = auto)
+        ylim_current: Tuple (ymin, ymax) for current axis limits (default None = auto)
 
     Returns:
-        dict: Loaded postprocessed data
-    """
-    # Normalize directory_job_index if passed as list
-    if isinstance(directory_job_index, list):
-        directory_job_index = directory_job_index[0]
+        dict: Loaded postprocessed data with keys:
+            - 'system_parameters': List of system parameter dicts (one per job)
+            - 'field_params': List of field parameter dicts (one per job)
+            - 'averaged_gaps': Array of averaged gap values
+            - 'averaged_currents': Array of averaged current values
+            - 'averaged_vector_potentials': Array of averaged vector potential values
 
+    Examples:
+        # Auto-detect parameter and plot
+        plot_static_observables(timestamp, directory_job_index=0)
+
+        # Plot gap and current vs temperature
+        plot_static_observables(timestamp, directory_job_index=0, parameter='temperature')
+
+        # Plot gap and current vs field amplitude with custom y-limits
+        plot_static_observables(timestamp, directory_job_index=0,
+                               parameter='field_params:amplitude',
+                               ylim_gap=(0, 1.5), ylim_current=(0, 0.5))
+    """
     # Load postprocessed data
     data = load_postprocessed_data(timestamp, directory_job_index, running_machine)
 
-    # Extract averaged observables
+    # Extract data arrays (each job = one point)
     averaged_gaps = data['averaged_gaps']
     averaged_currents = data['averaged_currents']
     averaged_vector_potentials = data['averaged_vector_potentials']
     system_parameters_list = data['system_parameters']
+    field_params_list = data.get('field_params', [{}] * len(system_parameters_list))
 
-    # Extract normalization constants from first job
+    # Auto-detect parameter if not specified
+    if parameter is None:
+        parameter = _auto_detect_parameter(system_parameters_list, field_params_list)
+
+    # Extract X-axis values based on parameter
+    if parameter == 'temperature':
+        # Each job has different temperature
+        x_values = np.array([sp['temperature'] for sp in system_parameters_list])
+        T_c = system_parameters_list[0].get('critical_temperature', 1.0)
+        x_normalized = x_values  # Already in units of T_c
+        xlabel = r'$T/T_c$'
+    elif parameter.startswith('field_params:'):
+        # Extract field parameter
+        key = parameter.split(':', 1)[1]
+        x_values = np.array([fp.get(key, 0) for fp in field_params_list])
+        x_normalized = x_values
+        xlabel = _format_parameter_label(parameter)
+    elif parameter in system_parameters_list[0]:
+        # Extract from system parameters
+        x_values = np.array([sp.get(parameter, 0) for sp in system_parameters_list])
+        x_normalized = x_values
+        xlabel = _format_parameter_label(parameter)
+    else:
+        raise ValueError(f"Unknown parameter: {parameter}")
+
+    # Get normalization constants from first job
     T_c = system_parameters_list[0].get('critical_temperature', 1.0)
     sigma_n = system_parameters_list[0].get('normal_conductivity', 1.0)
 
-    # Normalize vector potential by its maximum value (A_0)
+    # Normalize observables
+    gap_normalized = np.abs(averaged_gaps) / T_c
+
+    # For current normalization, need to handle vector potential scaling
+    # Each job has one A value, so use max across all jobs as A_0
     A_0 = np.max(np.abs(averaged_vector_potentials))
     if A_0 < 1e-12:
         A_0 = 1.0
-
-    A_normalized = averaged_vector_potentials / A_0
-
-    # Normalize gap by T_c
-    gap_normalized = np.abs(averaged_gaps) / T_c
-
-    # Normalize current by sigma_n * A_0 * T_c
     current_normalized = np.abs(averaged_currents) / (sigma_n * A_0 * T_c)
-
-    # Critical current (maximum of normalized current)
-    J_c = np.max(current_normalized)
 
     # Create figure with 2 subplots
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -1157,30 +1196,32 @@ def plot_static_observables(timestamp, directory_job_index=0, parameter=None,
 
     # Get colormap
     cmap = plt.get_cmap(colormap)
-    color = cmap(0.6)  # Single color from colormap
+    color = cmap(0.6)
 
-    # Plot gap vs vector potential (left panel)
-    ax_gap.plot(A_normalized, gap_normalized, marker=marker,
+    # ========== Plot gap vs parameter ==========
+    ax_gap.plot(x_normalized, gap_normalized, marker=marker,
                 color=color, linewidth=3, markersize=8, alpha=0.8)
-    ax_gap.set_xlabel(r'$A/A_0$', fontsize=21)
+    ax_gap.set_xlabel(xlabel, fontsize=21)
     ax_gap.set_ylabel(r'$|\Delta|/T_c$', fontsize=21)
-    ax_gap.set_title(r' mathrm{Gap vs Vector Potential}', fontsize=23)
-    ax_gap.set_xlim(-0.05, 0.825)
+    ax_gap.set_title(r'Gap vs ' + xlabel.strip('$'), fontsize=23)
+    if ylim_gap is not None:
+        ax_gap.set_ylim(ylim_gap)
 
-    # Plot current vs vector potential (right panel)
-    ax_current.plot(A_normalized, current_normalized, marker=marker,
+    # ========== Plot current vs parameter ==========
+    ax_current.plot(x_normalized, current_normalized, marker=marker,
                    color=color, linewidth=3, markersize=8, alpha=0.8)
+    ax_current.set_xlabel(xlabel, fontsize=21)
+    ax_current.set_ylabel(r'$J_s/(\sigma_n A_0 T_c)$', fontsize=21)
+    ax_current.set_title(r'Current vs ' + xlabel.strip('$'), fontsize=23)
+    if ylim_current is not None:
+        ax_current.set_ylim(ylim_current)
 
-    # Add horizontal dotted line at J_c
-    ax_current.axhline(y=J_c, color='gray', linestyle=':', linewidth=2)
-
-    # Add text label for J_c below the line
-    ax_current.text(0.75, J_c * 0.98, r'$J_c$', fontsize=18, verticalalignment='top')
-
-    ax_current.set_xlabel(r'$A/A_0$', fontsize=21)
-    ax_current.set_ylabel(r'$J_s(A)/(\sigma_n A_0 T_c)$', fontsize=21)
-    ax_current.set_title(r' mathrm{Current vs Vector Potential}', fontsize=23)
-    ax_current.set_xlim(-0.05, 0.825)
+    # Add horizontal line at critical current if plotting vs A
+    if not parameter == 'temperature' and not parameter.startswith('field_params'):
+        J_c = np.max(current_normalized)
+        ax_current.axhline(y=J_c, color='gray', linestyle=':', linewidth=2)
+        ax_current.text(0.75 * np.max(x_normalized), J_c * 0.98, r'$J_c$',
+                       fontsize=18, verticalalignment='top')
 
     fig.tight_layout()
 
@@ -1191,7 +1232,9 @@ def plot_static_observables(timestamp, directory_job_index=0, parameter=None,
             save_dir = os.path.join(project_root, 'Figures')
         os.makedirs(save_dir, exist_ok=True)
 
-        save_path = os.path.join(save_dir, f'static_observables_{timestamp}_job{directory_job_index}.svg')
+        # Format filename
+        param_str = parameter.replace(':', '_').replace(' ', '_')
+        save_path = os.path.join(save_dir, f'static_observables_{timestamp}_job{directory_job_index}_vs_{param_str}.svg')
         extended_savefig(fig, save_path, timestamp)
 
     plt.show()
@@ -1261,6 +1304,177 @@ def _format_parameter_label(parameter):
         return r'$' + key + r'$'
     else:
         return r'$' + parameter + r'$'
+
+
+def plot_consistency_checks(timestamp, directory_job_index=0, parameter=None,
+                           save_plot=False, save_dir=None, running_machine='laptop',
+                           colormap='Reds', marker='o', show_total=True, show_components=False,
+                           ylim=None, yscale='log'):
+    """
+    Plot FDT and normalization check errors vs parameter from static postprocessed data.
+
+    Creates a 3-panel plot showing g^R normalization, Keldysh normalization, and FDT errors.
+    Each error is evaluated at the last row [-1, :] and last column [:, -1] position.
+
+    Args:
+        timestamp: Postprocessed timestamp folder (must have 'static' data with consistency checks)
+        directory_job_index: Index of postprocessed result file to load (default 0)
+        parameter: What to plot on X-axis (default None = auto-detect)
+                  - None: Auto-detect which parameter varies across jobs
+                  - 'temperature': X-axis = T/T_c
+                  - 'field_params:amplitude': X-axis = A
+        save_plot: Whether to save plot (default False)
+        save_dir: Directory for plots (default None uses Figures/ in project folder)
+        running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
+        colormap: Colormap name for plot colors (default 'Reds')
+        marker: Marker style (default 'o')
+        show_total: Show total error (sum over all Pauli components) (default True)
+        show_components: Show individual Pauli components (default False)
+        ylim: Tuple (ymin, ymax) for y-axis limits (default None = auto)
+        yscale: Y-axis scale ('log' or 'linear', default 'log')
+
+    Returns:
+        dict: Loaded postprocessed data with consistency check arrays
+
+    Examples:
+        # Plot consistency checks vs temperature (log scale)
+        plot_consistency_checks(timestamp, parameter='temperature')
+
+        # Plot with individual Pauli components visible
+        plot_consistency_checks(timestamp, parameter='temperature',
+                               show_total=True, show_components=True)
+
+        # Linear scale with custom y-limits
+        plot_consistency_checks(timestamp, parameter='field_params:amplitude',
+                               yscale='linear', ylim=(0, 1e-3))
+    """
+    # Load postprocessed data
+    data = load_postprocessed_data(timestamp, directory_job_index, running_machine)
+
+    # Extract consistency check arrays
+    gr_errors = data.get('gr_normalization_errors', None)  # Shape (N_jobs, 4)
+    gk_errors = data.get('gk_normalization_errors', None)  # Shape (N_jobs, 4)
+    fdt_errors = data.get('fdt_errors', None)  # Shape (N_jobs, 4)
+
+    if gr_errors is None or gk_errors is None or fdt_errors is None:
+        raise ValueError("Consistency check data not found. Make sure postprocessor was run with consistency checks enabled.")
+
+    system_parameters_list = data['system_parameters']
+    field_params_list = data.get('field_params', [{}] * len(system_parameters_list))
+
+    # Auto-detect parameter if not specified
+    if parameter is None:
+        parameter = _auto_detect_parameter(system_parameters_list, field_params_list)
+
+    # Extract X-axis values based on parameter
+    if parameter == 'temperature':
+        x_values = np.array([sp['temperature'] for sp in system_parameters_list])
+        T_c = system_parameters_list[0].get('critical_temperature', 1.0)
+        x_normalized = x_values
+        xlabel = r'$T/T_c$'
+    elif parameter.startswith('field_params:'):
+        key = parameter.split(':', 1)[1]
+        x_values = np.array([fp.get(key, 0) for fp in field_params_list])
+        x_normalized = x_values
+        xlabel = _format_parameter_label(parameter)
+    elif parameter in system_parameters_list[0]:
+        x_values = np.array([sp.get(parameter, 0) for sp in system_parameters_list])
+        x_normalized = x_values
+        xlabel = _format_parameter_label(parameter)
+    else:
+        raise ValueError(f"Unknown parameter: {parameter}")
+
+    # Compute total errors (L2 norm over all Pauli components)
+    gr_total = np.sqrt(np.sum(gr_errors**2, axis=1))  # Shape (N_jobs,)
+    gk_total = np.sqrt(np.sum(gk_errors**2, axis=1))  # Shape (N_jobs,)
+    fdt_total = np.sqrt(np.sum(fdt_errors**2, axis=1))  # Shape (N_jobs,)
+
+    # Create figure with 3 subplots
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    ax_gr, ax_gk, ax_fdt = axes
+
+    # Get colormap
+    cmap = plt.get_cmap(colormap)
+    pauli_labels = [r'$\tau_0$', r'$\tau_1$', r'$\tau_2$', r'$\tau_3$']
+    pauli_colors = [cmap(0.3), cmap(0.5), cmap(0.7), cmap(0.9)]
+
+    # ========== Plot g^R normalization errors ==========
+    if show_total:
+        ax_gr.plot(x_normalized, gr_total, marker=marker, color=cmap(0.8),
+                  linewidth=3, markersize=8, alpha=0.9, label='Total', zorder=10)
+    if show_components:
+        for pauli_idx in range(4):
+            ax_gr.plot(x_normalized, gr_errors[:, pauli_idx], marker=marker,
+                      color=pauli_colors[pauli_idx], linewidth=2, markersize=6,
+                      alpha=0.7, label=pauli_labels[pauli_idx], linestyle='--')
+
+    ax_gr.set_xlabel(xlabel, fontsize=21)
+    ax_gr.set_ylabel(r'$g^R$ Normalization Error', fontsize=21)
+    ax_gr.set_title(r'$g^R$ Normalization', fontsize=23)
+    ax_gr.set_yscale(yscale)
+    if ylim is not None:
+        ax_gr.set_ylim(ylim)
+    if show_total and show_components:
+        ax_gr.legend(fontsize=14, framealpha=0.9)
+    ax_gr.grid(True, alpha=0.3)
+
+    # ========== Plot Keldysh normalization errors ==========
+    if show_total:
+        ax_gk.plot(x_normalized, gk_total, marker=marker, color=cmap(0.8),
+                  linewidth=3, markersize=8, alpha=0.9, label='Total', zorder=10)
+    if show_components:
+        for pauli_idx in range(4):
+            ax_gk.plot(x_normalized, gk_errors[:, pauli_idx], marker=marker,
+                      color=pauli_colors[pauli_idx], linewidth=2, markersize=6,
+                      alpha=0.7, label=pauli_labels[pauli_idx], linestyle='--')
+
+    ax_gk.set_xlabel(xlabel, fontsize=21)
+    ax_gk.set_ylabel(r'$g^K$ Normalization Error', fontsize=21)
+    ax_gk.set_title(r'Keldysh Normalization', fontsize=23)
+    ax_gk.set_yscale(yscale)
+    if ylim is not None:
+        ax_gk.set_ylim(ylim)
+    if show_total and show_components:
+        ax_gk.legend(fontsize=14, framealpha=0.9)
+    ax_gk.grid(True, alpha=0.3)
+
+    # ========== Plot FDT errors ==========
+    if show_total:
+        ax_fdt.plot(x_normalized, fdt_total, marker=marker, color=cmap(0.8),
+                   linewidth=3, markersize=8, alpha=0.9, label='Total', zorder=10)
+    if show_components:
+        for pauli_idx in range(4):
+            ax_fdt.plot(x_normalized, fdt_errors[:, pauli_idx], marker=marker,
+                       color=pauli_colors[pauli_idx], linewidth=2, markersize=6,
+                       alpha=0.7, label=pauli_labels[pauli_idx], linestyle='--')
+
+    ax_fdt.set_xlabel(xlabel, fontsize=21)
+    ax_fdt.set_ylabel(r'FDT Error', fontsize=21)
+    ax_fdt.set_title(r'Fluctuation-Dissipation', fontsize=23)
+    ax_fdt.set_yscale(yscale)
+    if ylim is not None:
+        ax_fdt.set_ylim(ylim)
+    if show_total and show_components:
+        ax_fdt.legend(fontsize=14, framealpha=0.9)
+    ax_fdt.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    # Set up save directory if needed
+    if save_plot:
+        if save_dir is None:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            save_dir = os.path.join(project_root, 'Figures')
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Format filename
+        param_str = parameter.replace(':', '_').replace(' ', '_')
+        save_path = os.path.join(save_dir, f'consistency_checks_{timestamp}_job{directory_job_index}_vs_{param_str}.svg')
+        extended_savefig(fig, save_path, timestamp)
+
+    plt.show()
+
+    return data
 
 
 def plot_xy_data(x_data_list, y_data_list, label_list=None,

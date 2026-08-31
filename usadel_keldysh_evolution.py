@@ -199,17 +199,6 @@ class UsadelKeldyshEvolution:
         grid_params_with_omega['omega_grid'] = self.omega_grid
         grid_params_with_omega['energy_cutoff'] = self.energy_cutoff
 
-        # Print frequency information
-        print(f"\n{'='*60}")
-        print(f"Frequency Grid Information:")
-        print(f"{'='*60}")
-        print(f"  Maximum frequency (ω_max): {np.max(self.omega_grid):.6f}")
-        print(f"  Minimum frequency (ω_min): {np.min(self.omega_grid):.6f}")
-        print(f"  Energy cutoff (Nyquist):   {self.energy_cutoff:.6f}")
-        print(f"  Frequency spacing (dω):    {self.d_omega:.6f}")
-        print(f"  Number of frequency points: {len(self.omega_grid)}")
-        print(f"{'='*60}\n")
-
         equilibrium_solver = EquilibriumSolver(
             grid_params_with_omega,
             self.system_parameters,
@@ -230,11 +219,6 @@ class UsadelKeldyshEvolution:
         f_eq = equilibrium_solver._get_thermal_occupation(self.temperature)
         equilibrium_current = equilibrium_solver.usadel_solver._get_current(gr_eq, f_eq, Q)
 
-        print(f"\nEquilibrium observables:")
-        print(f"  Gap (Δ₀): {equilibrium_solver.gap_0:.6f}")
-        print(f"  Current (J₀): {equilibrium_current:.6f}")
-        print(f"  Vector potential (Q): {Q:.6f}")
-
         # Transform to two-time representation (returns only t,t' < 0)
         gr_two_time, gk_two_time, gr_tau, gk_tau = equilibrium_solver.fourier_transform_to_two_time(gr_eq, gk_eq)
 
@@ -251,6 +235,8 @@ class UsadelKeldyshEvolution:
         )
 
         return initial_state, gr_tau, gk_tau, equilibrium_current
+
+    # ========== Thermal Occupations and integrals ========== #TODO: check these collectively for precision
 
     def get_thermal_occupation(self, temperature):
         """
@@ -426,12 +412,13 @@ class UsadelKeldyshEvolution:
         self.thermal_sum_left = NambuKeldyshTensor(np.append(f_sum_right_minus.data[0,0], f_sum_right.data[0,0], axis=0), pauli_channel=0)
         self.thermal_sum_right = NambuKeldyshTensor(np.append(f_sum_left_minus.data[0,0], f_sum_left.data[0,0], axis=0), pauli_channel=0)
 
+    # ========== CN implementation of the operators from continous to discrete space ========== #TODO: check by comparing with the note -- make them consistent
+
     def construct_discrete_operators(self, terms_dict, state, gap_tensor, g_type = 'r', additional_shift_index = 0):
-        #* function assumes that all the terms depending on left time are computed for the current computation time (t,t)
-        #* assumes g_matrix last element is (t-dt,t-dt)
+        #* function assumes that all the terms are computed for the current computation time (t,t)
+        #* assumes state last element is (t-dt,t-dt), which is true by default
         #* to capture the last element, we will have to add some corrections to the last element, so the output should also have an additional, diagonal_transpose output
         #* in the evolution the diagonal_transpose_output shuold be used with final solution. basically take all the terms that have gk_last_row (t-dt,t') that gets zeroed out 
-        #* then the extra term should be computed using this. simplest to do using AI to generate the diagonal_gk_correction_terms
         
         """
         Construct discrete Crank-Nicolson operators from Type classifications.
@@ -595,6 +582,7 @@ class UsadelKeldyshEvolution:
                 v_old_contribution = cn_factor * l_operator[-2] * (g_last_row.shift(-1, axis=1) + g_last_row.shift(shift_index - 1, axis=1))
                 
                 #* diagonal gk contribution since reffering to g shifted by -1 
+
                 diagonal_term_factor_list.append((cn_factor * l_operator[-2], tau0))
 
                 if rhs_vector is None:
@@ -923,15 +911,11 @@ class UsadelKeldyshEvolution:
 
         return (left_matrix, right_matrix, rhs_vector, rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices, diagonal_term_factor_list, diagonal_term_history_list)
 
+    # ========== Constraint equations  ==========  #TODO: check
+
     def get_gr_constraint(self, state, gap_tensor):
         """
         Construct operators for retarded normalization constraint using MIDPOINT RULE.
-
-        Constraint equation (tex lines 1229-1231):
-        δt·Σ(t''=t'+δt to t-δt) g'^R(t,t'')·g'^R(t'',t')
-          + τ₃·g'^R(t,t') + g'^R(t,t')·τ₃
-          - δt·Δ(t)·g'^R(t,t') - δt·g'^R(t,t')·Δ(t') = 0
-
         Args:
             state: StateObject containing g^R data
             gap_tensor: Gap function as NambuKeldyshTensor
@@ -978,12 +962,6 @@ class UsadelKeldyshEvolution:
     def get_gk_constraint(self, state, gap_tensor):
         """
         Construct operators for Keldysh constraint equation using MIDPOINT RULE.
-
-        Constraint equation (tex lines 1263-1268):
-        δt·Σ(t''=-∞ to t-δt) g'^R(t,t'')·g'^K(t'',t')
-          + δt·Σ(t''=-∞ to t'-δt) g'^K(t,t'')·g'^A(t'',t')
-          + [τ₃, g'^K(t,t')] = δt·[Δ(t)·g'^K(t,t') + g'^K(t,t')·Δ(t')]
-
         Args:
             state: StateObject containing g^R and g^K data
             gap_tensor: Gap function as NambuKeldyshTensor
@@ -1012,13 +990,11 @@ class UsadelKeldyshEvolution:
         # Term 1: δt·Σ g'^R(t,t'')·g'^K(t'',t') from t''=-∞ to t-δt
         gr_last_row = gr[-1:, :]
         gk_full = gk
-        #* this assumes that gr_last_row has correct time index and not shifted t' index, midpoint rule automatically applied
-        #? PARTIAL FIX: Added first endpoint (t_init) correction with 0.5 factor
-        #? STILL MISSING: Last endpoint (t-δt) correction - should also subtract 0.5*dt*gr[-1,-1]*gk[-1,:].shift(-1)
-        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:].shift(-1, axis = 1)) + self.delta_t * 0.5 * gr_last_row[:,0:1] * gk_full[0:1,:].shift(-1, axis = 1)
-        #? WARNING: diagonal history term uses uniform dt weight without endpoint corrections
-        #? This term is used in generalized_g_update_rule for diagonal element - may cause O(Δt) error
-        diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)]
+        #* this assumes that gr_last_row has correct time index and not shifted t' index, midpoint rule automatically applied since its the other edge term which has gap/2
+        #? Added first endpoint (t_init) correction with 0.5 factor -- for now commented out, since should be zero anyway
+        rhs_term_1 = -self.delta_t * (gr_last_row[:,:-1] @ gk_full[1:].shift(-1, axis = 1)) #+ self.delta_t * 0.5 * gr_last_row[:,0:1] * gk_full[0:1,:].shift(-1, axis = 1)
+        #? diagonal history term uses uniform dt weight without endpoint corrections
+        diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)] 
 
         rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:]) + gr_last_row.precise_convolution_left(self.thermal_dist, self.thermal_integral[-1:,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1:,:]) * tau3)
         rhs_vector = rhs_term_1 
@@ -1026,9 +1002,6 @@ class UsadelKeldyshEvolution:
         # Term 2: δt·Σ g'^K(t,t'')·g'^A(t'',t') from t''=-∞ to t'-δt
         # This convolution is handled via history list: (tau0 * gk_current) @ ga
         #* this ga is now in good frame
-        #? Missing endpoint corrections: This uses uniform dt weight via @ operator
-        #? Integration is from t''=-∞ to t'-δt with variable upper limit (depends on t')
-        #? Should use proper endpoint weights: 0.5 at t_init and 0.5 at diagonal ga(t',t')
         rhs_vector_history_list = [(-tau0 , ga * self.delta_t)]
         # No diagonal coupling terms
         rhs_vector_factor_list = []
@@ -1038,9 +1011,10 @@ class UsadelKeldyshEvolution:
 
         return (left_matrix, right_matrix, rhs_vector, rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices, diag_g_factor_list, diag_g_history_list)
 
-    # ========== Real-Time Evolution ==========
+    # ========== Computation of new gr by matrix inversion ========== 
 
     def generalized_g_update_rule(self, g_type, diagonal_entry, left_matrix_1, left_matrix_2, right_matrix_1, right_matrix_2, rhs_vector_1, rhs_vector_2, rhs_vector_history_1_list, rhs_vector_history_2_list,rhs_vector_factor_1_list, rhs_vector_factor_2_list, g_sandwich_matrices = [], diagonal_term_factor_1_list=[], diagonal_term_factor_2_list=[], diagonal_term_history_1_list=[], diagonal_term_history_2_list=[]):
+        
         if g_type == 'r':
             trace_index_list = [1,2,3,0]
             loop_start = self.ntpoints - 2
@@ -1048,6 +1022,7 @@ class UsadelKeldyshEvolution:
             loop_step = -1
             solution_tensor_index = 0
             solution_tensor = diagonal_entry * NambuKeldyshTensor([1.0], pauli_channel=0)
+
         elif g_type == 'k':
             trace_index_list = [0,3,1,2]
             loop_start = 0
@@ -1063,6 +1038,7 @@ class UsadelKeldyshEvolution:
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
         tau_vector = [tau0, tau1, tau2, tau3]
 
+        #* Using cyclicity of trace
         matrix_row_1 = (tau_vector[trace_index_list[0]] * left_matrix_1 + right_matrix_1 * tau_vector[trace_index_list[0]])
         matrix_row_2 = (tau_vector[trace_index_list[1]] * left_matrix_1 + right_matrix_1 * tau_vector[trace_index_list[1]])
         #Normalization constraint rows: τ₃, τ₀ traces
@@ -1087,10 +1063,8 @@ class UsadelKeldyshEvolution:
 
         #========== Backward sweep: t'=0 → -T_max ==========
         #* Main idea: we are actually computing a new element at time-1 and we should appropriately take into account of all the elements
-        #* smallest error is given by a weird condition, this has to be understood better
         #* computing g(t,t') given all matrices and convolutions are defined w.r.t. (t,t') themselves.
         for time in range(loop_start, loop_end, loop_step):
-
             previous_solution = solution_tensor[solution_tensor_index]
             convolution_term_1 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
             convolution_term_2 = NambuKeldyshTensor(np.zeros((2,2)), pauli_channel=None)
@@ -1098,7 +1072,7 @@ class UsadelKeldyshEvolution:
             for terms in rhs_vector_factor_1_list:
                 left_term = terms[0]
                 right_term = terms[1]   
-                convolution_term_1 += (left_term * previous_solution * right_term[time])
+                convolution_term_1 += (left_term * previous_solution * right_term[time]) 
             
             for terms in rhs_vector_factor_2_list:
                 left_term = terms[0]
@@ -1111,39 +1085,28 @@ class UsadelKeldyshEvolution:
                     right_term = terms[1]
                     if g_type == 'r':
                         #* last element in right_term corresponds to time t actually so it should be summed with solution tensor last element
-                        #? Missing endpoint corrections: @ operator uses uniform weight for all points
-                        #? right_term already has dt factor from line 880, so @ gives: dt * sum(...)
-                        #? For midpoint rule need: dt * (0.5*first + interior + 0.5*last)
-                        #? Current: uses time+1:-1 to skip endpoints but doesn't apply 0.5 weight
                         convolution_term_1 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time]
                     elif g_type == 'k':
                         #* note, last right term is actually time t as last time index and last solution tensor is that as well?
                         #* the sum goes until time which means last element is t'-dt' which it should be summed fulled last one is giving the diagonal
                         if time != loop_end - loop_step:
                             #* in principle first solution corresponds to t, last time is n_points which ends with t-dt, as it should
-                            #? Missing endpoint corrections: @ operator uses uniform weight
-                            #? Integrating from t''=t_init to t''=t'-δt with variable upper limit
-                            #? Should apply 0.5 weight to first point (t_init) and last point (diagonal)
                             convolution_term_1 += (left_term * solution_tensor[1:]) @ right_term[:time, time] 
 
                 for terms in rhs_vector_history_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
                     if g_type == 'r':
-                        #? Missing endpoint corrections: Same issue as history_1 for g^R constraint
-                        #? Uses uniform dt weight from line 880, should apply 0.5 to endpoints
                         convolution_term_2 += (left_term * solution_tensor[:-1]) @ right_term[time+1:-1, time]
                     elif g_type == 'k':
                         if time != loop_end - loop_step:
                         #* in principle first solution corresponds to t, last time is n_points which ends with t-dt, as it should
-                            #? Missing endpoint corrections: Same issue as history_1 for g^K constraint (line 940)
-                            #? This is the gk @ ga convolution with variable upper limit at t'
-                            #? Should apply 0.5*dt to t_init and 0.5*dt to ga.diagonal_time()
                             convolution_term_2 += (left_term * solution_tensor[1:]) @ right_term[:time, time]
 
             # ========== Diagonal correction for g^K ==========
             # Apply boundary terms that were zeroed by g_last_row.shift(-1, axis=1)
             # Only applies when computing diagonal element: time == loop_end - loop_step
+            
             if g_type == 'k' and time == loop_end - loop_step:
                 # For g^K: loop_end=ntpoints, loop_step=1, so diagonal at time=ntpoints-1
                 # diagonal_entry holds g^K(t-δt, t-δt) which is the needed boundary value
@@ -1151,7 +1114,7 @@ class UsadelKeldyshEvolution:
                     left_term = terms[0]
                     right_term = terms[1]
                     # Pattern: left_term * g_diagonal_current * right_term[time]
-                    convolution_term_1 += left_term *  previous_solution.involution() * right_term
+                    convolution_term_1 += left_term * previous_solution.involution() * right_term
 
                 for terms in diagonal_term_factor_2_list:
                     left_term = terms[0]
@@ -1163,17 +1126,12 @@ class UsadelKeldyshEvolution:
                 for terms in diagonal_term_history_1_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    #? Missing endpoint corrections: Uses @ with uniform weights
-                    #? left_term[-1,:-1] already has dt factor, @ applies uniform sum
-                    #? For midpoint rule: 0.5 weight at first and last points of convolution
                     convolution_term_1 += left_term[-1,:-1] @ (solution_tensor[1:].involution() * right_term)
 
                 for terms in diagonal_term_history_2_list:
                     left_term = terms[0]
                     right_term = terms[1]
-                    #? Missing endpoint corrections: Same as diagonal_term_history_1
-                    #? This comes from constraint equation (line 932 diag_g_history_list)
-                    convolution_term_2 += left_term[-1,:-1] @ (solution_tensor[1:].involution()* right_term)
+                    convolution_term_2 += left_term[-1,:-1] @ (solution_tensor[1:].involution() * right_term)
 
             total_matrix =  np.array([matrix_row_1[:, time],matrix_row_2[:, time],matrix_row_3[:, time],matrix_row_4[:, time]]) 
             #print('total_matrix',total_matrix.shape)
@@ -1192,9 +1150,12 @@ class UsadelKeldyshEvolution:
         #* extra append for the element that will be removed anyways
         if g_type == 'r':
             solution_tensor.append([0,0,0,0])
+            #* diagonal is handled separately for historical reasons, can be changed in the future
             return solution_tensor[:-1]
         elif g_type == 'k':
             return solution_tensor
+
+    # ========== Update rules for gr and gk ========== #TODO: check everything is consistent even in A = 0 case
 
     def _compute_new_gr_row(self, state, A_history=None):
         """
@@ -1214,7 +1175,7 @@ class UsadelKeldyshEvolution:
         Called by:
             - _evolve_state_by_one_timestep()
         """
-        # ========== 1. Extract physics parameters ==========
+        # ========== 1. Extract parameters ==========
 
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
@@ -1232,7 +1193,7 @@ class UsadelKeldyshEvolution:
 
         expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
 
-        # ========== 2. Boundary condition ==========
+        # ========== 2. Impose boundary condition for gr ==========
         gr_diagonal_new = -gap_tensor[-1]
 
         # ========== 3. Build evolution equation via Type classification ==========
@@ -1248,8 +1209,11 @@ class UsadelKeldyshEvolution:
             'type8_em_cross': {'L': +1j * A_tensor * tau3, 'R': A_tensor},
             'type8_em_cross2': {'L': -1j * A_tensor, 'R': A_tensor * tau3},
             'type5_em_1': {'L': 1j * A_tensor * tau3,'M': A_tensor * tau3, 'R': expansion_tensor},
-             'type5_em_2': {'L': -1j *expansion_tensor,'M': A_tensor * tau3,'R': A_tensor * tau3}
+            'type5_em_2': {'L': -1j *expansion_tensor,'M': A_tensor * tau3,'R': A_tensor * tau3}
             }  
+
+        #TODO: EM Terms can also be packaged as a self-energy but internal to the system
+        #TODO: This is where the evolution terms list can be expanded with the self-energy terms dictionary! For every self-energy term expand the dictionary
 
         L1, R1, V1, Vhist1, Vfact1, sandwich1, diag_factor_list, diag_hist_list =  self.construct_discrete_operators(evolution_terms, state, gap_tensor, g_type='r')
 
@@ -1368,16 +1332,18 @@ class UsadelKeldyshEvolution:
         Vfact1.append((-(1j/2) * tau3, tau0 * expansion_tensor))
         Vfact1.append((tau0, (1j/2) * tau3 * expansion_tensor))
 
+        #? An error was flashed here, this has to be investigated -- careful because everyone has to be shifted by -1, but then the ones from t'-dt dont get shifted    
         v_old_deriv = ((1j/2) * tau3 * gk_last_row.shift(-1, axis=1) - (1j/2) * gk_last_row.shift(-1, axis=1) * tau3
                        + (1j/2) * tau3 * gk_last_row + (1j/2) * gk_last_row * tau3)
 
-        diag_factor_list_1 += [((-1j/2) * tau3, tau0), (tau0, +(1j/2) * tau3)]
+        #* Changed the signs of terms on 31/08/26 because I think it should mimic the v_old_deriv not the vfact1! the one that got shifted
+        diag_factor_list_1 += [((1j/2) * tau3, tau0), (tau0, -(1j/2) * tau3)]
 
         V1 = V1 + v_old_deriv
 
         # ========== 4. Compute and add ALL source terms to V1 ==========
 
-        # ---------- 4.1: Thermal collision integrals and  Gap-F coupling----------
+        # ---------- 4.1: Thermal collision integrals and  Gap-F coupling---------- #TODO: check this still, affects equilibrium!
         cn_factor = 1/4 * self.delta_t
         thermal_term = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
 
@@ -1425,10 +1391,15 @@ class UsadelKeldyshEvolution:
             V1 = V1 + em_thermal_conv1
 
         # ========== 5. Build Keldysh constraint operators ==========
+
+        #TODO: This is where the evolution terms list can be expanded with the self-energy terms dictionary! For every self-energy term expand the dictionary
+        #TODO: EM Terms can also be packaged as a self-energy but internal to the system. 
+
+
         L2, R2, V2, Vhist2, Vfact2, sandwich2, diag_factor_list_2, diag_hist_list_2 = self.get_gk_constraint(state, gap_tensor)
 
         # ========== 6. Call unified solver with diagonal corrections ==========
-        #? extrapolate from diagonal entries by continuity equation?
+        #? extrapolate from diagonal entries by continuity equation? -- likely source of error? here its not zero but elsewhere we treat it as zero?
         gk_boundary = ( 2 * state.gk[-1, 0] - state.gk[-2, 0]) # g^K(t, -infty)
 
         gk_new = self.generalized_g_update_rule( g_type='k',diagonal_entry=gk_boundary, left_matrix_1=L1, left_matrix_2=L2,right_matrix_1=R1, right_matrix_2=R2,
@@ -1438,9 +1409,10 @@ class UsadelKeldyshEvolution:
 
         # Extract diagonal element from unified result
         gk_diagonal_new = gk_new[-1]
-        #! overrides diagonal gk update to test if regularization is wrong somehow?
         #gk_diagonal_new = state.gk[-1,-1]
         return gk_new[:-1], gk_diagonal_new
+
+    # ========== Updating the state ==========
 
     def _evolve_state_by_one_timestep(self, state, A_external=None):
         """
@@ -1579,6 +1551,8 @@ class UsadelKeldyshEvolution:
             new_vector_potential = np.append(old_vector_potential[1:], rhs)
 
             return new_vector_potential
+
+    # ========== Real-time evolution ==========
 
     def real_time_evolution(self, initial_state, num_timesteps, driving_field=None, circuit_params=None, track_occupations=False):
         """

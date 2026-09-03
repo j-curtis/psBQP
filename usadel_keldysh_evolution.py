@@ -1300,7 +1300,7 @@ class UsadelKeldyshEvolution:
         expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
 
         # ========== 1.5: Build Type 3 and Type 4 Electromagnetic Operators ==========
-       
+        
         # ========== 2. Build evolution equation via Type classification ==========
         # NOTE: delta_t factor is applied later in construct_discrete_operators
         evolution_terms = {
@@ -1332,7 +1332,7 @@ class UsadelKeldyshEvolution:
         Vfact1.append((-(1j/2) * tau3, tau0 * expansion_tensor))
         Vfact1.append((tau0, (1j/2) * tau3 * expansion_tensor))
 
-        #? An error was flashed here, this has to be investigated -- careful because everyone has to be shifted by -1, but then the ones from t'-dt dont get shifted    
+        #? Every term has to be shifted by -1, but then the ones from t'-dt dont get shifted    
         v_old_deriv = ((1j/2) * tau3 * gk_last_row.shift(-1, axis=1) - (1j/2) * gk_last_row.shift(-1, axis=1) * tau3
                        + (1j/2) * tau3 * gk_last_row + (1j/2) * gk_last_row * tau3)
 
@@ -1400,7 +1400,7 @@ class UsadelKeldyshEvolution:
 
         # ========== 6. Call unified solver with diagonal corrections ==========
         #? extrapolate from diagonal entries by continuity equation? -- likely source of error? here its not zero but elsewhere we treat it as zero?
-        gk_boundary = ( 2 * state.gk[-1, 0] - state.gk[-2, 0]) # g^K(t, -infty)
+        gk_boundary = ( 2 * state.gk[-1, 0] - state.gk[-2, 0]) * 0 # g^K(t, -infty)
 
         gk_new = self.generalized_g_update_rule( g_type='k',diagonal_entry=gk_boundary, left_matrix_1=L1, left_matrix_2=L2,right_matrix_1=R1, right_matrix_2=R2,
             rhs_vector_1=V1, rhs_vector_2=V2, rhs_vector_history_1_list=Vhist1, rhs_vector_history_2_list=Vhist2, rhs_vector_factor_1_list=Vfact1,

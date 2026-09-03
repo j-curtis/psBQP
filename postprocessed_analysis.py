@@ -474,7 +474,7 @@ def plot_spectral_signatures(timestamp, directory_job_index=0, plot_jobs=None,
             # Configure axes - Row 0 (Vector Potential)
             axes[0, 0].set_xlabel(r'$t \cdot T_c$', fontsize=21)
             axes[0, 0].set_ylabel(r'$A(t)$', fontsize=21)
-            axes[0, 0].set_title(r'Vector Potential', fontsize=23)
+            axes[0, 0].set_title(r'Vector Potential', fontsize=23) 
             axes[0, 0].legend(fontsize=13)
             if ylim is not None:
                 axes[0, 0].set_ylim(ylim)
@@ -1125,9 +1125,13 @@ def plot_static_observables(timestamp, directory_job_index=0, parameter=None,
         dict: Loaded postprocessed data with keys:
             - 'system_parameters': List of system parameter dicts (one per job)
             - 'field_params': List of field parameter dicts (one per job)
+            - 'grid_parameters': List of grid parameter dicts (one per job)
             - 'averaged_gaps': Array of averaged gap values
             - 'averaged_currents': Array of averaged current values
             - 'averaged_vector_potentials': Array of averaged vector potential values
+            - 'gr_normalization_errors': Array (N_jobs, 4) of g^R normalization errors
+            - 'gk_normalization_errors': Array (N_jobs, 4) of Keldysh normalization errors
+            - 'fdt_errors': Array (N_jobs, 4) of FDT errors
 
     Examples:
         # Auto-detect parameter and plot
@@ -1314,35 +1318,58 @@ def plot_consistency_checks(timestamp, directory_job_index=0, parameter=None,
     Plot FDT and normalization check errors vs parameter from static postprocessed data.
 
     Creates a 3-panel plot showing g^R normalization, Keldysh normalization, and FDT errors.
-    Each error is evaluated at the last row [-1, :] and last column [:, -1] position.
+    Each error is evaluated at position (t=-1, t'=-1) in the Green's function matrices.
+
+    What is plotted:
+        - X-axis: Varying parameter across jobs (e.g., temperature, field amplitude)
+        - Y-axis (when show_total=True):
+            * Black line "L2 norm": sqrt(sum of |error_pauli|^2) over all 4 Pauli components
+            * Red line "Sum |τᵢ|": sum of |error_pauli| over all 4 Pauli components (L1 norm)
+            * Light red line "Max |τᵢ|": max of |error_pauli| over all 4 Pauli components
+        - Y-axis (when show_components=True): |error_pauli| for each of τ₀, τ₁, τ₂, τ₃
+        - Each point = one job at one parameter value
+        - Errors extracted from position (t=-1, t'=-1): g^R/g^K/FDT[-1, -1]
 
     Args:
         timestamp: Postprocessed timestamp folder (must have 'static' data with consistency checks)
         directory_job_index: Index of postprocessed result file to load (default 0)
         parameter: What to plot on X-axis (default None = auto-detect)
                   - None: Auto-detect which parameter varies across jobs
-                  - 'temperature': X-axis = T/T_c
-                  - 'field_params:amplitude': X-axis = A
+                  - 'temperature': X-axis = T/T_c (each job = different temperature)
+                  - 'field_params:amplitude': X-axis = A (each job = different amplitude)
         save_plot: Whether to save plot (default False)
         save_dir: Directory for plots (default None uses Figures/ in project folder)
         running_machine: Machine type for data loading ('laptop' or 'cluster_euler')
         colormap: Colormap name for plot colors (default 'Reds')
         marker: Marker style (default 'o')
-        show_total: Show total error (sum over all Pauli components) (default True)
-        show_components: Show individual Pauli components (default False)
+        show_total: Show summary metrics (L2 norm, sum, max over all Pauli components) (default True)
+        show_components: Show individual Pauli component absolute values (default False)
         ylim: Tuple (ymin, ymax) for y-axis limits (default None = auto)
         yscale: Y-axis scale ('log' or 'linear', default 'log')
 
     Returns:
-        dict: Loaded postprocessed data with consistency check arrays
+        dict: Loaded postprocessed data with keys:
+            - 'system_parameters': List of system parameter dicts (one per job)
+            - 'field_params': List of field parameter dicts (one per job)
+            - 'grid_parameters': List of grid parameter dicts (one per job)
+            - 'averaged_gaps': Array of averaged gap values
+            - 'averaged_currents': Array of averaged current values
+            - 'averaged_vector_potentials': Array of averaged vector potential values
+            - 'gr_normalization_errors': Array (N_jobs, 4) of g^R normalization errors
+            - 'gk_normalization_errors': Array (N_jobs, 4) of Keldysh normalization errors
+            - 'fdt_errors': Array (N_jobs, 4) of FDT errors
 
     Examples:
-        # Plot consistency checks vs temperature (log scale)
+        # Plot all three summary metrics vs temperature (log scale)
         plot_consistency_checks(timestamp, parameter='temperature')
 
-        # Plot with individual Pauli components visible
+        # Plot summary metrics + individual Pauli components
         plot_consistency_checks(timestamp, parameter='temperature',
                                show_total=True, show_components=True)
+
+        # Only show individual Pauli components, no summary metrics
+        plot_consistency_checks(timestamp, parameter='temperature',
+                               show_total=False, show_components=True)
 
         # Linear scale with custom y-limits
         plot_consistency_checks(timestamp, parameter='field_params:amplitude',
@@ -1384,10 +1411,26 @@ def plot_consistency_checks(timestamp, directory_job_index=0, parameter=None,
     else:
         raise ValueError(f"Unknown parameter: {parameter}")
 
-    # Compute total errors (L2 norm over all Pauli components)
-    gr_total = np.sqrt(np.sum(gr_errors**2, axis=1))  # Shape (N_jobs,)
-    gk_total = np.sqrt(np.sum(gk_errors**2, axis=1))  # Shape (N_jobs,)
-    fdt_total = np.sqrt(np.sum(fdt_errors**2, axis=1))  # Shape (N_jobs,)
+    # Compute error metrics over all Pauli components
+    # Take absolute value first to handle complex Pauli components
+    gr_abs = np.abs(gr_errors)  # Shape (N_jobs, 4)
+    gk_abs = np.abs(gk_errors)  # Shape (N_jobs, 4)
+    fdt_abs = np.abs(fdt_errors)  # Shape (N_jobs, 4)
+
+    # L2 norm (Euclidean norm)
+    gr_l2 = np.sqrt(np.sum(gr_abs**2, axis=1))  # Shape (N_jobs,)
+    gk_l2 = np.sqrt(np.sum(gk_abs**2, axis=1))
+    fdt_l2 = np.sqrt(np.sum(fdt_abs**2, axis=1))
+
+    # L1 norm (sum of absolute values)
+    gr_sum = np.sum(gr_abs, axis=1)  # Shape (N_jobs,)
+    gk_sum = np.sum(gk_abs, axis=1)
+    fdt_sum = np.sum(fdt_abs, axis=1)
+
+    # Max absolute error across all Pauli components
+    gr_max = np.max(gr_abs, axis=1)  # Shape (N_jobs,)
+    gk_max = np.max(gk_abs, axis=1)
+    fdt_max = np.max(fdt_abs, axis=1)
 
     # Create figure with 3 subplots
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -1400,13 +1443,17 @@ def plot_consistency_checks(timestamp, directory_job_index=0, parameter=None,
 
     # ========== Plot g^R normalization errors ==========
     if show_total:
-        ax_gr.plot(x_normalized, gr_total, marker=marker, color=cmap(0.8),
-                  linewidth=3, markersize=8, alpha=0.9, label='Total', zorder=10)
+        ax_gr.plot(x_normalized, gr_l2, marker=marker, color='black',
+                  linewidth=3, markersize=8, alpha=0.9, label=r'L2 norm', zorder=10)
+        ax_gr.plot(x_normalized, gr_sum, marker=marker, color=cmap(0.6),
+                  linewidth=2.5, markersize=7, alpha=0.8, label=r'Sum $|\tau_i|$', zorder=9)
+        ax_gr.plot(x_normalized, gr_max, marker=marker, color=cmap(0.8),
+                  linewidth=2.5, markersize=7, alpha=0.8, label=r'Max $|\tau_i|$', zorder=9)
     if show_components:
         for pauli_idx in range(4):
-            ax_gr.plot(x_normalized, gr_errors[:, pauli_idx], marker=marker,
-                      color=pauli_colors[pauli_idx], linewidth=2, markersize=6,
-                      alpha=0.7, label=pauli_labels[pauli_idx], linestyle='--')
+            ax_gr.plot(x_normalized, gr_abs[:, pauli_idx], marker=marker,
+                      color=pauli_colors[pauli_idx], linewidth=1.5, markersize=5,
+                      alpha=0.6, label=pauli_labels[pauli_idx], linestyle='--')
 
     ax_gr.set_xlabel(xlabel, fontsize=21)
     ax_gr.set_ylabel(r'$g^R$ Normalization Error', fontsize=21)
@@ -1414,19 +1461,23 @@ def plot_consistency_checks(timestamp, directory_job_index=0, parameter=None,
     ax_gr.set_yscale(yscale)
     if ylim is not None:
         ax_gr.set_ylim(ylim)
-    if show_total and show_components:
-        ax_gr.legend(fontsize=14, framealpha=0.9)
+    if show_total or show_components:
+        ax_gr.legend(fontsize=12, framealpha=0.9, loc='best')
     ax_gr.grid(True, alpha=0.3)
 
     # ========== Plot Keldysh normalization errors ==========
     if show_total:
-        ax_gk.plot(x_normalized, gk_total, marker=marker, color=cmap(0.8),
-                  linewidth=3, markersize=8, alpha=0.9, label='Total', zorder=10)
+        ax_gk.plot(x_normalized, gk_l2, marker=marker, color='black',
+                  linewidth=3, markersize=8, alpha=0.9, label=r'L2 norm', zorder=10)
+        ax_gk.plot(x_normalized, gk_sum, marker=marker, color=cmap(0.6),
+                  linewidth=2.5, markersize=7, alpha=0.8, label=r'Sum $|\tau_i|$', zorder=9)
+        ax_gk.plot(x_normalized, gk_max, marker=marker, color=cmap(0.8),
+                  linewidth=2.5, markersize=7, alpha=0.8, label=r'Max $|\tau_i|$', zorder=9)
     if show_components:
         for pauli_idx in range(4):
-            ax_gk.plot(x_normalized, gk_errors[:, pauli_idx], marker=marker,
-                      color=pauli_colors[pauli_idx], linewidth=2, markersize=6,
-                      alpha=0.7, label=pauli_labels[pauli_idx], linestyle='--')
+            ax_gk.plot(x_normalized, gk_abs[:, pauli_idx], marker=marker,
+                      color=pauli_colors[pauli_idx], linewidth=1.5, markersize=5,
+                      alpha=0.6, label=pauli_labels[pauli_idx], linestyle='--')
 
     ax_gk.set_xlabel(xlabel, fontsize=21)
     ax_gk.set_ylabel(r'$g^K$ Normalization Error', fontsize=21)
@@ -1434,19 +1485,23 @@ def plot_consistency_checks(timestamp, directory_job_index=0, parameter=None,
     ax_gk.set_yscale(yscale)
     if ylim is not None:
         ax_gk.set_ylim(ylim)
-    if show_total and show_components:
-        ax_gk.legend(fontsize=14, framealpha=0.9)
+    if show_total or show_components:
+        ax_gk.legend(fontsize=12, framealpha=0.9, loc='best')
     ax_gk.grid(True, alpha=0.3)
 
     # ========== Plot FDT errors ==========
     if show_total:
-        ax_fdt.plot(x_normalized, fdt_total, marker=marker, color=cmap(0.8),
-                   linewidth=3, markersize=8, alpha=0.9, label='Total', zorder=10)
+        ax_fdt.plot(x_normalized, fdt_l2, marker=marker, color='black',
+                   linewidth=3, markersize=8, alpha=0.9, label=r'L2 norm', zorder=10)
+        ax_fdt.plot(x_normalized, fdt_sum, marker=marker, color=cmap(0.6),
+                   linewidth=2.5, markersize=7, alpha=0.8, label=r'Sum $|\tau_i|$', zorder=9)
+        ax_fdt.plot(x_normalized, fdt_max, marker=marker, color=cmap(0.8),
+                   linewidth=2.5, markersize=7, alpha=0.8, label=r'Max $|\tau_i|$', zorder=9)
     if show_components:
         for pauli_idx in range(4):
-            ax_fdt.plot(x_normalized, fdt_errors[:, pauli_idx], marker=marker,
-                       color=pauli_colors[pauli_idx], linewidth=2, markersize=6,
-                       alpha=0.7, label=pauli_labels[pauli_idx], linestyle='--')
+            ax_fdt.plot(x_normalized, fdt_abs[:, pauli_idx], marker=marker,
+                       color=pauli_colors[pauli_idx], linewidth=1.5, markersize=5,
+                       alpha=0.6, label=pauli_labels[pauli_idx], linestyle='--')
 
     ax_fdt.set_xlabel(xlabel, fontsize=21)
     ax_fdt.set_ylabel(r'FDT Error', fontsize=21)
@@ -1454,8 +1509,8 @@ def plot_consistency_checks(timestamp, directory_job_index=0, parameter=None,
     ax_fdt.set_yscale(yscale)
     if ylim is not None:
         ax_fdt.set_ylim(ylim)
-    if show_total and show_components:
-        ax_fdt.legend(fontsize=14, framealpha=0.9)
+    if show_total or show_components:
+        ax_fdt.legend(fontsize=12, framealpha=0.9, loc='best')
     ax_fdt.grid(True, alpha=0.3)
 
     fig.tight_layout()

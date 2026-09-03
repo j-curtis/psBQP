@@ -1,0 +1,13 @@
+Human-readable file created at Tue Sep  1 09:37:18 2026, using demler_tools v2.3.0-beta-17-g6b0081d
+Path convention: v3
+Created by user: fmarijanovic
+Project name: psBQP-keldysh
+
+Calculation type: post-processing-static-sweep
+Number of jobs to run: 4
+
+Task summary: Post-processing gap statics for error analysis with Tmax
+
+Current folder state: unattempted
+
+Calculation log:

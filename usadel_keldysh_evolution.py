@@ -231,6 +231,7 @@ class UsadelKeldyshEvolution:
             gr=gr_two_time,
             gk=gk_two_time,
             bcs_coupling_constant=bcs_coupling,
+            temperature=self.temperature,
             grid_params=self.grid_parameters
         )
 
@@ -412,7 +413,7 @@ class UsadelKeldyshEvolution:
         self.thermal_sum_left = NambuKeldyshTensor(np.append(f_sum_right_minus.data[0,0], f_sum_right.data[0,0], axis=0), pauli_channel=0)
         self.thermal_sum_right = NambuKeldyshTensor(np.append(f_sum_left_minus.data[0,0], f_sum_left.data[0,0], axis=0), pauli_channel=0)
 
-    # ========== CN implementation of the operators from continous to discrete space ========== #TODO: check by comparing with the note -- make them consistent
+    # ========== CN implementation of the operators from continous to discrete space ========== #TODO: check Terms 4 onwards
 
     def construct_discrete_operators(self, terms_dict, state, gap_tensor, g_type = 'r', additional_shift_index = 0):
         #* function assumes that all the terms are computed for the current computation time (t,t)
@@ -911,7 +912,7 @@ class UsadelKeldyshEvolution:
 
         return (left_matrix, right_matrix, rhs_vector, rhs_vector_history_list, rhs_vector_factor_list, g_sandwich_matrices, diagonal_term_factor_list, diagonal_term_history_list)
 
-    # ========== Constraint equations  ==========  #TODO: check
+    # ========== Constraint equations  ==========  
 
     def get_gr_constraint(self, state, gap_tensor):
         """
@@ -985,6 +986,8 @@ class UsadelKeldyshEvolution:
 
         right_matrix = -tau3 * expansion_tensor + self.delta_t * ga.diagonal_time()/2
 
+        thermal_gap_term = - self.thermal_integral * gap_tensor - gap_tensor * self.thermal_integral 
+
         # RHS vector (V_old): mixed convolution terms + gap sources
 
         # Term 1: δt·Σ g'^R(t,t'')·g'^K(t'',t') from t''=-∞ to t-δt
@@ -996,9 +999,13 @@ class UsadelKeldyshEvolution:
         #? diagonal history term uses uniform dt weight without endpoint corrections
         diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)] 
 
-        rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:]) + gr_last_row.precise_convolution_left(self.thermal_dist, self.thermal_integral[-1:,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1:,:]) * tau3)
-        rhs_vector = rhs_term_1 
+        #* choosing not to regularize the thermal_gap_term for now
+        rhs_term_1 +=  -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:] + thermal_gap_term[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:]) + gr_last_row.precise_convolution_left(self.thermal_dist + thermal_gap_term, self.thermal_integral[-1:,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1:,:]) * tau3)
 
+        #* new term coming from the commutator
+        rhs_term_1 += tau_3 * thermal_gap_term - thermal_gap_term * tau_3
+
+        rhs_vector = rhs_term_1 
         # Term 2: δt·Σ g'^K(t,t'')·g'^A(t'',t') from t''=-∞ to t'-δt
         # This convolution is handled via history list: (tau0 * gk_current) @ ga
         #* this ga is now in good frame
@@ -1277,6 +1284,7 @@ class UsadelKeldyshEvolution:
         Called by:
             - _evolve_state_by_one_timestep()
         """
+
         # ========== 1. Extract physics parameters ==========
         gr = state.gr
         ga = state._r2a()
@@ -1288,8 +1296,8 @@ class UsadelKeldyshEvolution:
         gk_last_row = state.gk[-1:, :]
         gr_last_row = state.gr[-1:, :]
 
-        gap_history = state.get_gap_history()
-        #gap_history = np.ones(np.size(gap_history))  * 1.4563  #overwrite gap
+        gap_history = state.get_gap_history() #*** this will have to be changed in the light of guessing the next gap!
+
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
         if A_history is None:
@@ -1324,6 +1332,8 @@ class UsadelKeldyshEvolution:
 
         L1, R1, V1, Vhist1, Vfact1, sandwich1, diag_factor_list_1, diag_hist_list_1 = self.construct_discrete_operators(evolution_terms, state, gap_tensor, g_type='k')
 
+
+
         # ========== 3. Add derivative corrections ==========
 
         L1 = L1 + (1j/2) * tau3 * expansion_tensor
@@ -1343,16 +1353,52 @@ class UsadelKeldyshEvolution:
 
         # ========== 4. Compute and add ALL source terms to V1 ==========
 
-        # ---------- 4.1: Thermal collision integrals and  Gap-F coupling---------- #TODO: check this still, affects equilibrium!
+        def cn_derivative1_average(tensor, shift_index = 1):
+            cn_derivative_factor = 1/2
+            return cn_derivative_factor * (tensor[-1:] + tensor[-1:].shift(shift_index, axis=1)) - cn_derivative_factor * (tensor[-2:] + tensor[-2:].shift(shift_index, axis=1))
+
+        def cn_derivative2_average(tensor, shift_index = 1):
+            cn_derivative_factor = 1/2
+            return cn_derivative_factor * (tensor[-1:] + tensor[-2:]) - cn_derivative_factor * ( tensor[-1:].shift(shift_index, axis=1) + tensor[-2:].shift(shift_index, axis=1))
+            
+
+        def cn_plaquette_average(tensor):
+            """
+            Computes CN average of a tensor, note tensor should be of size 2 or more times N_t. 
+            """
+            cn_factor = 1/4 * self.delta_t
+            result = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
+            for dt_prime_shift in [0, 1]:
+                for dt_shift in [0,1]:
+                    dt_end = None if dt_shift == 0 else -dt_shift
+                    result += cn_factor * tensor[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1)
+
+            return 0
+
+        # ---------- 4.1: Thermal collision integrals and  Gap-F coupling and new terms---------- #TODO: check this still, affects equilibrium!
         cn_factor = 1/4 * self.delta_t
         thermal_term = NambuKeldyshTensor(np.zeros((2, 2, 1, self.ntpoints), dtype=complex))
+
 
         for dt_prime_shift in [0, 1]:
             for dt_shift in [0,1]:
                 dt_end = None if dt_shift == 0 else -dt_shift
+                # Dynes self-energy terms -- sigma^K g^A + g^R sigma^K 
                 thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
                 - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1) * tau3)
+                # gap-f term
                 thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
+                # new term 
+                #thermal_term += cn_factor * 
+
+        shifted_derivative_term = - gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor
+
+        new_source_term = 1j * (gap_tensor * gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor * gap_tensor)
+
+        thermal_term += 1j * tau3 * cn_derivative1_average(shifted_derivative_term) + cn_derivative2_average(shifted_derivative_term) * tau3 * 1j
+        thermal_term += cn_plaquette_average(new_source_term)
+
+        #thermal_term += cn_derivative1_average()
 
         V1 = V1 + thermal_term
 

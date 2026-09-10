@@ -20,11 +20,12 @@ class StateObject:
         Args:
             gr: Retarded Green's function g^R (NambuKeldyshTensor)
             gk: Keldysh Green's function g^K (NambuKeldyshTensor)
-            bcs_coupling_constant: BCS coupling constant λ for gap equation
+            bcs_coupling_constant: renormalized BCS coupling constant λ' for gap equation 
             temperature: System temperature
             grid_params: Dictionary with grid parameters
             track_occupation: Whether to track occupation function
         """
+
         self.gr = gr
         self.gk = gk
         self.bcs_coupling_constant = bcs_coupling_constant
@@ -106,145 +107,9 @@ class StateObject:
         gk_diag = np.diagonal(gk_traced)
 
         # Gap equation: Δ = -λ/4 * Tr[τ₋ g^K(t,t)]
-        gap_history = -0.25 * self.bcs_coupling_constant * gk_diag / 2 #* new factor comes from new gk regularization
+        gap_history = -0.25 * self.bcs_coupling_constant * gk_diag 
 
         return gap_history
-
-    def get_thermal_occupation(self):
-        """
-        Generate thermal occupation function as a two-time object.
-
-        Uses analytic form: f(τ) = -i T / sinh(π τ T)
-        Returns f(t,t') = f(t-t') as a NambuKeldyshTensor with two time axes.
-
-        Returns:
-            NambuKeldyshTensor: Thermal distribution f(t,t') with shape (2, 2, N_t, N_t)
-        """
-        if self._thermal_dist is not None:
-            return self._thermal_dist
-
-        if self.time_grid is None:
-            raise ValueError("Time grid must be available to compute thermal occupation")
-
-        # Create meshgrid for all time pairs (t_i, t_j)
-        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
-
-        # Compute tau = t_i - t_j for all pairs
-        tau_matrix = t_i - t_j
-
-        # Initialize two-time thermal distribution
-        f_two_time = np.zeros((self.ntpoints, self.ntpoints), dtype=complex)
-
-        # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
-        mask = (np.abs(tau_matrix) > 1e-6)
-
-        # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
-        f_two_time[mask] = -1j * self.temperature / np.sinh(np.pi * tau_matrix[mask] * self.temperature)
-
-        # Diagonal (τ=0) remains zero (already initialized to zero)
-
-        # Store as NambuKeldyshTensor with two time axes (identity in Nambu space)
-        self._thermal_dist = NambuKeldyshTensor(f_two_time, pauli_channel=0)
-
-        return self._thermal_dist
-
-    def get_thermal_integral(self):
-        """
-        Compute cumulative integral of thermal distribution on finite time grid.
-
-        For convolutions on finite grid [-T_max, 0], computes:
-        F(t, t') = ∫_{-T_max - t'}^{t - t'} f(τ') dτ'
-                 = F_full(t - t') - F_full(-T_max - t')
-
-        where F_full(τ) = -i/π · ln(tanh(πτT/2)) is the infinite-domain integral
-        and f(τ) = -i T / sinh(π τ T) is the thermal distribution.
-
-        Returns:
-            NambuKeldyshTensor: Thermal integral F(t,t') with shape (2, 2, N_t, N_t)
-        """
-        if self._thermal_integral is not None:
-            return self._thermal_integral
-
-        if self.time_grid is None:
-            raise ValueError("Time grid must be available to compute thermal integral")
-
-        # Create meshgrid for all time pairs (t_i, t_j)
-        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
-
-        # Compute upper bound: tau = t_i - t_j
-        tau_upper = t_i - t_j
-
-        # Compute lower bound: -T_max - t_j
-        tau_lower = -self.T_max * 2 - t_j * 0
-
-        # Helper function to compute F(τ) = -i/π · ln(tanh(πτT/2))
-        def compute_F_full(tau_vals):
-            """Compute analytical thermal integral from -∞ to τ (no constant)."""
-            result = np.zeros_like(tau_vals, dtype=complex)
-
-            # Mask to avoid singularity at τ = 0
-            mask = (np.abs(tau_vals) > 1e-6)
-
-            # Compute where τ ≠ 0
-            x = np.pi * tau_vals[mask] * self.temperature
-            # F(τ) = -i/π · ln(tanh(πτT/2))
-            tanh_half = np.tanh(x / 2.0)
-            result[mask] = -1j/np.pi * np.log(tanh_half + 0j)   
-            return result
-
-        # Compute finite-domain integral
-        F_upper = compute_F_full(tau_upper)
-        F_lower = compute_F_full(tau_lower)
-
-        # Take only imaginary part and multiply by 1j to ensure purely imaginary result
-        F_two_time = 1j * np.imag(F_upper - F_lower)
-
-        # Set F(0) to BCS regularization: 1/λ + ln(T_c/T)
-        # Note: For StateObject we may not have T_c, so we use a simplified version
-        F_zero_bcs = 2j * (1/self.bcs_coupling_constant)
-
-        # Replace diagonal (τ=0) with BCS value
-        diagonal_mask = (np.abs(tau_upper) < 1e-6)
-        F_two_time[diagonal_mask] = F_zero_bcs
-
-        # Store as NambuKeldyshTensor (identity in Nambu space)
-        self._thermal_integral = NambuKeldyshTensor(F_two_time, pauli_channel=0)
-
-        return self._thermal_integral
-
-    def get_gk_full(self):
-        """
-        Compute full Keldysh Green's function including thermal contributions.
-
-        Formula: g^K_full = g^K + 2·τ₃·f + F·Δ + Δ·F
-
-        where:
-        - g^K: Keldysh Green's function
-        - f: Thermal occupation f(t,t')
-        - F: Thermal integral F(t,t')
-        - Δ: Gap function Δ(t)
-        - τ₃: Pauli matrix
-
-        Returns:
-            NambuKeldyshTensor: Full Keldysh Green's function with shape (2, 2, N_t, N_t)
-        """
-        # Get thermal distributions
-        thermal_occupation = self.get_thermal_occupation()
-        thermal_integral = self.get_thermal_integral()
-
-        # Get gap history and convert to Nambu tensor
-        gap_history = self.get_gap_history()
-        gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + \
-                     NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
-
-        # Define tau_3 Pauli matrix
-        tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-
-        # Compute full g^K: g^K + 2·τ₃·f + F·Δ + Δ·F
-        gk_full = self.gk + 2.0 * tau3 * thermal_occupation + \
-                  thermal_integral * gap_tensor + gap_tensor * thermal_integral
-
-        return gk_full
 
     def get_current_kernel_prefactor(self, thermal_dist, time_index=-1):
         """

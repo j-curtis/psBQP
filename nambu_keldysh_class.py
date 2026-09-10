@@ -196,7 +196,7 @@ class NambuKeldyshTensor:
 
         return NambuKeldyshTensor(result_data)
 
-    def precise_convolution_left(self, other, other_integral, dt, other_index=-1, precomputed_sum=None):
+    def precise_convolution_left(self, other, other_integral, dt, other_index=-1, precomputed_sum=None,gap_tensor = None):
         """ 
         Compute regularized left convolution: self @ other (regularized).
 
@@ -259,12 +259,12 @@ class NambuKeldyshTensor:
         # Create ones tensor as a row vector (identity in Nambu space)
         # Shape: (2, 2, 1, N_t) where N_t is the last dimension of other
         # pauli_channel=0 automatically creates the (2,2) identity structure
-        ones_data = np.ones((1, other.data.shape[-2]), dtype=complex)
+        ones_data = np.ones((1,other.data.shape[-2]), dtype=complex)
         ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
             
- 
+
         #* midpoint rule: subtract 1/2 weight from BOTH endpoints
-        first_endpoint_std = self[:,0:1] * other[0:1,:]
+        first_endpoint_std = 0*self[:,0:1] * other[0:1,:]
         last_endpoint_std = self[:,-1:] * other[-1:,:]
         result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
 
@@ -272,27 +272,31 @@ class NambuKeldyshTensor:
         N_t = other_integral.data.shape[2]
         positive_index = other_index % N_t
         positive_index_precomp = other_index % precomputed_sum.data.shape[2]
+
         precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
         other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
-        
-        #* changed to be the last element
-        #result_fact = self[-1:,-1:] * precomputed_sum_row
-        #TODO: May have to be changed in the light of new shift
-        result_fact = self[-1:,-1:] * precomputed_sum_row #* changed on 01/09/26
+
+        self_for_reg = self[-1:,-1:]
+
+        if gap_tensor is not None:
+            self_for_reg = -(gap_tensor[-1] * ones_tensor +  ones_tensor * gap_tensor)/2
+
+        result_fact = self_for_reg * precomputed_sum_row 
 
         # Analytic term (using integral)
         #result_anal = self[-1:,-1:] * other_integral_for_reg
-        result_anal = self[-1:,-1:] * other_integral_for_reg #* changed on 01/09/26
+        result_anal = self_for_reg * other_integral_for_reg #* changed on 01/09/26
         test_filter = np.zeros((N_t), dtype=complex)
         test_filter[-1] = 1.0
         nambu_filter = NambuKeldyshTensor(test_filter, pauli_channel=0)
 
         #* this could be causing a precision error that we are seeing with delta_t since they missmatch
 
-        return (result_std + (- result_fact + result_anal)) 
+
+        return (result_std + (- result_fact + result_anal) ) 
 
 
-    def precise_convolution_right(self, other, other_integral, dt, self_index=-1, precomputed_sum=None):
+    def precise_convolution_right(self, other, other_integral, dt, self_index=-1, precomputed_sum=None,gap_tensor = None):
         """
         Compute regularized right convolution: other @ self (regularized).
 
@@ -354,6 +358,9 @@ class NambuKeldyshTensor:
         N_t = other.data.shape[-1]
         N_tprime = self.data.shape[-1]
 
+        ones_data = np.ones((1,other.data.shape[-1]), dtype=complex)
+        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+        
         test_filter = np.zeros((N_t), dtype=complex)
         test_filter[-1] = 1.0
         nambu_filter = NambuKeldyshTensor(test_filter, pauli_channel=0)
@@ -367,11 +374,16 @@ class NambuKeldyshTensor:
         positive_index = self_index % N_t
         first_endpoint_std = other[:,0:1] * self[0:1,:]
         last_endpoint_std = other[:,:] * self.diagonal_time()
-        result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
+        result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std * 0 - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
         #self_for_reg = self[:, positive_index].transpose().complete_transpose() 
         #TODO: May have to be changed in the light of new shift
-        self_for_reg = self[positive_index:positive_index+1, positive_index:positive_index+1] # self.diagonal_time() #* changed on 01/09/26
+
+        self_for_reg = self[positive_index:positive_index+1, positive_index:positive_index+1] 
+        
+        if gap_tensor is not None:
+            self_for_reg = -(gap_tensor[positive_index] * ones_tensor + ones_tensor * gap_tensor)/2
+    
         positive_index_precomp = self_index % precomputed_sum.data.shape[2]
         
         #* changed to be the last element
@@ -381,7 +393,7 @@ class NambuKeldyshTensor:
         # Analytic term (using integral)
         result_anal = (- other_integral) * self_for_reg
     
-        return (result_std + (- result_fact + result_anal))
+        return (result_std + (- result_fact + result_anal) )
 
     def _check_binary_shape_compatibility(self, other):
         """
@@ -547,7 +559,7 @@ class NambuKeldyshTensor:
                 extension_factor=3,
                 time_grid=np.linspace(-10, 0, 100),
                 temperature=0.1
-            )
+            ) 
             # f_extended has shape (2, 2, 300, 300)
             # Original grid [-10, 0] maps to extended indices [100:200]
         """

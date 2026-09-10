@@ -50,6 +50,29 @@ class EquilibriumSolver:
         self.optimization_parameters = optimization_parameters
         self.sigma_scatterings = sigma_scatterings
 
+        # Display grid parameters
+        print("\n" + "="*60)
+        print("EQUILIBRIUM SOLVER - GRID PARAMETERS")
+        print("="*60)
+        if 'omega_sampling' in grid_parameters:
+            print(f"Omega sampling:     {grid_parameters['omega_sampling']}")
+        if 'cutoff' in grid_parameters:
+            print(f"Energy cutoff:      {grid_parameters['cutoff']}")
+        if 'eta' in grid_parameters:
+            print(f"Broadening eta:     {grid_parameters['eta']}")
+        if 'time_sampling' in grid_parameters:
+            print(f"Time sampling:      {grid_parameters['time_sampling']}")
+        if 'time_duration' in grid_parameters:
+            print(f"Time duration:      {grid_parameters['time_duration']}")
+
+        print("\nSYSTEM PARAMETERS")
+        print("-"*60)
+        if 'critical_temperature' in system_parameters:
+            print(f"Critical temp Tc:   {system_parameters['critical_temperature']}")
+        if 'temperature' in system_parameters:
+            print(f"Temperature T:      {system_parameters['temperature']}")
+        print("="*60 + "\n")
+
         # Initialize gap_0 to None (will be set during equilibrium computation)
 
         # Create the old Usadel solver object
@@ -273,15 +296,20 @@ class EquilibriumSolver:
                     tanh_omega = np.tanh(omega_grid / (2.0 * temperature))
                     pauli_component = pauli_component - C_tanh * tanh_omega
 
-                    asymptotic_coeffs.append(('tanh', C_tanh, temperature))
+                    asymptotic_coeffs.append(('None', C_tanh, temperature))
                 elif pauli_idx == 2:  # tau_2 (Y): 2iΔ/ω · tanh(ω/2T) asymptotic for g^K
                     # At equilibrium, g^K_2(ω) → 2i·Δ/ω · tanh(ω/2T) at large |ω|
                     # Subtract this before FFT to avoid Gibbs oscillations
                     # Add back 2*Δ*F(τ) in time domain, where F is thermal integral
-                    # TODO: Fix normalization factor before enabling
                     tanh_omega = np.tanh(omega_grid / (2.0 * temperature))
-                    asymptotic_gk2 = 2.0j * self.gap_0 / (omega_grid + 1e-10) * tanh_omega
-                    pauli_component = pauli_component #- asymptotic_gk2
+                    asymptotic_gk2 = 2.0j * self.gap_0 / (omega_grid + 1e-6) * tanh_omega
+
+                    # Fix value at ω=0 using Taylor expansion: lim_{ω→0} 2iΔ/ω·tanh(ω/2T) = iΔ/T
+                    zero_idx = np.argmin(np.abs(omega_grid))
+                    asymptotic_gk2 = np.array(asymptotic_gk2, dtype=complex)
+                    asymptotic_gk2[zero_idx] = 1j * self.gap_0 / temperature
+
+                    pauli_component = pauli_component + asymptotic_gk2
 
                     asymptotic_coeffs.append(None)  # Don't add back (normalization issue)
                 else:  # pauli_idx 0, 1: no regularization for these

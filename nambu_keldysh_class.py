@@ -223,28 +223,17 @@ class NambuKeldyshTensor:
 
         Returns:
             NambuKeldyshTensor - regularized convolution result
-
-        Example:
-            # gr @ f with regularization on f
-            result = gr_row.precise_convolution_left(f_thermal, f_integral, dt, other_index=-1)
-            # With pre-computed thermal sum:
-            result = gr_row.precise_convolution_left(f_thermal, f_integral, dt, other_index=-1,
-                                                     precomputed_sum=thermal_sum_right)
         """
         # ========== Input shape validation for midpoint rule ==========
         # Check that self is a row: (2,2,1,N_t)
         if self.data.ndim != 4 or self.data.shape[:3] != (2, 2, 1):
-            raise ValueError(
-                f"precise_convolution_left requires self to have shape (2,2,1,N_t) for proper midpoint rule.\n"
-                f"Got shape {self.data.shape}. The third dimension must be 1 (row tensor)."
-            )
+            raise ValueError(f"precise_convolution_left requires self to have shape (2,2,1,N_t) for proper midpoint rule.\n"
+                f"Got shape {self.data.shape}. The third dimension must be 1 (row tensor).")
 
         # Check that other is a full matrix: (2,2,N_t,N_t')
         if other.data.ndim != 4 or other.data.shape[:2] != (2, 2):
-            raise ValueError(
-                f"precise_convolution_left requires other to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
-                f"Got shape {other.data.shape}."
-            )
+            raise ValueError(f"precise_convolution_left requires other to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
+                f"Got shape {other.data.shape}.")
 
         # Check contraction dimension compatibility: self.shape[-1] == other.shape[2]
         N_t_self = self.data.shape[3]
@@ -253,47 +242,44 @@ class NambuKeldyshTensor:
             raise ValueError(
                 f"Contraction dimension mismatch: self has N_t={N_t_self} but other has N_t={N_t_other}.\n"
                 f"Expected shapes: self=(2,2,1,{N_t_other}), other=(2,2,{N_t_other},N_t').\n"
-                f"Got: self={self.data.shape}, other={other.data.shape}"
-            )
+                f"Got: self={self.data.shape}, other={other.data.shape}")
 
-        # Create ones tensor as a row vector (identity in Nambu space)
-        # Shape: (2, 2, 1, N_t) where N_t is the last dimension of other
-        # pauli_channel=0 automatically creates the (2,2) identity structure
-        ones_data = np.ones((1,other.data.shape[-2]), dtype=complex)
-        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
-            
 
-        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
-        first_endpoint_std = 0*self[:,0:1] * other[0:1,:]
+        #Applying midpoint rule: subtract 1/2 weight from BOTH endpoints
+        first_endpoint_std = 1*self[:,0:1] * other[0:1,:]
         last_endpoint_std = self[:,-1:] * other[-1:,:]
         result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
 
-        # For analytic term: use row onemaf other_integral if self is a row
         N_t = other_integral.data.shape[2]
         positive_index = other_index % N_t
         positive_index_precomp = other_index % precomputed_sum.data.shape[2]
 
         precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
         other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
+        ones_tensor = NambuKeldyshTensor(np.ones((1,N_t_self)), pauli_channel=0)
+        #print(ones_tensor.data.shape)
+        self_for_reg = self[-1:,:]
 
-        self_for_reg = self[-1:,-1:]
+        # Old gap regularization code, its commented out since best regularization comes differently
+        #if gap_tensor is not None:
+        #    self_for_reg = -(gap_tensor[-1] * ones_tensor +  ones_tensor * gap_tensor)/2
 
-        if gap_tensor is not None:
-            self_for_reg = -(gap_tensor[-1] * ones_tensor +  ones_tensor * gap_tensor)/2
-
-        result_fact = self_for_reg * precomputed_sum_row 
+        result_fact = self_for_reg * precomputed_sum_row
 
         # Analytic term (using integral)
         #result_anal = self[-1:,-1:] * other_integral_for_reg
         result_anal = self_for_reg * other_integral_for_reg #* changed on 01/09/26
-        test_filter = np.zeros((N_t), dtype=complex)
-        test_filter[-1] = 1.0
-        nambu_filter = NambuKeldyshTensor(test_filter, pauli_channel=0)
 
-        #* this could be causing a precision error that we are seeing with delta_t since they missmatch
+        # Gradient correction for f(0) = 0
+        # The missing diagonal contribution is approximately dgr/dt * dt
+        dgr_dt = self.gradient(dt, axis=1)  # Gradient along t'' direction
+        gradient_correction = dgr_dt[-1:, :] * dt * -1j/np.pi # the extra factor is the limit of thermal distribution going to zero 
 
+        midpoint_scaling = np.ones((1,N_t))
+        midpoint_scaling[-1,-1] = 0.5
+        scaling_tensor = NambuKeldyshTensor(midpoint_scaling, pauli_channel=0)
 
-        return (result_std + (- result_fact + result_anal) ) 
+        return (result_std + (- result_fact + result_anal) + scaling_tensor * gradient_correction ) 
 
 
     def precise_convolution_right(self, other, other_integral, dt, self_index=-1, precomputed_sum=None,gap_tensor = None):
@@ -329,27 +315,21 @@ class NambuKeldyshTensor:
         # ========== Input shape validation for midpoint rule ==========
         # Check that other is a row: (2,2,1,N_t)
         if other.data.ndim != 4 or other.data.shape[:3] != (2, 2, 1):
-            raise ValueError(
-                f"precise_convolution_right requires other to have shape (2,2,1,N_t) for proper midpoint rule.\n"
-                f"Got shape {other.data.shape}. The third dimension must be 1 (row tensor)."
-            )
+            raise ValueError(f"precise_convolution_right requires other to have shape (2,2,1,N_t) for proper midpoint rule.\n"
+                f"Got shape {other.data.shape}. The third dimension must be 1 (row tensor).")
 
         # Check that self is a full matrix: (2,2,N_t,N_t')
         if self.data.ndim != 4 or self.data.shape[:2] != (2, 2):
-            raise ValueError(
-                f"precise_convolution_right requires self to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
-                f"Got shape {self.data.shape}."
-            )
+            raise ValueError(f"precise_convolution_right requires self to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
+                f"Got shape {self.data.shape}.")
 
         # Check contraction dimension compatibility: other.shape[-1] == self.shape[2]
         N_t_other = other.data.shape[3]
         N_t_self = self.data.shape[2]
         if N_t_other != N_t_self:
-            raise ValueError(
-                f"Contraction dimension mismatch: other has N_t={N_t_other} but self has N_t={N_t_self}.\n"
+            raise ValueError(f"Contraction dimension mismatch: other has N_t={N_t_other} but self has N_t={N_t_self}.\n"
                 f"Expected shapes: other=(2,2,1,{N_t_self}), self=(2,2,{N_t_self},N_t').\n"
-                f"Got: other={other.data.shape}, self={self.data.shape}"
-            )
+                f"Got: other={other.data.shape}, self={self.data.shape}")
 
         # Create ones tensor as a 2D matrix (identity in Nambu space)
         # Shape: (2, 2, N_t, N_t') where ones_data[t, t'] = 1 if t < t', else 0
@@ -358,42 +338,42 @@ class NambuKeldyshTensor:
         N_t = other.data.shape[-1]
         N_tprime = self.data.shape[-1]
 
-        ones_data = np.ones((1,other.data.shape[-1]), dtype=complex)
-        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
-        
-        test_filter = np.zeros((N_t), dtype=complex)
-        test_filter[-1] = 1.0
-        nambu_filter = NambuKeldyshTensor(test_filter, pauli_channel=0)
-
-        #* midpoint rule: subtract 1/2 weight from BOTH endpoints
-        #* changed to be the last element
-
         is_other_row = (other.data.shape[2] == 1)
 
         # Standard convolution (always uses full self)
         positive_index = self_index % N_t
         first_endpoint_std = other[:,0:1] * self[0:1,:]
         last_endpoint_std = other[:,:] * self.diagonal_time()
-        result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std * 0 - 0.5 * dt * last_endpoint_std
+        result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
-        #self_for_reg = self[:, positive_index].transpose().complete_transpose() 
-        #TODO: May have to be changed in the light of new shift
 
-        self_for_reg = self[positive_index:positive_index+1, positive_index:positive_index+1] 
-        
-        if gap_tensor is not None:
-            self_for_reg = -(gap_tensor[positive_index] * ones_tensor + ones_tensor * gap_tensor)/2
+        self_for_reg = self.diagonal_time()
+        #self_for_reg = self[-1,:]
+        ones_tensor = NambuKeldyshTensor(np.ones((1,N_t)), pauli_channel=0)
+        # Old gap regularization
+        #if gap_tensor is not None:
+        #    self_for_reg = -(gap_tensor[positive_index] * ones_tensor + ones_tensor * gap_tensor)/2
     
         positive_index_precomp = self_index % precomputed_sum.data.shape[2]
         
-        #* changed to be the last element
         precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
         result_fact = precomputed_sum_row * self_for_reg
-       
+
         # Analytic term (using integral)
         result_anal = (- other_integral) * self_for_reg
-    
-        return (result_std + (- result_fact + result_anal) )
+
+        # Gradient correction for f(0) = 0
+        # The missing diagonal contribution is approximately dga/dt * dt
+        dga_dt = self.gradient(dt, axis=0)  # Gradient along t'' direction (first time index)
+        gradient_correction = dga_dt[-1:,:] * dt * +1j/np.pi 
+
+        filter_tensor = np.zeros((1,N_t))
+        filter_tensor[-1,-1] = 0.5
+        filter_tensor = NambuKeldyshTensor(filter_tensor, pauli_channel=0)
+
+        print('gradient correction right is', gradient_correction[-1,-3:].trace(pauli_index=2))
+
+        return (result_std + (- result_fact + result_anal) + filter_tensor * gradient_correction)
 
     def _check_binary_shape_compatibility(self, other):
         """
@@ -527,120 +507,6 @@ class NambuKeldyshTensor:
 
         return NambuKeldyshTensor(result)
 
-    def extend_time_invariant(self, extension_factor=3, time_grid=None, temperature=None, formula_func=None):
-        """
-        Extend a time-translationally-invariant tensor to larger time range.
-
-        For thermal distributions f(t,t') = f(τ) where τ = t-t', this method:
-        1. Extracts the underlying 1D function f(τ) from the 2D matrix
-        2. Extends τ to a larger range (extension_factor × original)
-        3. Reconstructs 2D matrix on extended grid
-        4. Stores metadata for index mapping back to original grid
-
-        Args:
-            extension_factor: How many times to extend the time range (default 3)
-                            Extended grid covers [-k·T_max, k·T_max] where k = extension_factor
-            time_grid: Original time grid [-T_max, 0] as 1D numpy array (required)
-            temperature: Temperature for computing f(τ) on extended range (required if formula_func is None)
-            formula_func: Function f(tau, T) to compute values on extended range.
-                         Default uses thermal distribution: -iT/sinh(πτT)
-                         Signature: func(tau_array, temperature) -> complex array
-
-        Returns:
-            NambuKeldyshTensor: Extended tensor with larger time axes and metadata attributes:
-                - _time_grid: Extended time grid
-                - _extension_factor: Extension factor used
-                - _grid_offset: Index offset to map original grid to extended grid
-                - _original_N_t: Number of points in original grid
-
-        Example:
-            # Extend thermal distribution from [-10, 0] to [-30, 30]
-            f_extended = thermal_dist.extend_time_invariant(
-                extension_factor=3,
-                time_grid=np.linspace(-10, 0, 100),
-                temperature=0.1
-            ) 
-            # f_extended has shape (2, 2, 300, 300)
-            # Original grid [-10, 0] maps to extended indices [100:200]
-        """
-        # Validate inputs
-        if time_grid is None:
-            raise ValueError("Must provide time_grid parameter (1D array of time values)")
-
-        if self.data.ndim != 4:
-            raise ValueError(
-                f"extend_time_invariant() requires a two-time tensor with shape (2, 2, Nt, Nt). "
-                f"Got shape {self.data.shape}"
-            )
-
-        # Extract current grid info
-        N_t_original = self.data.shape[2]  # Current time points
-        if len(time_grid) != N_t_original:
-            raise ValueError(
-                f"time_grid length ({len(time_grid)}) must match tensor time dimension ({N_t_original})"
-            )
-
-        T_max = abs(time_grid[0])  # Original T_max (assuming grid is [-T_max, ...])
-        dt_original = time_grid[1] - time_grid[0]
-
-        # Create extended time grid
-        # Original: [-T_max, 0] or similar
-        # Extended: [-extension_factor·T_max, extension_factor·T_max] centered at midpoint
-
-        # Compute midpoint and range of original grid
-        t_min_orig = time_grid[0]
-        t_max_orig = time_grid[-1]
-        t_mid = (t_min_orig + t_max_orig) / 2.0
-        t_range_orig = t_max_orig - t_min_orig
-
-        # Extended range
-        t_range_extended = extension_factor * t_range_orig
-        N_t_extended = int(extension_factor * N_t_original)
-
-        # Extended grid centered at same midpoint
-        time_grid_extended = np.linspace(
-            t_mid - t_range_extended / 2.0,
-            t_mid + t_range_extended / 2.0,
-            N_t_extended
-        )
-
-        # Default formula: thermal distribution f(τ) = -iT/sinh(πτT)
-        if formula_func is None:
-            if temperature is None:
-                raise ValueError("Must provide temperature parameter when using default thermal formula")
-
-            def formula_func(tau, T):
-                """Default thermal distribution formula"""
-                result = np.zeros_like(tau, dtype=complex)
-                mask = np.abs(tau) > 1e-10  # Avoid division by zero at τ=0
-                result[mask] = -1j * T / np.sinh(np.pi * tau[mask] * T)
-                return result
-
-        # Create extended 2D matrix: f_ext[i,j] = f(t_i - t_j)
-        t_i_ext, t_j_ext = np.meshgrid(time_grid_extended, time_grid_extended, indexing='ij')
-        tau_matrix_ext = t_i_ext - t_j_ext
-
-        # Compute f(τ) on extended grid
-        f_ext_2d = formula_func(tau_matrix_ext, temperature)
-
-        # Create extended tensor (assume same Pauli structure as original, typically channel 0 for thermal)
-        # Determine Pauli channel from original tensor (check which channel is non-zero)
-        pauli_channel = 0  # Default to τ₀ (identity) for thermal distributions
-
-        extended_tensor = NambuKeldyshTensor(f_ext_2d, pauli_channel=pauli_channel)
-
-        # Store metadata for index mapping
-        # Original grid maps to extended indices [offset : offset + N_t_original]
-        # Offset is where original t_min appears in extended grid
-        offset = np.argmin(np.abs(time_grid_extended - t_min_orig))
-
-        extended_tensor._time_grid = time_grid_extended
-        extended_tensor._extension_factor = extension_factor
-        extended_tensor._grid_offset = offset
-        extended_tensor._original_N_t = N_t_original
-
-        return extended_tensor
-
     def determinant(self):
         """
         Compute determinant of 2x2 Nambu matrix.
@@ -671,13 +537,11 @@ class NambuKeldyshTensor:
             where result[:, :, i] = R[:, :, i, i]
         """
         if self.data.ndim != 4:
-            raise ValueError(
-                f"diagonal_time() requires a two-time tensor with shape (2, 2, Nt, Nt). "
-                f"Got shape {self.data.shape} with {self.data.ndim} dimensions."
-            )
+            raise ValueError(f"diagonal_time() requires a two-time tensor with shape (2, 2, Nt, Nt). "
+                f"Got shape {self.data.shape} with {self.data.ndim} dimensions.")
 
         # Extract diagonal: data[:, :, i, i] for all i
-        Nt = self.data.shape[2]
+        Nt = min(self.data.shape[2], self.data.shape[3])
         diagonal_data = np.zeros((2, 2, Nt), dtype=self.data.dtype)
 
         for i in range(Nt):
@@ -694,7 +558,8 @@ class NambuKeldyshTensor:
                 pauli_matrix[0,1]*self.data[1,0,...] +
                 pauli_matrix[1,0]*self.data[0,1,...] +
                 pauli_matrix[1,1]*self.data[1,1,...])
-
+                
+    #* Skipped for now, not important for equilibrium
     def off_diagonal(self):
         """
         Extract anti-diagonal in time for two-time Green's functions.
@@ -820,88 +685,40 @@ class NambuKeldyshTensor:
 
         return NambuKeldyshTensor(shifted_data)
 
-    # ========== Gradient Operations ==========
-
-    def gradient(self, axis=0):
+    def gradient(self, dt, axis=0):
         """
-        Compute discrete gradient along specified axis (1st-order backward difference).
+        Compute gradient along specified time axis using backward finite differences.
 
-        Computes finite difference: data[..., i, ...] - data[..., i-1, ...]
-        The first entry along the differentiated axis is set to zero (no previous value).
+        Uses backward differences for both axes: df/dt ≈ (f[i] - f[i-1]) / dt
 
         Args:
-            axis: Which axis to differentiate along (0 or 1), referring to axes after Nambu (2,2)
-                  axis=0 -> differentiate along 3rd dimension (array index 2)
-                  axis=1 -> differentiate along 4th dimension (array index 3)
+            dt: Time step (spacing between grid points)
+            axis: Which time axis to differentiate along (0 or 1)
+                  axis=0 -> differentiate along first time dimension (array index 2)
+                  axis=1 -> differentiate along second time dimension (array index 3)
 
         Returns:
             NambuKeldyshTensor: Gradient with same shape as input
 
-        Example:
-            For shape (2, 2, Nt, Nt'):
-            - gradient(axis=0) computes ∂g/∂t
-            - gradient(axis=1) computes ∂g/∂t'
-        """
-        # Map user axis (0 or 1) to actual array axis (2 or 3)
-        actual_axis = axis + 2
-
-        # Compute difference: data[i] - data[i-1]
-        # Roll the array by 1 along the axis to get shifted version
-        shifted = np.roll(self.data, shift=1, axis=actual_axis)
-
-        # Compute gradient
-        gradient_data = self.data - shifted
-
-        # The first entry along this axis is invalid (wraps around from roll)
-        # Set it to zero since there's no previous value
-        slices = [slice(None)] * self.data.ndim
-        slices[actual_axis] = 0
-        gradient_data[tuple(slices)] = 0
-
-        return NambuKeldyshTensor(gradient_data)
-
-    def gradient_second_order(self, axis=0):
-        """
-        Compute discrete gradient along specified axis using 2nd-order backward difference.
-
-        Uses formula: dg/dx ≈ (3*g[i] - 4*g[i-1] + g[i-2]) / 2  (with dx=1)
-        First two entries use lower-order schemes (no sufficient history).
-
-        Args:
-            axis: Which axis to differentiate along (0 or 1), referring to axes after Nambu (2,2)
-                  axis=0 -> differentiate along 3rd dimension (array index 2)
-                  axis=1 -> differentiate along 4th dimension (array index 3)
-
-        Returns:
-            NambuKeldyshTensor: Gradient with same shape as input
+        Formula:
+            df/dt ≈ (f[i] - f[i-1]) / dt  (backward difference)
+            First point: df/dt = 0  (where backward shift gives zero-padding)
 
         Example:
-            For shape (2, 2, Nt, Nt'):
-            - gradient_second_order(axis=0) computes ∂g/∂t
-            - gradient_second_order(axis=1) computes ∂g/∂t'
+            For gr with shape (2, 2, 1, N_t):
+            dgr_dt = gr.gradient(dt, axis=1)  # Backward derivative along t' direction
         """
-        # Map user axis (0 or 1) to actual array axis (2 or 3)
-        actual_axis = axis + 2
+        # Get backward shift: f[i-1]
+        backward = self.shift(shift=1, axis=axis)  # shift=1 gives f[i-1]
 
-        # Get shifted versions for backward difference
-        shifted_1 = np.roll(self.data, shift=1, axis=actual_axis)  # g[i-1]
-        shifted_2 = np.roll(self.data, shift=2, axis=actual_axis)  # g[i-2]
+        # Backward difference: (f[i] - f[i-1]) / dt
+        gradient_data = (self.data - backward.data) / dt
 
-        # 2nd-order backward difference: (3*g[i] - 4*g[i-1] + g[i-2]) / 2
-        gradient_data = (3.0 * self.data - 4.0 * shifted_1 + shifted_2) / 2.0
-
-        # Handle first two entries (insufficient past history)
-        slices_0 = [slice(None)] * self.data.ndim
-        slices_1 = [slice(None)] * self.data.ndim
-
-        slices_0[actual_axis] = 0
-        slices_1[actual_axis] = 1
-
-        # First entry: no past, set to zero
-        gradient_data[tuple(slices_0)] = 0
-
-        # Second entry: use 1st-order backward (g[1] - g[0])
-        gradient_data[tuple(slices_1)] = self.data[tuple(slices_1)] - shifted_1[tuple(slices_1)]
+        # Set first point to zero (where backward shift gives zero-padding)
+        actual_axis = axis + 2  # Account for (2,2) Nambu indices
+        slices_first = [slice(None)] * self.data.ndim
+        slices_first[actual_axis] = 0
+        gradient_data[tuple(slices_first)] = 0.0
 
         return NambuKeldyshTensor(gradient_data)
 

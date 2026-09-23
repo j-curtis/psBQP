@@ -98,14 +98,14 @@ def main(num_steps=25):
 
     # ========== Define Parameters ==========
     grid_parameters = {
-        'time_sampling': 1001,
+        'time_sampling': 751,
         'time_duration': 2 * np.pi * 5,
         'eta': 0.2
     }
 
     system_parameters = {
         'critical_temperature': 1.0,
-        'temperature': 0.5,
+        'temperature': 0.1,
         'eta': 0.2
     }
 
@@ -255,6 +255,274 @@ def main(num_steps=25):
     plt.savefig(current_plot_path, dpi=150, bbox_inches='tight')
     print(f"  Saved: {current_plot_path}")
     plt.close()
+
+    print()
+
+    # ========== Check Normalization and FDT ==========
+    print("="*70)
+    print("Checking Normalization and FDT")
+    print("="*70)
+
+    # Ensure thermal distributions are computed
+    if not hasattr(evolution, 'thermal_dist'):
+        evolution.get_thermal_occupation(system_parameters['temperature'])
+        evolution.get_thermal_integral(system_parameters['temperature'])
+        evolution.get_log_two_time(system_parameters['temperature'])
+        evolution.get_thermal_sum(system_parameters['temperature'])
+
+    # Check initial state
+    print("\nChecking initial state...")
+    gr_errors_init, gr_totals_init = initial_state_copy.check_gr_normalization(t1_idx=-1)
+    gk_errors_init, gk_totals_init, gk_components_init = initial_state_copy.check_keldysh_normalization(
+        t1_idx=-1,
+        thermal_dist=evolution.thermal_dist,
+        thermal_integral=evolution.thermal_integral,
+        thermal_sum_left=evolution.thermal_sum_left,
+        thermal_sum_right=evolution.thermal_sum_right,
+        log_two_time=evolution.log_two_time,
+        tmax=evolution.tmax
+    )
+    gk_fdt_init, gk_actual_init, fdt_error_init, fdt_max_error_init = initial_state_copy.check_fdt(
+        f_thermal=evolution.thermal_dist,
+        f_thermal_integral=evolution.thermal_integral,
+        time_index=-1,
+        thermal_sum_left=evolution.thermal_sum_left,
+        thermal_sum_right=evolution.thermal_sum_right,
+        log_two_time=evolution.log_two_time,
+        tmax=evolution.tmax
+    )
+
+    print(f"  gr norm error (max):  {np.max(gr_errors_init):.2e}")
+    print(f"  gk constraint error (max): {np.max(gk_errors_init):.2e}")
+    print(f"  FDT error (max):      {fdt_max_error_init:.2e}")
+
+    # Check final state
+    print("\nChecking final state...")
+    gr_errors_final, gr_totals_final = final_state.check_gr_normalization(t1_idx=-1)
+    gk_errors_final, gk_totals_final, gk_components_final = final_state.check_keldysh_normalization(
+        t1_idx=-1,
+        thermal_dist=evolution.thermal_dist,
+        thermal_integral=evolution.thermal_integral,
+        thermal_sum_left=evolution.thermal_sum_left,
+        thermal_sum_right=evolution.thermal_sum_right,
+        log_two_time=evolution.log_two_time,
+        tmax=evolution.tmax
+    )
+    gk_fdt_final, gk_actual_final, fdt_error_final, fdt_max_error_final = final_state.check_fdt(
+        f_thermal=evolution.thermal_dist,
+        f_thermal_integral=evolution.thermal_integral,
+        time_index=-1,
+        thermal_sum_left=evolution.thermal_sum_left,
+        thermal_sum_right=evolution.thermal_sum_right,
+        log_two_time=evolution.log_two_time,
+        tmax=evolution.tmax
+    )
+
+    print(f"  gr norm error (max):  {np.max(gr_errors_final):.2e}")
+    print(f"  gk constraint error (max): {np.max(gk_errors_final):.2e}")
+    print(f"  FDT error (max):      {fdt_max_error_final:.2e}")
+
+    # Plot normalization comparisons
+    print("\nPlotting normalization checks...")
+    pauli_names = [r'$\tau_0$ (I)', r'$\tau_1$ (X)', r'$\tau_2$ (Y)', r'$\tau_3$ (Z)']
+
+    # gr normalization comparison
+    fig_gr, axes_gr = plt.subplots(2, 2, figsize=(12, 10))
+    fig_gr.suptitle('g^R Normalization: Initial vs Final', fontsize=14, fontweight='bold')
+
+    for pauli_idx in range(4):
+        ax = axes_gr.flat[pauli_idx]
+        comp_init = gr_totals_init[pauli_idx, :]
+        comp_final = gr_totals_final[pauli_idx, :]
+
+        ax.plot(evolution.time_grid, np.abs(comp_init), 'b-', linewidth=2, label='Init', alpha=0.7, marker='o', markevery=50, markersize=4)
+        ax.plot(evolution.time_grid, np.abs(comp_final), 'r-', linewidth=2, label='Final', alpha=0.7, marker='^', markevery=50, markersize=4)
+
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
+        ax.set_title(f'{pauli_names[pauli_idx]}', fontsize=11)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([evolution.time_grid[0], 0])
+        max_err_init = np.abs(comp_init).max()
+        max_err_final = np.abs(comp_final).max()
+        ax.text(0.02, 0.98, f'Init: {max_err_init:.2e}\nFinal: {max_err_final:.2e}',
+                transform=ax.transAxes, fontsize=8, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+    gr_norm_path = os.path.join(save_dir, f'gr_norm_comparison_{num_steps}steps.png')
+    plt.savefig(gr_norm_path, dpi=150, bbox_inches='tight')
+    print(f"  Saved: {gr_norm_path}")
+    plt.close()
+
+    # gk normalization comparison
+    fig_gk, axes_gk = plt.subplots(2, 2, figsize=(12, 10))
+    fig_gk.suptitle('g^K Keldysh Constraint: Initial vs Final', fontsize=14, fontweight='bold')
+
+    for pauli_idx in range(4):
+        ax = axes_gk.flat[pauli_idx]
+        comp_init = gk_totals_init[pauli_idx, :]
+        comp_final = gk_totals_final[pauli_idx, :]
+
+        ax.plot(evolution.time_grid, np.abs(comp_init), 'b-', linewidth=2, label='Init', alpha=0.7, marker='o', markevery=50, markersize=4)
+        ax.plot(evolution.time_grid, np.abs(comp_final), 'r-', linewidth=2, label='Final', alpha=0.7, marker='^', markevery=50, markersize=4)
+
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
+        ax.set_title(f'{pauli_names[pauli_idx]}', fontsize=11)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([evolution.time_grid[0], 0])
+
+        max_err_init = np.abs(comp_init).max()
+        max_err_final = np.abs(comp_final).max()
+        ax.text(0.02, 0.98, f'Init: {max_err_init:.2e}\nFinal: {max_err_final:.2e}',
+                transform=ax.transAxes, fontsize=8, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+    gk_norm_path = os.path.join(save_dir, f'gk_norm_comparison_{num_steps}steps.png')
+    plt.savefig(gk_norm_path, dpi=150, bbox_inches='tight')
+    print(f"  Saved: {gk_norm_path}")
+    plt.close()
+
+    # FDT comparison
+    fig_fdt, axes_fdt = plt.subplots(2, 2, figsize=(12, 10))
+    fig_fdt.suptitle('FDT Check: Initial vs Final (Zoomed to t\' ∈ [-10, 0.05])', fontsize=14, fontweight='bold')
+
+    for pauli_idx in range(4):
+        ax = axes_fdt.flat[pauli_idx]
+
+        error_init_pauli = (fdt_error_init.trace(pauli_idx) / 2)[0, :]
+        error_final_pauli = (fdt_error_final.trace(pauli_idx) / 2)[0, :]
+
+        ax.scatter(evolution.time_grid, np.abs(error_init_pauli), c='b', s=10, label='Init Error', alpha=0.6)
+        ax.scatter(evolution.time_grid, np.abs(error_final_pauli), c='r', s=10, label='Final Error', alpha=0.6, marker='^')
+
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.set_ylabel(f'{pauli_names[pauli_idx]}', fontsize=10)
+        ax.set_title(f'{pauli_names[pauli_idx]}', fontsize=11)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([-10, 0.05])  # Zoomed to see near-diagonal region
+
+        max_err_init = np.abs(error_init_pauli).max()
+        max_err_final = np.abs(error_final_pauli).max()
+        max_idx_init = np.argmax(np.abs(error_init_pauli))
+        max_idx_final = np.argmax(np.abs(error_final_pauli))
+
+        # Calculate offset from diagonal (last element)
+        offset_init = len(error_init_pauli) - 1 - max_idx_init
+        offset_final = len(error_final_pauli) - 1 - max_idx_final
+
+        ax.text(0.02, 0.98, f'Init max: {max_err_init:.2e}\n  at idx {max_idx_init} (offset {offset_init})\n'
+                            f'Final max: {max_err_final:.2e}\n  at idx {max_idx_final} (offset {offset_final})',
+                transform=ax.transAxes, fontsize=7, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+    fdt_comp_path = os.path.join(save_dir, f'fdt_comparison_{num_steps}steps.png')
+    plt.savefig(fdt_comp_path, dpi=150, bbox_inches='tight')
+    print(f"  Saved: {fdt_comp_path}")
+    plt.close()
+
+    # gk2 component breakdown - Initial and Final
+    print("\nPlotting gk2 component breakdowns...")
+    pauli_idx = 2  # tau_2
+
+    for state_name, gk_comps, time_grid in [
+        ('Initial', gk_components_init, evolution.time_grid),
+        ('Final', gk_components_final, evolution.time_grid)
+    ]:
+        fig_gk2, axes_gk2 = plt.subplots(2, 2, figsize=(14, 10))
+        fig_gk2.suptitle(rf'g^K Constraint: $\tau_2$ Component Breakdown ({state_name} State)', fontsize=14, fontweight='bold')
+
+        total = gk_comps['commutator'][pauli_idx, :] * 0  # Initialize as zero
+        components_list = [
+            ('commutator', r'$[\tau_3, g^K]$', 'b-'),
+            ('gr_gk_conv_pure', r'$g^R \otimes g^K$', 'r-'),
+            ('gk_ga_conv_pure', r'$g^K \otimes g^A$', 'g-'),
+            ('thermal_gr', r'$g^R \otimes f$', 'm--'),
+            ('thermal_ga', r'$f \otimes g^A$', 'c--'),
+            ('thermal_gap_gr_conv', r'$g^R \otimes \Delta f$', 'orange'),
+            ('thermal_gap_ga_conv', r'$\Delta f \otimes g^A$', 'brown'),
+            ('thermal_gap_commutator', r'$[\tau_3, \Delta f]$', 'purple')
+        ]
+
+        # Calculate total
+        for comp_key, _, _ in components_list:
+            total += gk_comps[comp_key][pauli_idx, :]
+
+        # Absolute values (linear scale)
+        ax = axes_gk2[0, 0]
+        ax.plot(time_grid, np.abs(total), 'k-', linewidth=2.5, label='Total', alpha=0.9)
+        for comp_key, label, style in components_list:
+            comp_data = gk_comps[comp_key][pauli_idx, :]
+            linestyle = ':' if 'gap' in comp_key else ('-' if '--' not in style else '--')
+            ax.plot(time_grid, np.abs(comp_data), style if style != 'orange' and style != 'brown' and style != 'purple' else linestyle,
+                    color=style if style in ['orange', 'brown', 'purple'] else None,
+                    linewidth=1.5, label=label, alpha=0.7)
+        ax.set_xlabel(r'$t$', fontsize=11)
+        ax.set_ylabel(r'|$\tau_2$|', fontsize=11)
+        ax.set_title('Absolute Value (linear)', fontsize=12)
+        ax.legend(fontsize=8, ncol=2)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], 0])
+
+        # Absolute values (log scale)
+        ax = axes_gk2[0, 1]
+        ax.semilogy(time_grid, np.abs(total) + 1e-20, 'k-', linewidth=2.5, label='Total', alpha=0.9)
+        for comp_key, label, style in components_list:
+            comp_data = gk_comps[comp_key][pauli_idx, :]
+            linestyle = ':' if 'gap' in comp_key else ('-' if '--' not in style else '--')
+            ax.semilogy(time_grid, np.abs(comp_data) + 1e-20, style if style != 'orange' and style != 'brown' and style != 'purple' else linestyle,
+                        color=style if style in ['orange', 'brown', 'purple'] else None,
+                        linewidth=1.5, label=label, alpha=0.7)
+        ax.set_xlabel(r'$t$', fontsize=11)
+        ax.set_ylabel(r'|$\tau_2$|', fontsize=11)
+        ax.set_title('Absolute Value (log)', fontsize=12)
+        ax.legend(fontsize=8, ncol=2)
+        ax.grid(True, alpha=0.3, which='both')
+        ax.set_xlim([time_grid[0], 0])
+
+        # Key components comparison (absolute values)
+        ax = axes_gk2[1, 0]
+        key_components = [
+            ('commutator', r'$[\tau_3, g^K]$', 'b-'),
+            ('thermal_gap_gr_conv', r'$g^R \otimes \Delta f$', 'orange'),
+            ('thermal_gap_ga_conv', r'$\Delta f \otimes g^A$', 'brown'),
+        ]
+        ax.plot(time_grid, np.abs(total), 'k-', linewidth=2.5, label='Total', alpha=0.9)
+        for comp_key, label, style in key_components:
+            comp_data = gk_comps[comp_key][pauli_idx, :]
+            ax.plot(time_grid, np.abs(comp_data), style if style != 'orange' and style != 'brown' else '-',
+                    color=style if style in ['orange', 'brown'] else None,
+                    linewidth=1.5, label=label, alpha=0.7)
+        ax.set_xlabel(r'$t$', fontsize=11)
+        ax.set_ylabel(r'|$\tau_2$|', fontsize=11)
+        ax.set_title('Key Components (linear)', fontsize=12)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([time_grid[0], 0])
+
+        # Statistics
+        ax = axes_gk2[1, 1]
+        ax.axis('off')
+        stats_text = rf"$\tau_2$ Component Stats ({state_name}):" + "\n\n"
+        stats_text += f"Total max:          {np.abs(total).max():.2e}\n"
+        for comp_key, label, _ in components_list:
+            comp_data = gk_comps[comp_key][pauli_idx, :]
+            # Strip LaTeX from label for stats
+            clean_label = label.replace('$', '').replace('\\', '').replace('{', '').replace('}', '')[:15]
+            stats_text += f"{clean_label:20s} {np.abs(comp_data).max():.2e}\n"
+        ax.text(0.1, 0.5, stats_text, transform=ax.transAxes, fontsize=10, verticalalignment='center', family='monospace')
+
+        plt.tight_layout()
+        gk2_path = os.path.join(save_dir, f'gk2_breakdown_{state_name.lower()}_{num_steps}steps.png')
+        plt.savefig(gk2_path, dpi=150, bbox_inches='tight')
+        print(f"  Saved: {gk2_path}")
+        plt.close()
 
     print()
 

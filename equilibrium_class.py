@@ -228,7 +228,7 @@ class EquilibriumSolver:
         # Broadcast: (2,2,Nt,Nt) * (Nt,Nt) -> (2,2,Nt,Nt)
         gr_two_time.data *= theta_mask[np.newaxis, np.newaxis, :, :]
 
-        # Zero out off-diagonal Nambu elements on the diagonal (equal-time only)
+        # Zero out diagonal Nambu elements (τ_0 and τ_3 channels) on equal-time diagonal
         diagonal_indices = np.arange(Nt)
         gr_two_time.data[1, 1, diagonal_indices, diagonal_indices] = 0.0
         gr_two_time.data[0, 0, diagonal_indices, diagonal_indices] = 0.0
@@ -253,7 +253,7 @@ class EquilibriumSolver:
         omega_grid = self.usadel_solver.w_arr
         n_omega = len(omega_grid)
 
-        temperature = self.system_parameters['temperature'] 
+        temperature = self.system_parameters['temperature']
         # Extract Pauli components from NambuTensor using trace
         # Store asymptotic coefficients to add back after FFT
         g_pauli = []
@@ -273,10 +273,10 @@ class EquilibriumSolver:
                     C_constant = pauli_component[-1]
                     pauli_component = pauli_component - C_constant
                     asymptotic_coeffs.append(('constant', C_constant, None))
-                elif pauli_idx == 2: # tau_1, tau_2: 1/ω asymptotic     
+                elif pauli_idx == 2: # tau_1, tau_2: 1/ω asymptotic
                     # Choose regularization scale ω₀
                     # Use a characteristic energy (e.g., twice the gap or broadening)
-                    omega_10percent = np.max(omega_grid) * 1e-2
+                    omega_10percent = np.max(omega_grid) * 1e-1
                     omega_0 = np.abs(omega_10percent) / 2.0  # Regularization scale
                     C_decay = -1j*self.gap_0
                     C_prime = -1j*self.gap_0 * (-1j * self.system_parameters['eta'])
@@ -302,14 +302,13 @@ class EquilibriumSolver:
                     # Subtract this before FFT to avoid Gibbs oscillations
                     # Add back 2*Δ*F(τ) in time domain, where F is thermal integral
                     tanh_omega = np.tanh(omega_grid / (2.0 * temperature))
-                    asymptotic_gk2 = 2.0j * self.gap_0 / (omega_grid + 1e-6) * tanh_omega
+                    asymptotic_gk2 = -2.0j * self.gap_0 / (omega_grid + 1e-11) * tanh_omega
 
                     # Fix value at ω=0 using Taylor expansion: lim_{ω→0} 2iΔ/ω·tanh(ω/2T) = iΔ/T
                     zero_idx = np.argmin(np.abs(omega_grid))
                     asymptotic_gk2 = np.array(asymptotic_gk2, dtype=complex)
-                    asymptotic_gk2[zero_idx] = 1j * self.gap_0 / temperature
-
-                    pauli_component = pauli_component + asymptotic_gk2
+                    asymptotic_gk2[zero_idx] = -1j * self.gap_0 / temperature
+                    pauli_component = pauli_component - asymptotic_gk2
 
                     asymptotic_coeffs.append(None)  # Don't add back (normalization issue)
                 else:  # pauli_idx 0, 1: no regularization for these
@@ -326,6 +325,20 @@ class EquilibriumSolver:
         # Convention: g(τ) = ∫ dω/(2π) e^{-iωτ} g(ω)
         g_tau_pauli = []
 
+        # CRITICAL: omega_grid is EXTENDED grid with n_omega = 2*N_t - 1 points
+        # For extended grid covering [-T_max, T_max] with 2*N_t-1 points and spacing dt,
+        # the tau grid must match exactly to avoid indexing errors in _omega_to_two_time.
+        # Extract T_max from grid_parameters
+        if 'time_duration' in self.grid_parameters:
+            tmax = self.grid_parameters['time_duration']
+        elif 't_max' in self.grid_parameters:
+            tmax = self.grid_parameters['t_max']
+        else:
+            raise ValueError("grid_parameters must contain 'time_duration' or 't_max'")
+
+        # Use exact T_max (not π/dω) to match indexing assumptions
+        tau_max = tmax
+
         for pauli_idx, pauli_component in enumerate(g_pauli):
             # Undo the fftshift to prepare for fft
             g_omega_unshifted = np.fft.ifftshift(pauli_component)
@@ -337,14 +350,15 @@ class EquilibriumSolver:
 
             # Apply normalization from the integral measure: Δω/(2π)
             # Note: fft already gives the full sum, so just multiply by Δω/(2π)
-            g_tau = g_tau_raw * d_omega / (2.0 * np.pi)
+            g_tau = g_tau_raw * d_omega / (2.0 * np.pi) 
 
             # Shift to get correct tau ordering
             g_tau_shifted = np.fft.fftshift(g_tau)
 
             # Add back the asymptotic contribution in time domain
-            # Reconstruct tau grid for the FFT output
-            tau_grid_fft = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
+            # Tau grid is extended: [-tau_max, tau_max] with n_omega points
+            # This equals [-T_max, T_max] with same spacing as evolution grid
+            tau_grid_fft = np.linspace(-tau_max, tau_max, n_omega)
 
             # Only add back for indices that had regularization (skip None entries)
             if asymptotic_coeffs[pauli_idx] is not None:
@@ -354,7 +368,7 @@ class EquilibriumSolver:
                 if asym_type == 'lorentzian':  # Lorentzian: C·ω/(ω² + ω₀²)
                     omega_0 = asymptotic_coeffs[pauli_idx][2]
                     # FT[C·ω/(ω² + ω₀²)] = -(iC/2)·sign(τ)·exp(-ω₀|τ|)  [CORRECTED SIGN]
-                    asymptotic_contribution = -(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-10) * np.exp(-omega_0 * np.abs(tau_grid_fft))
+                    asymptotic_contribution = -(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-6) * np.exp(-omega_0 * np.abs(tau_grid_fft))
                     g_tau_shifted = g_tau_shifted + asymptotic_contribution
 
                 elif asym_type == 'lorentzian_extended':  # Extended: C·ω/(ω²+ω₀²) + C'/(ω²+ω₀²)
@@ -362,7 +376,7 @@ class EquilibriumSolver:
                     omega_0 = asymptotic_coeffs[pauli_idx][3]
                     # FT[C·ω/(ω²+ω₀²)] = -(iC/2)·sign(τ)·exp(-ω₀|τ|)  [CORRECTED SIGN]
                     # FT[C'/(ω²+ω₀²)] = (C'/2ω₀)·exp(-ω₀|τ|)
-                    asymptotic_contribution = (-(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-10) +
+                    asymptotic_contribution = (-(1j * C / 2.0) * np.sign(tau_grid_fft + 1e-6) +
                                             (C_prime / (2.0 * omega_0))) * \
                                             np.exp(-omega_0 * np.abs(tau_grid_fft))
                     g_tau_shifted = g_tau_shifted + asymptotic_contribution
@@ -444,9 +458,11 @@ class EquilibriumSolver:
         # θ(τ) enforces g^R(τ) = 0 for τ < 0
         # g^K should NOT have causality constraint to preserve symmetry
         if g_type == 'r':
-            d_omega = omega_grid[1] - omega_grid[0]
-            tau_grid_fft = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
-            theta_mask = (tau_grid_fft >= 0).astype(float)
+            # Tau grid is extended: [-T_max, T_max] with n_omega = 2*N_t - 1 points
+            # Causality: g^R(τ) = 0 for τ < 0
+            # Use tolerance to handle floating point errors near τ=0
+            tau_grid_fft = np.linspace(-tau_max, tau_max, n_omega)
+            theta_mask = (tau_grid_fft > -1e-10).astype(float)  # Tolerance for τ ≈ 0
             g_one_time.data *= theta_mask[np.newaxis, np.newaxis, :]
 
         return g_one_time
@@ -500,57 +516,41 @@ class EquilibriumSolver:
             g_tau_pauli.append(np.array(g_one_time.trace(pauli_idx))/2)
 
         # Build g(t,t') on the time grid [-T_max, 0]
-        # Create meshgrid of time values for all (t_i, t_j) pairs
+        # With extended grid, NO INTERPOLATION needed - grids align perfectly!
+
+        # EXTENDED FFT: g_tau has n_omega = 2*N_t - 1 points on [-T_max, T_max]
+        # Evolution: time_grid has N_t points on [-T_max, 0]
+        # Both grids have SAME spacing dt = T_max / (N_t - 1)
+
+        # For g(t,t') where t, t' in [-T_max, 0], we need tau = t - t' in [-T_max, T_max]
+        # Since grids align, we can use direct array indexing
+
+        # Tau grid from FFT: tau_k = -T_max + k*dt for k = 0, ..., n_omega-1
+        # For a given tau value, index k = round((tau - (-T_max)) / dt)
+        # Equivalently: k = round((tau + T_max) / dt)
+
+        # Create meshgrid for all (t_i, t_j) pairs
         t_i, t_j = np.meshgrid(time_grid, time_grid, indexing='ij')
 
-        # Compute tau = t_i - t_j for all pairs at once
+        # Compute tau = t_i - t_j for all pairs
         tau_matrix = t_i - t_j
 
-        # Compute tau indices for all pairs
-        # tau = 0 should be at the center of g_tau (index n_omega // 2)
+        # Convert tau to indices in g_tau (extended grid)
+        # tau ranges from -T_max to +T_max
+        # g_tau[0] corresponds to tau = -T_max
+        # g_tau[N_t-1] corresponds to tau = 0
+        # g_tau[2*N_t-2] corresponds to tau = +T_max
+        # Both grids have same spacing dt → should align, but use rounding for floating point safety
+        tau_idx_matrix = np.round((tau_matrix + tmax) / dt).astype(int)
 
-        #* New code
-        # Compute actual tau spacing from FFT grid
-        d_omega = omega_grid[1] - omega_grid[0]
-        tau_grid_actual = np.linspace(-np.pi/d_omega, np.pi/d_omega, n_omega)
-        dtau_fft = tau_grid_actual[1] - tau_grid_actual[0]
+        # Clip to valid range (should not be needed if grids align, but for safety)
+        tau_idx_matrix = np.clip(tau_idx_matrix, 0, n_omega - 1)
 
-        # Verify using formula (for debugging)
-        # Note: linspace with n_omega points uses n_omega-1 intervals
-        dtau_formula = 2*np.pi / (d_omega * (n_omega - 1))
-
-        # Compute tau indices by finding nearest neighbor in tau_grid_actual
-        # Use searchsorted to find insertion points, then check which neighbor is closer
-        tau_flat = tau_matrix.flatten()
-        tau_indices_right = np.searchsorted(tau_grid_actual, tau_flat)
-
-        # Clip to valid range
-        tau_indices_right = np.clip(tau_indices_right, 0, n_omega - 1)
-        tau_indices_left = np.clip(tau_indices_right - 1, 0, n_omega - 1)
-
-        # Find which neighbor is closer
-        dist_left = np.abs(tau_flat - tau_grid_actual[tau_indices_left])
-        dist_right = np.abs(tau_flat - tau_grid_actual[tau_indices_right])
-
-        # Choose the closer index
-        tau_indices = np.where(dist_left < dist_right, tau_indices_left, tau_indices_right)
-        tau_idx_matrix = tau_indices.reshape(tau_matrix.shape)
-
-        # Grid spacings for reference (dtau_fft already computed above)
-        dt_evolution = tmax / (ntpoints - 1)
-
-
-        # Create mask for valid indices (g_tau has n_omega points from FFT)
-        valid_mask = (tau_idx_matrix >= 0) & (tau_idx_matrix < n_omega)
-
+        # Fill g(t,t') by direct indexing - no interpolation!
         g_two_time_pauli = []
         for g_tau in g_tau_pauli:
-            # Initialize g(t,t') array on time grid [-T_max, 0]
-            g_tt = np.zeros((ntpoints, ntpoints), dtype=complex)
-
-            # Fill g(t,t') using advanced indexing (vectorized)
-            g_tt[valid_mask] = g_tau[tau_idx_matrix[valid_mask]]
-
+            # Direct array indexing: g(t,t') = g_tau[tau=t-t']
+            g_tt = g_tau[tau_idx_matrix]
             g_two_time_pauli.append(g_tt)
 
         # Convert from Pauli components to NambuKeldyshTensor

@@ -1,0 +1,143 @@
+================================================================================
+DIAGONAL FDT ERROR SCALING ANALYSIS
+================================================================================
+
+
+================================================================================
+Testing N_t = 501
+================================================================================
+
+Grid: N_t=501, T_max=31.4159
+Time step: dt = 0.062832
+
+Generating equilibrium state...
+
+============================================================
+EQUILIBRIUM SOLVER - GRID PARAMETERS
+============================================================
+Broadening eta:     0.2
+Time sampling:      501
+Time duration:      31.41592653589793
+
+SYSTEM PARAMETERS
+------------------------------------------------------------
+Critical temp Tc:   1.0
+Temperature T:      0.1
+============================================================
+
+Equilibrium gap set: gap_0 = 1.5507968663184037
+  Gap: |Δ| = 1.551470
+Checking FDT...
+gradient correction left is [ 1.29760010e-17+0.02289753j  3.56444954e-18+0.01927207j
+ -4.54774596e-18+0.01446877j]
+gradient correction right is [ 0.00000000e+00+0.j         -6.46166222e-18-0.98726607j
+  4.54774596e-18+0.01446877j]
+
+FDT Error Results:
+  Diagonal error (τ₂):       4.082826e-03
+  Avg off-diagonal (nearby): 9.322758e-03
+  Max error (all elements):  3.542052e-02
+  Diagonal / dt:             6.498019e-02
+  Avg off-diag / dt²:        2.361482e+00
+
+================================================================================
+Testing N_t = 751
+================================================================================
+
+Grid: N_t=751, T_max=31.4159
+Time step: dt = 0.041888
+
+Generating equilibrium state...
+
+============================================================
+EQUILIBRIUM SOLVER - GRID PARAMETERS
+============================================================
+Broadening eta:     0.2
+Time sampling:      751
+Time duration:      31.41592653589793
+
+SYSTEM PARAMETERS
+------------------------------------------------------------
+Critical temp Tc:   1.0
+Temperature T:      0.1
+============================================================
+
+Equilibrium gap set: gap_0 = 1.55043310490419
+  Gap: |Δ| = 1.550882
+Checking FDT...
+gradient correction left is [ 4.03240764e-17+0.01293116j  1.79492764e-18+0.01148859j
+ -2.06798959e-17+0.00910946j]
+gradient correction right is [0.00000000e+00+0.j         1.09428167e-17-0.98703527j
+ 2.06798959e-17+0.00910946j]
+
+FDT Error Results:
+  Diagonal error (τ₂):       2.560950e-03
+  Avg off-diagonal (nearby): 9.784010e-03
+  Max error (all elements):  3.637209e-02
+  Diagonal / dt:             6.113818e-02
+  Avg off-diag / dt²:        5.576217e+00
+
+================================================================================
+Testing N_t = 1001
+================================================================================
+
+Grid: N_t=1001, T_max=31.4159
+Time step: dt = 0.031416
+
+Generating equilibrium state...
+
+============================================================
+EQUILIBRIUM SOLVER - GRID PARAMETERS
+============================================================
+Broadening eta:     0.2
+Time sampling:      1001
+Time duration:      31.41592653589793
+
+SYSTEM PARAMETERS
+------------------------------------------------------------
+Critical temp Tc:   1.0
+Temperature T:      0.1
+============================================================
+
+Equilibrium gap set: gap_0 = 1.5502165531937313
+  Gap: |Δ| = 1.550553
+Checking FDT...
+gradient correction left is [-2.34160009e-18+0.00877227j -1.75605029e-17+0.0081275j
+ -2.46386148e-18+0.00661164j]
+gradient correction right is [ 0.00000000e+00+0.j         -1.25081595e-17-0.98689769j
+  2.46386148e-18+0.00661164j]
+
+FDT Error Results:
+  Diagonal error (τ₂):       1.862101e-03
+  Avg off-diagonal (nearby): 1.003854e-02
+  Max error (all elements):  3.679086e-02
+  Diagonal / dt:             5.927252e-02
+  Avg off-diag / dt²:        1.017117e+01
+
+================================================================================
+SCALING ANALYSIS
+================================================================================
+
+N_t      dt           Diagonal       Off-diag       Diag/dt      Off-diag/dt²  
+--------------------------------------------------------------------------------
+501      6.283185e-02 4.082826e-03   9.322758e-03   0.06         2.36          
+751      4.188790e-02 2.560950e-03   9.784010e-03   0.06         5.58          
+1001     3.141593e-02 1.862101e-03   1.003854e-02   0.06         10.17         
+
+Scaling Analysis
+  Diagonal error ratio (N=501/1001): 2.1926
+  dt ratio:                                    2.0000
+  Expected for O(dt):                          2.0000
+  Expected for O(dt²):                         4.0000
+  => Diagonal error scales as O(dt) ✓
+
+  Off-diagonal error ratio:                    0.9287
+  Expected for O(dt²):                         4.0000
+
+Generating plots...
+  Saved: Test_plots/diagonal_fdt_scaling.png
+
+================================================================================
+Analysis complete!
+================================================================================
+

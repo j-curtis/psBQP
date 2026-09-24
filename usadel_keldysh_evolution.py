@@ -1052,10 +1052,11 @@ class UsadelKeldyshEvolution:
 
         diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)] 
 
-        rhs_term_1 +=   -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:], gap_tensor = gap_tensor) + gr_last_row.precise_convolution_left(self.thermal_dist , self.thermal_integral[-1:,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1:,:],gap_tensor = gap_tensor) * tau3)
+        rhs_term_1 += -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:]) + gr_last_row.precise_convolution_left(self.thermal_dist , self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right) * tau3)
         
-        # convolution with the midpoint rule    
-        thermal_gap_conv = -1  * self.delta_t  *  (gr_last_row @ thermal_gap_term - 0.5 * gr_last_row[-1:,-1:] * thermal_gap_term[-1:,:] + thermal_gap_term[-1:,:] @ ga - 0.5 * thermal_gap_term[-1:,:] * ga.diagonal_time())
+        # convolution with the midpoint rule
+        thermal_gap_conv = -1  * self.delta_t  *  (gr_last_row @ thermal_gap_term - 0.5 * gr_last_row[-1:,0:1] * thermal_gap_term[0:1,:] - 0.5 * gr_last_row[-1:,-1:] * thermal_gap_term[-1:,:]
+                                                     + thermal_gap_term[-1:,:] @ ga - 0.5 * thermal_gap_term[-1:,0] * ga[0:1,:] - 0.5 * thermal_gap_term[-1:,:] * ga.diagonal_time())
 
         #* regularization of the thermal_gap_integral with gr
         eval_time_1 = -self.tmax - self.time_grid
@@ -1461,7 +1462,7 @@ class UsadelKeldyshEvolution:
                 dt_end = None if dt_shift == 0 else -dt_shift
                 # Dynes self-energy terms -- sigma^K g^A + g^R sigma^K 
                 thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
-                - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1) * tau3)
+                - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * tau3)
                 # gap-f term
                 thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
                 # new term 
@@ -1501,8 +1502,8 @@ class UsadelKeldyshEvolution:
                 for dt_shift in [0, 1]:  # NEW: Add missing dt_shift loop
                     dt_end = None if dt_shift == 0 else -dt_shift
 
-                    term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
-                    term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
+                    term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1)
+                    term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
                     term1and2_right = -2j * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3).precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
 
                     em_thermal_conv1 += cn_factor * (term1_left + term2_left + term1and2_right)

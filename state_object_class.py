@@ -403,38 +403,33 @@ class StateObject:
 
         thermal_gap_term = (- thermal_integral * gap_tensor - gap_tensor * thermal_integral)
 
-        # Commutator term: [τ₃, g^K(t1, t2)] for all t2
-        commutator = tau3 * gk_row - gk_row * tau3  
-
-        # Add thermal_gap_term commutator: [τ₃, thermal_gap_term(t1, t2)]
+        # Add thermal_gap_term commutator:
         thermal_gap_commutator = tau3 * thermal_gap_term[t1_pos:t1_pos+1, :] - thermal_gap_term[t1_pos:t1_pos+1, :] * tau3
-        commutator = commutator + thermal_gap_commutator
+        
+        # commutator
+        commutator = tau3 * gk_row - gk_row * tau3   + thermal_gap_commutator
         
         # First convolution: ∫ g^R(t1, t') g^K(t', t2) dt' for all t2
-        conv1 = (gr_row @ self.gk) * self.dt  # shape (2,2,1,Nt) #* goes up to t for t' so we sum over all of them from -infty to t, i.e. full matrix
 
         # Apply midpoint rule to conv1
-        # Integration from t'=0 to t'=t1 for all t2
-        # First endpoint: gr[t1, 0] * gk[0, t2]
-        # Last endpoint: gr[t1, t1] * gk[t1, t2]
-        gr_t1_0 = self.gr[t1_pos, 0:1]  # shape (2,2)
-        gk_0_row = self.gk[0:1, :]  # shape (2,2,1,Nt)
-        first_endpoint_1 = gr_t1_0 * gk_0_row  # gr[t1, 0] * gk[0, t2]
+        gr_t1_0 = self.gr[t1_pos, 0:1]  
+        gk_0_row = self.gk[0:1, :]  
+        first_endpoint_1 = gr_t1_0 * gk_0_row  
 
-        gr_t1_t1 = self.gr[t1_pos, t1_pos:t1_pos+1]  # shape (2,2,1)
-        gk_t1_row = self.gk[t1_pos:t1_pos+1, :]  # shape (2,2,1,Nt)
-        last_endpoint_1 = gr_t1_t1 * gk_t1_row  # gr[t1, t1] * gk[t1, t2]
+        gr_t1_t1 = self.gr[t1_pos, t1_pos:t1_pos+1]  
+        gk_t1_row = self.gk[t1_pos:t1_pos+1, :]  
+        last_endpoint_1 = gr_t1_t1 * gk_t1_row  
 
-        conv1 = conv1 - 0.5 * self.dt * first_endpoint_1  - 0.5 * self.dt * last_endpoint_1
+        conv1 = (gr_row @ self.gk) * self.dt - 0.5 * self.dt * first_endpoint_1  - 0.5 * self.dt * last_endpoint_1
 
         # Add thermal_gap_term convolution: ∫ g^R(t1, t') thermal_gap_term(t', t2) dt'
-        thermal_gap_gr_conv = (gr_row @ thermal_gap_term) * self.dt
         thermal_gap_0_row = thermal_gap_term[0:1, :]
         thermal_gap_gr_first = gr_t1_0 * thermal_gap_0_row
         thermal_gap_gr_last = gr_t1_t1 * thermal_gap_term[t1_pos:t1_pos+1, :]
-        thermal_gap_gr_conv = thermal_gap_gr_conv - 0.5 * self.dt * thermal_gap_gr_first - 0.5 * self.dt * thermal_gap_gr_last
+        thermal_gap_gr_conv =  (gr_row @ thermal_gap_term) * self.dt - 0.5 * self.dt * thermal_gap_gr_first - 0.5 * self.dt * thermal_gap_gr_last
 
         # Add log regularization for gr @ thermal_gap_term
+        #* regularization of the thermal_gap integral due to the log divergent term 
         if log_two_time is not None and tmax is not None:
             expansion_tensor = NambuKeldyshTensor(np.ones(N_t), pauli_channel=0)
             eval_time_1 = -tmax - self.time_grid
@@ -445,7 +440,7 @@ class StateObject:
             # Extract gap at time t1_pos
             gap_at_t1 = gap_tensor[t1_pos:t1_pos+1]
             log_reg_gr = -1 * gr_row * -2 * gap_at_t1 * ((-1 * expansion_tensor @ log_two_time + 0.5 * log_two_time[t1_pos, :]) * self.dt + (log_term_edge_1 - log_term_edge_2))
-            thermal_gap_gr_conv = thermal_gap_gr_conv + log_reg_gr
+            #thermal_gap_gr_conv = thermal_gap_gr_conv + log_reg_gr
 
         conv1 = conv1 + thermal_gap_gr_conv
 
@@ -489,7 +484,7 @@ class StateObject:
             # Extract gap at time t1_pos
             gap_at_t1 = gap_tensor[t1_pos:t1_pos+1]
             log_reg_ga = -1 * full_expansion_tensor * ((-1 * log_two_time[t1_pos, :] @ ones_tensor + 0.5 * log_two_time[t1_pos, :]) * self.dt + (log_term_edge_3 - log_term_edge_4)) * gap_at_t1 * -2 * ga.diagonal_time()
-            thermal_gap_ga_conv = thermal_gap_ga_conv + log_reg_ga
+            #thermal_gap_ga_conv = thermal_gap_ga_conv + log_reg_ga
 
         conv2 = conv2 + thermal_gap_ga_conv
         

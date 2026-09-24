@@ -371,8 +371,6 @@ class NambuKeldyshTensor:
         filter_tensor[-1,-1] = 0.5
         filter_tensor = NambuKeldyshTensor(filter_tensor, pauli_channel=0)
 
-        print('gradient correction right is', gradient_correction[-1,-3:].trace(pauli_index=2))
-
         return (result_std + (- result_fact + result_anal) + filter_tensor * gradient_correction)
 
     def _check_binary_shape_compatibility(self, other):

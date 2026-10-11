@@ -3,6 +3,7 @@ State object class for Keldysh formalism.
 Stores retarded Green's function, Keldysh Green's function, and all system properties.
 """
 
+import copy
 import numpy as np
 from nambu_keldysh_class import NambuKeldyshTensor, get_pauli_matrix
 
@@ -72,6 +73,19 @@ class StateObject:
             self.occupation_function = 0 * self.gr
         else:
             self.occupation_function = None
+
+    def copy(self):
+        """
+        Independent copy of the state: scalars and grid are shared, Green's functions get their own data.
+        Used for trial evolution steps that must not modify the original state.
+        """
+        new_state = copy.copy(self)
+        new_state.gr = self.gr.copy()
+        new_state.gk = self.gk.copy()
+        if self.occupation_function is not None:
+            new_state.occupation_function = self.occupation_function.copy()
+        return new_state
+
     # ========== Green's Function Relations ==========
 
     def _r2a(self):
@@ -364,7 +378,7 @@ class StateObject:
 
     #** Skipped for now, not important for equilibrium computation, but useful for debugging
     def check_keldysh_normalization(self, t1_idx, thermal_dist, thermal_integral,
-                                     thermal_sum_left=None, thermal_sum_right=None, log_two_time=None, tmax=None):
+                                     thermal_sum_left=None, thermal_sum_right=None, log_two_time=None):
         """
         Verify FDT normalization constraint at fixed t₁ for all t₂.
 
@@ -378,8 +392,7 @@ class StateObject:
             thermal_integral: Integral of thermal distribution F(t,t') - NambuKeldyshTensor
             thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
             thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
-            log_two_time: Pre-computed log(|t-t'|) matrix for regularization (optional)
-            tmax: Maximum time for log regularization (optional)
+            log_two_time: Pre-computed log(|t-t'|) matrix; enables log regularization of the thermal_gap_term convolutions (optional)
 
         Returns:
             errors: np.ndarray of shape (N_t,) with error norm at each t₂
@@ -428,19 +441,24 @@ class StateObject:
         thermal_gap_gr_last = gr_t1_t1 * thermal_gap_term[t1_pos:t1_pos+1, :]
         thermal_gap_gr_conv =  (gr_row @ thermal_gap_term) * self.dt - 0.5 * self.dt * thermal_gap_gr_first - 0.5 * self.dt * thermal_gap_gr_last
 
-        # Add log regularization for gr @ thermal_gap_term
-        #* regularization of the thermal_gap integral due to the log divergent term 
-        if log_two_time is not None and tmax is not None:
-            expansion_tensor = NambuKeldyshTensor(np.ones(N_t), pauli_channel=0)
-            eval_time_1 = -tmax - self.time_grid
-            eval_time_2 = -self.time_grid
-            log_term_edge_1 = -NambuKeldyshTensor(1j/np.pi * -eval_time_1 * (np.log(np.abs(np.pi * eval_time_1 * self.temperature / 2.0) + 1e-8) - 1.0), pauli_channel=0) * expansion_tensor
-            log_term_edge_2 = -NambuKeldyshTensor(1j/np.pi * -eval_time_2 * (np.log(np.abs(np.pi * (eval_time_2) * self.temperature / 2.0) + 1e-8) - 1.0), pauli_channel=0) * expansion_tensor
+        #* log regularization: F(τ) ≈ L(τ) = -i/π ln|πTτ/2| near τ=0. Factor the smooth part A at the singular point,
+        #* subtract its trapezoid sum A*·Σ_trap L and add the exact integral A*·∫L, same idea as precise_convolution
+        if log_two_time is not None:
+            L_mat = log_two_time.data[0, 0]
+            t0, t1 = self.time_grid[0], self.time_grid[t1_pos]
 
-            # Extract gap at time t1_pos
-            gap_at_t1 = gap_tensor[t1_pos:t1_pos+1]
-            log_reg_gr = -1 * gr_row * -2 * gap_at_t1 * ((-1 * expansion_tensor @ log_two_time + 0.5 * log_two_time[t1_pos, :]) * self.dt + (log_term_edge_1 - log_term_edge_2))
-            #thermal_gap_gr_conv = thermal_gap_gr_conv + log_reg_gr
+            def log_antiderivative(u):
+                u_safe = np.where(u == 0, 1.0, u)
+                return np.where(u == 0, 0.0, -1j/np.pi * u * (np.log(np.abs(np.pi * u_safe * self.temperature / 2.0)) - 1.0))
+
+            # ∫ gr(t1,t'') thermal_gap_term(t'',t2) dt'' for t'' in [t0, t1], singular at t''=t2, A* = -2 gr(t1,t2) Δ(t2)
+            trap_weights_gr = np.ones(t1_pos + 1)
+            trap_weights_gr[0] -= 0.5
+            trap_weights_gr[-1] -= 0.5
+            log_bracket_gr = (log_antiderivative(t1 - self.time_grid) - log_antiderivative(t0 - self.time_grid)
+                              - self.dt * (trap_weights_gr @ L_mat[:t1_pos+1, :]))
+            log_reg_gr = -2 * gr_row * gap_tensor * NambuKeldyshTensor(log_bracket_gr[np.newaxis, :], pauli_channel=0)
+            thermal_gap_gr_conv = thermal_gap_gr_conv + log_reg_gr
 
         conv1 = conv1 + thermal_gap_gr_conv
 
@@ -466,25 +484,16 @@ class StateObject:
         thermal_gap_ga_last = thermal_gap_term[t1_pos:t1_pos+1, :] * ga.diagonal_time()
         thermal_gap_ga_conv = thermal_gap_ga_conv - 0.5 * self.dt * thermal_gap_ga_first - 0.5 * self.dt * thermal_gap_ga_last
 
-        # Add log regularization for thermal_gap_term @ ga
-        if log_two_time is not None and tmax is not None:
+        # ∫ thermal_gap_term(t1,t'') ga(t'',t2) dt'' for t'' in [t0, t2], singular at t''=t1 >= t2,
+        # smooth part factored at the nearest edge t''=t2 (as in precise_convolution_right): A* = -(Δ(t2) + Δ(t1)) ga(t2,t2)
+        if log_two_time is not None:
+            L_row = L_mat[t1_pos, :]
+            trap_sum_ga = self.dt * (np.cumsum(L_row) - 0.5 * L_row[0] - 0.5 * L_row)
+            log_bracket_ga = (log_antiderivative(self.time_grid - t1) - log_antiderivative(t0 - t1) - trap_sum_ga)
             expansion_tensor = NambuKeldyshTensor(np.ones(N_t), pauli_channel=0)
-            full_expansion_tensor = NambuKeldyshTensor(np.ones((1, N_t)), pauli_channel=0)
-
-            row_indices = np.arange(N_t)[:, np.newaxis]
-            col_indices = np.arange(N_t)[np.newaxis, :]
-            ones_data = (row_indices <= col_indices).astype(complex)
-            ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
-
-            eval_time_3 = - tmax + 0 * self.time_grid
-            eval_time_4 = self.time_grid
-            log_term_edge_3 = -NambuKeldyshTensor(1j/np.pi * -eval_time_3 * (np.log(np.abs(np.pi * eval_time_3 * self.temperature / 2.0) + 1e-8) - 1.0), pauli_channel=0) * expansion_tensor
-            log_term_edge_4 = -NambuKeldyshTensor(1j/np.pi * -eval_time_4 * (np.log(np.abs(np.pi * (eval_time_4) * self.temperature / 2.0) + 1e-8) - 1.0), pauli_channel=0) * expansion_tensor
-
-            # Extract gap at time t1_pos
-            gap_at_t1 = gap_tensor[t1_pos:t1_pos+1]
-            log_reg_ga = -1 * full_expansion_tensor * ((-1 * log_two_time[t1_pos, :] @ ones_tensor + 0.5 * log_two_time[t1_pos, :]) * self.dt + (log_term_edge_3 - log_term_edge_4)) * gap_at_t1 * -2 * ga.diagonal_time()
-            #thermal_gap_ga_conv = thermal_gap_ga_conv + log_reg_ga
+            gap_sum = gap_tensor + gap_tensor[t1_pos] * expansion_tensor
+            log_reg_ga = NambuKeldyshTensor(log_bracket_ga[np.newaxis, :], pauli_channel=0) * (-1 * gap_sum * ga.diagonal_time())
+            thermal_gap_ga_conv = thermal_gap_ga_conv + log_reg_ga
 
         conv2 = conv2 + thermal_gap_ga_conv
         

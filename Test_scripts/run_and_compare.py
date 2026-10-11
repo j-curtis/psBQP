@@ -98,7 +98,7 @@ def main(num_steps=25):
 
     # ========== Define Parameters ==========
     grid_parameters = {
-        'time_sampling': 751,
+        'time_sampling': 501,
         'time_duration': 2 * np.pi * 5,
         'eta': 0.2
     }
@@ -279,8 +279,7 @@ def main(num_steps=25):
         thermal_integral=evolution.thermal_integral,
         thermal_sum_left=evolution.thermal_sum_left,
         thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time,
-        tmax=evolution.tmax
+        log_two_time=evolution.log_two_time
     )
     gk_fdt_init, gk_actual_init, fdt_error_init, fdt_max_error_init = initial_state_copy.check_fdt(
         f_thermal=evolution.thermal_dist,
@@ -305,8 +304,7 @@ def main(num_steps=25):
         thermal_integral=evolution.thermal_integral,
         thermal_sum_left=evolution.thermal_sum_left,
         thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time,
-        tmax=evolution.tmax
+        log_two_time=evolution.log_two_time
     )
     gk_fdt_final, gk_actual_final, fdt_error_final, fdt_max_error_final = final_state.check_fdt(
         f_thermal=evolution.thermal_dist,
@@ -425,6 +423,54 @@ def main(num_steps=25):
     fdt_comp_path = os.path.join(save_dir, f'fdt_comparison_{num_steps}steps.png')
     plt.savefig(fdt_comp_path, dpi=150, bbox_inches='tight')
     print(f"  Saved: {fdt_comp_path}")
+    plt.close()
+
+    # ========== Last-row comparison ==========
+    #* the time window slides with the evolution, so final gk[-1, j] and initial gk[-1, j] have the same t - t' and agree in equilibrium
+    print("\nPlotting g^K last-row comparison...")
+    gk_row_init = initial_state_copy.gk[-1:, :].matrix_to_vector()[:, 0, :]
+    gk_row_final = final_state.gk[-1:, :].matrix_to_vector()[:, 0, :]
+    gk_row_diff = gk_row_final - gk_row_init
+    #* one-step prediction from the initial constraint residual r: [tau3, delta] = -r gives delta_1 = i r_2 / 2, delta_2 = -i r_1 / 2
+    gk_row_prediction = {1: 0.5j * gk_totals_init[2, :], 2: -0.5j * gk_totals_init[1, :]}
+
+    fig_row, axes_row = plt.subplots(2, 4, figsize=(20, 9))
+    fig_row.suptitle(f'g^K last row: Initial vs Final ({num_steps} steps)', fontsize=14, fontweight='bold')
+
+    for pauli_idx in range(4):
+        ax = axes_row[0, pauli_idx]
+        ax.plot(evolution.time_grid, np.real(gk_row_init[pauli_idx]), 'b-', linewidth=2, label='Init Re', alpha=0.7)
+        ax.plot(evolution.time_grid, np.real(gk_row_final[pauli_idx]), 'b--', linewidth=2, label='Final Re', alpha=0.7)
+        ax.plot(evolution.time_grid, np.imag(gk_row_init[pauli_idx]), 'r-', linewidth=2, label='Init Im', alpha=0.7)
+        ax.plot(evolution.time_grid, np.imag(gk_row_final[pauli_idx]), 'r--', linewidth=2, label='Final Im', alpha=0.7)
+        ax.set_title(f'{pauli_names[pauli_idx]}', fontsize=11)
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([-10, 0.05])
+
+        ax = axes_row[1, pauli_idx]
+        ax.plot(evolution.time_grid, np.real(gk_row_diff[pauli_idx]), 'b-', linewidth=2, label='Re (Final - Init)', alpha=0.7)
+        ax.plot(evolution.time_grid, np.imag(gk_row_diff[pauli_idx]), 'r-', linewidth=2, label='Im (Final - Init)', alpha=0.7)
+        if num_steps == 1 and pauli_idx in gk_row_prediction:
+            prediction = gk_row_prediction[pauli_idx]
+            ax.plot(evolution.time_grid, np.real(prediction), 'k:', linewidth=2, label='Re prediction')
+            ax.plot(evolution.time_grid, np.imag(prediction), 'g:', linewidth=2, label='Im prediction')
+        ax.set_title(f'{pauli_names[pauli_idx]} difference', fontsize=11)
+        ax.set_xlabel(r"$t'$", fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([-10, 0.05])
+        max_diff = np.abs(gk_row_diff[pauli_idx]).max()
+        max_idx = np.argmax(np.abs(gk_row_diff[pauli_idx]))
+        ax.text(0.02, 0.98, f'max |diff|: {max_diff:.2e}\n  offset {len(gk_row_diff[pauli_idx]) - 1 - max_idx}',
+                transform=ax.transAxes, fontsize=8, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+    gk_row_path = os.path.join(save_dir, f'gk_last_row_comparison_{num_steps}steps.png')
+    plt.savefig(gk_row_path, dpi=150, bbox_inches='tight')
+    print(f"  Saved: {gk_row_path}")
     plt.close()
 
     # gk2 component breakdown - Initial and Final

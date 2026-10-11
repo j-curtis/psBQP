@@ -93,7 +93,7 @@ class NambuKeldyshTensor:
         result_data = np.einsum(einsum_str, self.data, other_data)
 
         return NambuKeldyshTensor(result_data)
-
+    
     def __rmul__(self, other):
         """
         Right multiplication (for scalar * NambuKeldyshTensor).
@@ -245,20 +245,26 @@ class NambuKeldyshTensor:
                 f"Got: self={self.data.shape}, other={other.data.shape}")
 
 
-        #Applying midpoint rule: subtract 1/2 weight from BOTH endpoints
-        first_endpoint_std = 1*self[:,0:1] * other[0:1,:]
-        last_endpoint_std = self[:,-1:] * other[-1:,:]
-        result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
-
         N_t = other_integral.data.shape[2]
         positive_index = other_index % N_t
         positive_index_precomp = other_index % precomputed_sum.data.shape[2]
 
+        #* self is the row at time t_k (k = positive_index); causality restricts t'' to [t_0, t_k]
+        k = positive_index
+
+        #Applying midpoint rule: subtract 1/2 weight from BOTH endpoints, the upper one being the causal edge t''=t_k
+        first_endpoint_std = 1*self[:,0:1] * other[0:1,:]
+        last_endpoint_std = self[:,k:k+1] * other[k:k+1,:]
+        result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
+
         precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
         other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
         ones_tensor = NambuKeldyshTensor(np.ones((1,N_t_self)), pauli_channel=0)
-        #print(ones_tensor.data.shape)
-        self_for_reg = self[-1:,:]
+
+        #* smooth factor at the singular point t''=t'; for t' > t_k the singularity lies beyond the edge, so factor at t''=t_k
+        self_for_reg_data = self.data.copy()
+        self_for_reg_data[:, :, :, k+1:] = self.data[:, :, :, k:k+1]
+        self_for_reg = NambuKeldyshTensor(self_for_reg_data)
 
         # Old gap regularization code, its commented out since best regularization comes differently
         #if gap_tensor is not None:
@@ -275,8 +281,10 @@ class NambuKeldyshTensor:
         dgr_dt = self.gradient(dt, axis=1)  # Gradient along t'' direction
         gradient_correction = dgr_dt[-1:, :] * dt * -1j/np.pi # the extra factor is the limit of thermal distribution going to zero 
 
-        midpoint_scaling = np.ones((1,N_t))
-        midpoint_scaling[-1,-1] = 0.5
+        #* singular point inside the range: weight 1, at the edge t'=t_k: 1/2, beyond the edge: 0
+        midpoint_scaling = np.ones((1,N_t_self))
+        midpoint_scaling[0,k] = 0.0
+        midpoint_scaling[0,k+1:] = 0.0
         scaling_tensor = NambuKeldyshTensor(midpoint_scaling, pauli_channel=0)
 
         return (result_std + (- result_fact + result_anal) + scaling_tensor * gradient_correction ) 
@@ -347,8 +355,12 @@ class NambuKeldyshTensor:
         result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
         # For factored and analytic terms: use row of self if other is a row
 
-        self_for_reg = self.diagonal_time()
-        #self_for_reg = self[-1,:]
+        #* other is the row at time t_k (k = positive_index), singular at t''=t_k; ga(t'',t') restricts t'' to [t_0, t']
+        #* smooth factor at the edge t''=t' for t' <= t_k, at the singular point t''=t_k for t' > t_k (singularity inside the range)
+        k = positive_index
+        self_for_reg_data = self.diagonal_time().data.copy()
+        self_for_reg_data[:, :, k+1:] = self.data[:, :, k, k+1:]
+        self_for_reg = NambuKeldyshTensor(self_for_reg_data)
         ones_tensor = NambuKeldyshTensor(np.ones((1,N_t)), pauli_channel=0)
         # Old gap regularization
         #if gap_tensor is not None:
@@ -365,10 +377,12 @@ class NambuKeldyshTensor:
         # Gradient correction for f(0) = 0
         # The missing diagonal contribution is approximately dga/dt * dt
         dga_dt = self.gradient(dt, axis=0)  # Gradient along t'' direction (first time index)
-        gradient_correction = dga_dt[-1:,:] * dt * +1j/np.pi 
+        gradient_correction = dga_dt[k:k+1,:] * dt * +1j/np.pi
 
+        #* singular point beyond the edge (t' < t_k): 0, at the edge t'=t_k: 1/2, inside the range (t' > t_k): 1
         filter_tensor = np.zeros((1,N_t))
-        filter_tensor[-1,-1] = 0.5
+        filter_tensor[0,k] = 0.0
+        filter_tensor[0,k+1:] = 1.0
         filter_tensor = NambuKeldyshTensor(filter_tensor, pauli_channel=0)
 
         return (result_std + (- result_fact + result_anal) + filter_tensor * gradient_correction)
@@ -458,6 +472,10 @@ class NambuKeldyshTensor:
         return f"Id Trace: {id_trace} \n X Trace: {x_trace} \n Y Trace: {y_trace} \n Z Trace: {z_trace} \n"
 
     # ========== Matrix Structure Operations ==========
+
+    def copy(self):
+        """Independent copy with its own data array."""
+        return NambuKeldyshTensor(self.data.copy())
 
     def conj(self):
         """Complex conjugation."""

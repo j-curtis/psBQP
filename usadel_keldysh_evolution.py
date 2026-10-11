@@ -336,7 +336,7 @@ class UsadelKeldyshEvolution:
         # Set F(0) to BCS regularization: 1/λ + ln(T_c/T)
         bcs_coupling = self._get_BCS_coupling()#/ (2 + 1/2/np.pi * np.log(self.critical_temperature/self.temperature)) 
 
-        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature)) 
+        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature))  * 0
 
         # Replace diagonal (τ=0) with BCS value
         diagonal_mask = (np.abs(tau_upper) < 1e-6)
@@ -381,7 +381,7 @@ class UsadelKeldyshEvolution:
         log_two_time[mask] = -1j/np.pi * np.log(np.abs(np.pi * tau_matrix[mask] * self.temperature / 2.0))
         
         bcs_coupling = self._get_BCS_coupling()
-        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature))
+        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature)) * 0
         
         # At τ = 0 (diagonal), set to 0 for now
         # This could be regularized differently if needed
@@ -1058,25 +1058,28 @@ class UsadelKeldyshEvolution:
         thermal_gap_conv = -1  * self.delta_t  *  (gr_last_row @ thermal_gap_term - 0.5 * gr_last_row[-1:,0:1] * thermal_gap_term[0:1,:] - 0.5 * gr_last_row[-1:,-1:] * thermal_gap_term[-1:,:]
                                                      + thermal_gap_term[-1:,:] @ ga - 0.5 * thermal_gap_term[-1:,0] * ga[0:1,:] - 0.5 * thermal_gap_term[-1:,:] * ga.diagonal_time())
 
-        #* regularization of the thermal_gap_integral with gr
-        eval_time_1 = -self.tmax - self.time_grid
-        eval_time_2 = -self.time_grid
-        log_term_edge_1 = -NambuKeldyshTensor(1j/np.pi * -eval_time_1 * (np.log(np.abs(np.pi * eval_time_1 * self.temperature / 2.0) + 1e-8) - 1.0),pauli_channel=0) * expansion_tensor
-        log_term_edge_2 = -NambuKeldyshTensor(1j/np.pi * -eval_time_2 * (np.log(np.abs(np.pi * (eval_time_2) * self.temperature / 2.0) + 1e-8) - 1.0),pauli_channel=0) * expansion_tensor
-        #thermal_gap_conv += -1 * gr_last_row * -2 * gap_tensor * ((-1 * expansion_tensor @ self.log_two_time + 0.5 * self.log_two_time[-1,:])* self.delta_t + (log_term_edge_1 -log_term_edge_2) ) 
+        #* log regularization of F ≈ L = -i/π ln|πTτ/2| (same as check_keldysh_normalization with t1 = last row), RHS sign flipped
+        L_mat = self.log_two_time.data[0, 0]
+        t0, t1 = self.time_grid[0], self.time_grid[-1]
 
-        # regularization of the thermal_gap_integral with ga
-        # so we are integrating F(t-t'') until t', so log(t-t'') until t'  from -infty so if t'' - t = u then u goes from -T_max until t' since t = 0 basically
-        N_t = gr.shape[-1]
-        row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
-        col_indices = np.arange(N_t)[np.newaxis, :]  # Shape (1, N_t')
-        ones_data = (row_indices <= col_indices).astype(complex)
-        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
-        eval_time_3 = - self.tmax + 0 * self.time_grid
-        eval_time_4 = self.time_grid
-        log_term_edge_3 = -NambuKeldyshTensor(1j/np.pi * -eval_time_3 * (  np.log(np.abs(np.pi * eval_time_3 * self.temperature / 2.0) + 1e-8) - 1.0),pauli_channel=0) * expansion_tensor
-        log_term_edge_4 = -NambuKeldyshTensor(1j/np.pi * -eval_time_4 * (  np.log(np.abs(np.pi * (eval_time_4) * self.temperature / 2.0) + 1e-8) - 1.0),pauli_channel=0) * expansion_tensor
-        #thermal_gap_conv += -1 * full_expansion_tensor * ((-1 * self.log_two_time[-1,:] @ ones_tensor  + 0.5 * self.log_two_time[-1,:])* self.delta_t + (log_term_edge_3 -log_term_edge_4) ) * gap_tensor * -2 * ga.diagonal_time() 
+        def log_antiderivative(u):
+            u_safe = np.where(u == 0, 1.0, u)
+            return np.where(u == 0, 0.0, -1j/np.pi * u * (np.log(np.abs(np.pi * u_safe * self.temperature / 2.0)) - 1.0))
+
+        # gr @ thermal_gap_term: t'' in [t0, t1], singular at t''=t', A* = -2 gr(t,t') Δ(t')
+        trap_weights_gr = np.ones(self.ntpoints)
+        trap_weights_gr[0] -= 0.5
+        trap_weights_gr[-1] -= 0.5
+        log_bracket_gr = (log_antiderivative(t1 - self.time_grid) - log_antiderivative(t0 - self.time_grid)
+                          - self.delta_t * (trap_weights_gr @ L_mat))
+        thermal_gap_conv += 2 * gr_last_row * gap_tensor * NambuKeldyshTensor(log_bracket_gr[np.newaxis, :], pauli_channel=0)
+
+        # thermal_gap_term @ ga: t'' in [t0, t'], singular at t''=t, A* = -(Δ(t') + Δ(t)) ga(t',t') at the edge t''=t'
+        L_row = L_mat[-1, :]
+        trap_sum_ga = self.delta_t * (np.cumsum(L_row) - 0.5 * L_row[0] - 0.5 * L_row)
+        log_bracket_ga = log_antiderivative(self.time_grid - t1) - log_antiderivative(t0 - t1) - trap_sum_ga
+        gap_sum = gap_tensor + gap_tensor[-1] * expansion_tensor
+        thermal_gap_conv += NambuKeldyshTensor(log_bracket_ga[np.newaxis, :], pauli_channel=0) * (gap_sum * ga.diagonal_time())
 
         rhs_term_1 += thermal_gap_conv
         # new term coming from the commutator
@@ -1242,7 +1245,7 @@ class UsadelKeldyshEvolution:
 
     # ========== Update rules for gr and gk ========== #TODO: check everything is consistent even in A = 0 case
 
-    def _compute_new_gr_row(self, state, A_history=None):
+    def _compute_new_gr_row(self, state, gap_history, A_history=None):
         """
         Evolve retarded Green's function gr by one timestep using Crank-Nicolson discretization.
 
@@ -1251,6 +1254,7 @@ class UsadelKeldyshEvolution:
 
         Args:
             state: StateObject with current gr data
+            gap_history: Gap Δ on the NEW time grid, last entry is Δ(t) at the new time
             A_history: Optional external vector potential history
 
         Returns:
@@ -1265,9 +1269,7 @@ class UsadelKeldyshEvolution:
         tau0 = NambuKeldyshTensor(1.0, pauli_channel=0)
         tau1 = NambuKeldyshTensor(1.0, pauli_channel=1)
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
-        
-        gap_history = state.get_gap_history()
-        #gap_history = np.ones(np.size(gap_history))  * 1.384153# overwrite gap -- should be removed long term after debugging
+
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
         if A_history is None:
@@ -1344,7 +1346,7 @@ class UsadelKeldyshEvolution:
         )
         return gr_new, gr_diagonal_new 
 
-    def _compute_new_gk_complete(self, state, A_history=None):
+    def _compute_new_gk_complete(self, state, gap_history, A_history=None):
         """
         Evolve Keldysh Green's function g^K by one timestep using Crank-Nicolson discretization.
 
@@ -1354,6 +1356,7 @@ class UsadelKeldyshEvolution:
 
         Args:
             state: StateObject with current gr and gk data
+            gap_history: Gap Δ on the NEW time grid, last entry is Δ(t) at the new time
             A_history: Optional external vector potential history
 
         Returns:
@@ -1375,8 +1378,6 @@ class UsadelKeldyshEvolution:
         gk_last_row = state.gk[-1:, :]
         gr_last_row = state.gr[-1:, :]
 
-        gap_history = state.get_gap_history() #*** this will have to be changed in the light of guessing the next gap!
-        #gap_history = np.ones(np.size(gap_history))  * 1.384153 # overwrite gap -- should be removed long term after debugging
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
         if A_history is None:
@@ -1450,7 +1451,7 @@ class UsadelKeldyshEvolution:
                     dt_end = None if dt_shift == 0 else -dt_shift
                     result += cn_factor * tensor[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1)
 
-            return 0
+            return result
 
         # ---------- 4.1: Thermal collision integrals and  Gap-F coupling and new terms---------- #TODO: check this still, affects equilibrium!
         cn_factor = 1/4 * self.delta_t
@@ -1462,14 +1463,13 @@ class UsadelKeldyshEvolution:
                 dt_end = None if dt_shift == 0 else -dt_shift
                 # Dynes self-energy terms -- sigma^K g^A + g^R sigma^K 
                 thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
-                - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * tau3)
+                - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * tau3)
                 # gap-f term
                 thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
                 # new term 
                 
 
         shifted_derivative_term = (- gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor) 
-
         new_source_term = -1j * (gap_tensor * gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor * gap_tensor) 
         thermal_term += -(1j * tau3 * cn_derivative1_average(shifted_derivative_term) + cn_derivative2_average(shifted_derivative_term) * tau3 * 1j)
         thermal_term += cn_plaquette_average(new_source_term)
@@ -1502,8 +1502,8 @@ class UsadelKeldyshEvolution:
                 for dt_shift in [0, 1]:  # NEW: Add missing dt_shift loop
                     dt_end = None if dt_shift == 0 else -dt_shift
 
-                    term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1)
-                    term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
+                    term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1)
+                    term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
                     term1and2_right = -2j * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3).precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
 
                     em_thermal_conv1 += cn_factor * (term1_left + term2_left + term1and2_right)
@@ -1533,19 +1533,38 @@ class UsadelKeldyshEvolution:
 
     # ========== Updating the state ==========
 
-    def _evolve_state_by_one_timestep(self, state, A_external=None):
+    def _evolve_trial_state(self, state, gap_history, A_external):
         """
-        Evolve state by one timestep using Crank-Nicolson discretization.
+        Evolve a copy of the state by one timestep for a given gap history on the new time grid.
+        The original state is left untouched.
 
-        Steps:
-        1. Initialize thermal distribution if needed
-        2. Update retarded Green's function g^R
-        3. Update complete Keldysh Green's function g^K (unified: both off-diagonal and diagonal)
-        4. Extract observables (gap, current, vector potential)
+        Returns:
+            trial_state: StateObject with updated g^R and g^K
+        """
+        trial_state = state.copy()
+        new_gr_row, new_gr_diag = self._compute_new_gr_row(trial_state, gap_history, A_history=A_external)
+        trial_state.update_state_gr(new_gr_row, new_gr_diag)
+        new_gk_row, new_gk_diag = self._compute_new_gk_complete(trial_state, gap_history, A_history=A_external)
+        trial_state.update_state_gk(new_gk_row, new_gk_diag)
+        return trial_state
+
+    def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=10):
+        """
+        Evolve state by one timestep using Crank-Nicolson discretization, with a self-consistent gap Δ(t).
+
+        The new gap Δ(t) enters its own update (thermal_gap_term, g^R diagonal, gap terms), with a gain > 1,
+        so using the old gap explicitly is unstable. Instead Δ(t) is iterated until the gap put into the
+        step equals the gap read off the new g^K diagonal:
+        1. Guess Δ(t) by linear extrapolation of the previous gaps
+        2. Evolve a trial copy of the state with the gap history on the new grid (old gaps shifted, guess last)
+        3. Compare the resulting gap with the guess; update the guess with the secant method
+        4. Once converged, copy the trial g^R and g^K into the state
 
         Args:
-            state: StateObject with current data
+            state: StateObject with current data (modified in place)
             A_external: Optional external vector potential history
+            gap_tolerance: Convergence tolerance on |Δ_out - Δ_guess|
+            max_gap_iterations: Maximum number of trial steps
 
         Returns:
             gap_new: Gap value at new time t
@@ -1553,9 +1572,7 @@ class UsadelKeldyshEvolution:
             vector_potential_new: Vector potential at new time t
 
         Calls:
-            - _compute_new_gr_row(state, A_external)
-            - _compute_new_gk_complete(state, A_external)
-            - state.update_state_gr(), state.update_state_gk()
+            - _evolve_trial_state(state, gap_history, A_external)
         """
         # Initialize thermal distribution if not already done
         if not hasattr(self, 'thermal_dist'):
@@ -1570,13 +1587,34 @@ class UsadelKeldyshEvolution:
                                                    thermal_sum_left=self.thermal_sum_left,
                                                    thermal_sum_right=self.thermal_sum_right)
 
-        # Step 1: Update retarded Green's function (shifts gr matrix)
-        new_gr_row, new_gr_diag = self._compute_new_gr_row(state, A_history=A_external)
-        state.update_state_gr(new_gr_row, new_gr_diag)
+        # Step 1: guess Δ(t) by linear extrapolation, old_gap is on the old grid (last entry is Δ(t-dt))
+        old_gap = state.get_gap_history()
+        gap_guess = 2 * old_gap[-1] - old_gap[-2]
+        previous_guess, previous_residual = None, None
 
-        # Step 2: Compute and update complete Keldysh Green's function (unified: off-diagonal + diagonal)
-        new_gk_row, new_gk_diag = self._compute_new_gk_complete(state, A_history=A_external)
-        state.update_state_gk(new_gk_row, new_gk_diag)
+        # Step 2: iterate trial steps until the gap put in equals the gap coming out
+        for iteration in range(max_gap_iterations):
+            #* gap on the new grid: old gaps shifted by one index, guess as Δ(t)
+            gap_history = np.append(old_gap[1:], gap_guess)
+            trial_state = self._evolve_trial_state(state, gap_history, A_external)
+            residual = trial_state.get_gap_history()[-1] - gap_guess
+
+            if np.abs(residual) < gap_tolerance:
+                break
+
+            #* first iteration: take the output gap as second point; afterwards secant (plain fixed point diverges, gain > 1)
+            if previous_residual is None:
+                next_guess = gap_guess + residual
+            else:
+                next_guess = gap_guess - residual * (gap_guess - previous_guess) / (residual - previous_residual)
+            previous_guess, previous_residual = gap_guess, residual
+            gap_guess = next_guess
+        else:
+            print(f"WARNING: gap not self-consistent after {max_gap_iterations} iterations, |residual| = {np.abs(residual):.2e}")
+
+        # Step 3: accept the trial Green's functions (state object is updated in place)
+        state.gr = trial_state.gr
+        state.gk = trial_state.gk
 
         # Step 2.5: Update occupation function if tracking is enabled
         if state.occupation_function is not None:

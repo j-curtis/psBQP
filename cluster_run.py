@@ -11,14 +11,17 @@ Wrapper functions handling imports. Change manually depending on specifics of pr
 """
 
 # Main solver function
-def import_main_solver():
-    
+def import_main_solver(solver_name):
+
     # Declare name of module to import
     global main_solver_function
-    
+
     # Actual import statement
-    from code_run import evolve_keldysh_state as main_solver_function
-    
+    if solver_name == 'postprocessing':
+        from run_postprocessor import postprocess_keldysh_data as main_solver_function
+    else:
+        from code_run import evolve_keldysh_state as main_solver_function
+
     # # Old import versions
     # from SCBA import solve_dyson_equation_holes as main_solver_function
     # from SCBA import solve_dyson_equation_holes_reduced as main_solver_function
@@ -28,20 +31,20 @@ def import_main_solver():
 
 # Library import function
 def import_library_tools():
-    
+
     # Declare name of modules to import
     global path_management, autoprocess_tools_local
-    
+
     # Current controlling machine, declared globally as well
     global crt_controlling_machine
-    
+
     # Initialize path, local variable for now
-    _demler_tools_path = '/cluster/work/demler/tools_library_source_code/v2.2.0-beta'
+    _demler_tools_path = '/cluster/work/demler/tools_library_source_code/v2.3.0-beta'
     crt_controlling_machine = 'cluster_euler'
-        
+
     # Add path to default system addresses
     sys.path.append(_demler_tools_path)
-    
+
     # Perform actual import
     from demler_tools.file_manager import path_management, autoprocess_tools_local
     
@@ -103,13 +106,22 @@ if __name__ == "__main__":
     # Check whether it's main simulation
     if calculation_type == 'main_simulation':
         
-        # Import of main solver function
-        import_main_solver()
-                
         # Recover input folder, current run index
         input_directory = sys.argv[2]
         point_index = int(sys.argv[3])
-        
+
+        # Load the arguments of this point to decide which solver is run
+        with open(os.path.join(input_directory, 'calculation_arguments'), 'rb') as arguments_file:
+            _, kwargs_array = pickle.load(arguments_file)
+
+        if kwargs_array is not None and 'compute_keywords' in kwargs_array[point_index]:
+            solver_name = 'postprocessing'
+        else:
+            solver_name = 'evolution'
+
+        # Import of main solver function
+        import_main_solver(solver_name)
+
         # Run the actual function
         run_1_point(input_directory = input_directory, point_index = point_index, solver_function = main_solver_function)
         

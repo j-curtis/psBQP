@@ -35,17 +35,17 @@ def load_job_data(timestamp, job_index, running_machine='laptop'):
         path_management.initialize(project_name='psBQP-keldysh')
 
     simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
-    kwargs_file = os.path.join(simulation_data_path, str(timestamp), 'inputs', path_management.args_input_filetag())
-    result_file = os.path.join(simulation_data_path, str(timestamp), path_management.relative_path_raw_result_file().format(job_index))
+    kwargs_file = os.path.join(simulation_data_path, str(timestamp), path_management.args_input_filetag())
+    result_file = os.path.join(simulation_data_path, str(timestamp), f"{path_management.individual_result_file_tag()}{job_index}")
 
     #* Check archive path for cluster runs if not found
     if not os.path.exists(kwargs_file) or not os.path.exists(result_file):
         if running_machine == 'cluster_euler':
             archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
             if not os.path.exists(kwargs_file):
-                kwargs_file = os.path.join(archive_path, str(timestamp), 'inputs', path_management.args_input_filetag())
+                kwargs_file = os.path.join(archive_path, str(timestamp), path_management.args_input_filetag())
             if not os.path.exists(result_file):
-                result_file = os.path.join(archive_path, str(timestamp), path_management.relative_path_raw_result_file().format(job_index))
+                result_file = os.path.join(archive_path, str(timestamp), f"{path_management.individual_result_file_tag()}{job_index}")
 
     if not os.path.exists(kwargs_file):
         raise FileNotFoundError(f"Kwargs file not found for timestamp {timestamp}")

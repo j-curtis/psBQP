@@ -10,9 +10,11 @@ import numpy as np
 import pickle
 import sys
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+if 'SLURM_JOB_ID' in os.environ:
+    sys.path.append('/cluster/work/demler/tools_library_source_code/v2.3.0-beta')
 from demler_tools.file_manager import path_management, io
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from nambu_keldysh_class import NambuKeldyshTensor
 from state_object_class import StateObject
 from usadel_keldysh_evolution import UsadelKeldyshEvolution
@@ -73,17 +75,17 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     if initial_state_timestamp is not None:
         # Construct paths for kwargs and state files
         initial_state_dir = path_management.default_simulation_data_path(running_machine=running_machine)
-        kwargs_file = os.path.join(initial_state_dir, str(initial_state_timestamp), 'inputs', path_management.args_input_filetag())
-        state_file = os.path.join(initial_state_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index))
+        kwargs_file = os.path.join(initial_state_dir, str(initial_state_timestamp), path_management.args_input_filetag())
+        state_file = os.path.join(initial_state_dir, str(initial_state_timestamp), f"{path_management.individual_result_file_tag()}{initial_state_index}")
 
         # If files not found, try autoarchive location (only for cluster)
         if not os.path.exists(kwargs_file) or not os.path.exists(state_file):
             if running_machine == 'cluster_euler':
                 archive_dir = path_management.default_autoarchive_path(running_machine=running_machine)
                 if not os.path.exists(kwargs_file):
-                    kwargs_file = os.path.join(archive_dir, str(initial_state_timestamp), 'inputs', path_management.args_input_filetag())
+                    kwargs_file = os.path.join(archive_dir, str(initial_state_timestamp), path_management.args_input_filetag())
                 if not os.path.exists(state_file):
-                    state_file = os.path.join(archive_dir, str(initial_state_timestamp), path_management.relative_path_raw_result_file().format(initial_state_index))
+                    state_file = os.path.join(archive_dir, str(initial_state_timestamp), f"{path_management.individual_result_file_tag()}{initial_state_index}")
 
         # Load input kwargs from the initial state job using io
         kwargs_array = io.recover_full_calculation_arguments(full_path=kwargs_file)
@@ -222,12 +224,7 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 
 def run_1_point(input_directory, point_index):
     """Run a single simulation point from both cluster and local execution."""
-    # Try to load calculation arguments from new location (with /inputs/) first
-    args_file = os.path.join(input_directory, 'inputs', 'calculation_arguments')
-
-    # Fallback to old location (without /inputs/) for compatibility with local backend
-    if not os.path.exists(args_file):
-        args_file = os.path.join(input_directory, 'calculation_arguments')
+    args_file = os.path.join(input_directory, path_management.args_input_filetag())
 
     # Load calculation arguments
     with open(args_file, 'rb') as f:

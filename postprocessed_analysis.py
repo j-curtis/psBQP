@@ -40,13 +40,13 @@ def load_postprocessed_data(timestamp, directory_job_index=0, running_machine='l
 
     simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
     result_file = os.path.join(simulation_data_path, str(timestamp),
-                               path_management.relative_path_raw_result_file().format(directory_job_index))
+                               f"{path_management.individual_result_file_tag()}{directory_job_index}")
 
     # Check archive path if not found in simulation data path
-    if not os.path.exists(result_file):
+    if not os.path.exists(result_file) and running_machine == 'cluster_euler':
         archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
         result_file = os.path.join(archive_path, str(timestamp),
-                                   path_management.relative_path_raw_result_file().format(directory_job_index))
+                                   f"{path_management.individual_result_file_tag()}{directory_job_index}")
 
     if not os.path.exists(result_file):
         raise FileNotFoundError(f"Postprocessed data file not found for timestamp {timestamp}, job {directory_job_index}")
@@ -906,7 +906,7 @@ def plot_two_time_greens_function(timestamp, directory_job_index=None, component
         timestamp_dir = os.path.join(simulation_data_path, str(timestamp))
 
         # Check archive if not in simulation data path
-        if not os.path.exists(timestamp_dir):
+        if not os.path.exists(timestamp_dir) and running_machine == 'cluster_euler':
             archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
             timestamp_dir = os.path.join(archive_path, str(timestamp))
 
@@ -914,7 +914,7 @@ def plot_two_time_greens_function(timestamp, directory_job_index=None, component
             raise FileNotFoundError(f"Timestamp directory not found: {timestamp}")
 
         # Count available job files
-        job_files = [f for f in os.listdir(timestamp_dir) if f.startswith('result_') and f.endswith('.pkl')]
+        job_files = [f for f in os.listdir(timestamp_dir) if f.startswith(path_management.individual_result_file_tag())]
         num_jobs = len(job_files)
 
         if num_jobs == 0:
@@ -929,13 +929,13 @@ def plot_two_time_greens_function(timestamp, directory_job_index=None, component
     # Construct path to raw result file
     simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
     result_file = os.path.join(simulation_data_path, str(timestamp),
-                               path_management.relative_path_raw_result_file().format(directory_job_index))
+                               f"{path_management.individual_result_file_tag()}{directory_job_index}")
 
     # Check archive path if not found
-    if not os.path.exists(result_file):
+    if not os.path.exists(result_file) and running_machine == 'cluster_euler':
         archive_path = path_management.default_autoarchive_path(running_machine=running_machine)
         result_file = os.path.join(archive_path, str(timestamp),
-                                   path_management.relative_path_raw_result_file().format(directory_job_index))
+                                   f"{path_management.individual_result_file_tag()}{directory_job_index}")
 
     if not os.path.exists(result_file):
         raise FileNotFoundError(f"Data file not found for timestamp {timestamp}, job {directory_job_index}")

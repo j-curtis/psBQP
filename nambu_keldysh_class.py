@@ -93,7 +93,7 @@ class NambuKeldyshTensor:
         result_data = np.einsum(einsum_str, self.data, other_data)
 
         return NambuKeldyshTensor(result_data)
-    
+
     def __rmul__(self, other):
         """
         Right multiplication (for scalar * NambuKeldyshTensor).
@@ -910,3 +910,16 @@ def get_pauli_matrix(index = None) -> np.array:
     else:
         # if index is an integer return the corresponding Pauli matrix
         return pauli[index]
+
+
+def get_expansion_tensor(shape) -> NambuKeldyshTensor:
+    """
+    Tensor that is the identity in Nambu space and filled with ones in the time dimensions.
+
+    Args:
+        shape: int or tuple, shape of the time dimensions, e.g. N_t -> (2,2,N_t) or (1,N_t) -> (2,2,1,N_t)
+
+    Returns:
+        NambuKeldyshTensor: np.ones(shape) in the identity (tau_0) channel
+    """
+    return NambuKeldyshTensor(np.ones(shape), pauli_channel=0)

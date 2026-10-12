@@ -230,3 +230,44 @@ class ThermalConvolutions:
     def convolve_thermal_full_right(self, g, gap_tensor, time_index=-1):
         return (2 * self.tau3 * self.convolve_thermal_dist_right(g, time_index)
                 + self.convolve_thermal_int_right(g, gap_tensor, time_index))
+
+
+# ========== Interpolation of a state onto a different time grid ==========
+
+def interpolate_two_time_state(tensor, T_old, T_new, N_new, hermitian):
+    from scipy.interpolate import RegularGridInterpolator
+
+    data = tensor.data if isinstance(tensor, NambuKeldyshTensor) else np.asarray(tensor)
+    N_old = data.shape[2]
+
+    # Rectangle in (t, tau = t - t'): H[i, k] = X[i, i-k]; tau beyond the available history is filled
+    # with the oldest available time at the same tau (stationary extension)
+    i_idx, k_idx = np.meshgrid(np.arange(N_old), np.arange(N_old), indexing='ij')
+    rows = np.where(k_idx <= i_idx, i_idx, k_idx)
+    cols = np.where(k_idx <= i_idx, i_idx - k_idx, 0)
+    rectangle = np.moveaxis(data[:, :, rows, cols], (0, 1), (2, 3))
+
+    dt_old = T_old / (N_old - 1)
+    interpolator = RegularGridInterpolator((np.linspace(-T_old, 0, N_old), dt_old * np.arange(N_old)), rectangle, method='linear')
+
+    time_new = np.linspace(-T_new, 0, N_new)
+    t_query = np.clip(np.repeat(time_new[:, None], N_new, axis=1), -T_old, 0)
+    tau_full = time_new[:, None] - time_new[None, :]
+    tau_query = np.clip(tau_full, 0, T_old)
+    lower = np.tril(np.ones((N_new, N_new), dtype=bool))
+
+    values = interpolator(np.stack([t_query[lower], tau_query[lower]], axis=-1))
+    # beyond the loaded history the functions have decayed: tau > T_old is set to zero
+    values[tau_full[lower] > T_old * (1 + 1e-9)] = 0.0
+    result = np.zeros((2, 2, N_new, N_new), dtype=complex)
+    result[:, :, lower] = np.moveaxis(values, 0, -1)
+
+    if not hermitian:
+        return NambuKeldyshTensor(result)
+
+    strict_lower = np.tril(np.ones((N_new, N_new)), k=-1)
+    diagonal = np.eye(N_new)
+    lower_part = NambuKeldyshTensor(result * strict_lower)
+    diagonal_part = NambuKeldyshTensor(result * diagonal)
+    full = lower_part.data + lower_part.involution().data + 0.5 * (diagonal_part.data + diagonal_part.involution().data)
+    return NambuKeldyshTensor(full)

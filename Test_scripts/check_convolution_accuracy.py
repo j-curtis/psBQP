@@ -44,9 +44,10 @@ def check_convolution_accuracy(T_max=2*np.pi*5, N_t=201, temperature=0.1,
     initial_state, _, _, _ = evolution.generate_initial_state(Q=0.0)
     
     # Get thermal distributions
-    evolution.get_thermal_occupation(temperature)
-    evolution.get_thermal_integral(temperature)
-    evolution.get_thermal_sum(temperature)
+    #~ evolution.get_thermal_occupation(temperature)
+    #~ evolution.get_thermal_integral(temperature)
+    #~ evolution.get_thermal_sum(temperature)
+    #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
     
     gap = initial_state.get_gap_history()[-1]
     print(f"Gap: Δ = {gap:.6f}")
@@ -121,10 +122,11 @@ def check_convolution_accuracy(T_max=2*np.pi*5, N_t=201, temperature=0.1,
         
         # Time domain: precise_convolution_left
         gr_row = initial_state.gr[-1:, :]
-        gr_f_time_row = gr_row.precise_convolution_left(
-            evolution.thermal_dist, evolution.thermal_integral, dt, 
-            other_index=-1, precomputed_sum=evolution.thermal_sum_right, gap_tensor=None
-        )
+        #~ gr_f_time_row = gr_row.precise_convolution_left(
+            #~ evolution.thermal_dist, evolution.thermal_integral, dt, 
+            #~ other_index=-1, precomputed_sum=evolution.thermal_sum_right, gap_tensor=None
+        #~ )
+        gr_f_time_row = evolution.thermal.convolve_thermal_dist_left(gr_row, time_index=-1)
         
         gr_f_time = gr_f_time_row.trace(pauli_index=2) / 2
         gr_f_time = np.array(gr_f_time[0, :])
@@ -175,14 +177,15 @@ def check_convolution_accuracy(T_max=2*np.pi*5, N_t=201, temperature=0.1,
         
         # Time domain: precise_convolution_right
         ga = initial_state._r2a()
-        f_row = evolution.thermal_dist[-1:, :]
-        F_row = evolution.thermal_integral[-1:, :]
-        thermal_sum_left_row = evolution.thermal_sum_left[-1:, :]
+        #~ f_row = evolution.thermal_dist[-1:, :]
+        #~ F_row = evolution.thermal_integral[-1:, :]
+        #~ thermal_sum_left_row = evolution.thermal_sum_left[-1:, :]
         
-        f_ga_time_row = ga.precise_convolution_right(
-            f_row, F_row, dt,
-            self_index=-1, precomputed_sum=thermal_sum_left_row, gap_tensor=None
-        )
+        #~ f_ga_time_row = ga.precise_convolution_right(
+            #~ f_row, F_row, dt,
+            #~ self_index=-1, precomputed_sum=thermal_sum_left_row, gap_tensor=None
+        #~ )
+        f_ga_time_row = evolution.thermal.convolve_thermal_dist_right(ga, time_index=-1)
         
         f_ga_time = f_ga_time_row.trace(pauli_index=2) / 2
         f_ga_time = np.array(f_ga_time[0, :])

@@ -64,23 +64,25 @@ def analyze_diagonal_error(N_t_values=[501, 751, 1001]):
         print(f"  Gap: |Δ| = {np.abs(gap):.6f}")
 
         # Ensure thermal distributions are computed
-        if not hasattr(evolution, 'thermal_dist'):
-            evolution.get_thermal_occupation(system_parameters['temperature'])
-            evolution.get_thermal_integral(system_parameters['temperature'])
-            evolution.get_log_two_time(system_parameters['temperature'])
-            evolution.get_thermal_sum(system_parameters['temperature'])
+        #~ if not hasattr(evolution, 'thermal_dist'):
+            #~ evolution.get_thermal_occupation(system_parameters['temperature'])
+            #~ evolution.get_thermal_integral(system_parameters['temperature'])
+            #~ evolution.get_log_two_time(system_parameters['temperature'])
+            #~ evolution.get_thermal_sum(system_parameters['temperature'])
+        #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
 
         # Check FDT
         print("Checking FDT...")
-        gk_fdt, gk_actual, fdt_error, fdt_max_error = initial_state.check_fdt(
-            f_thermal=evolution.thermal_dist,
-            f_thermal_integral=evolution.thermal_integral,
-            time_index=-1,
-            thermal_sum_left=evolution.thermal_sum_left,
-            thermal_sum_right=evolution.thermal_sum_right,
-            log_two_time=evolution.log_two_time,
-            tmax=evolution.tmax
-        )
+        #~ gk_fdt, gk_actual, fdt_error, fdt_max_error = initial_state.check_fdt(
+            #~ f_thermal=evolution.thermal_dist,
+            #~ f_thermal_integral=evolution.thermal_integral,
+            #~ time_index=-1,
+            #~ thermal_sum_left=evolution.thermal_sum_left,
+            #~ thermal_sum_right=evolution.thermal_sum_right,
+            #~ log_two_time=evolution.log_two_time,
+            #~ tmax=evolution.tmax
+        #~ )
+        gk_fdt, gk_actual, fdt_error, fdt_max_error = initial_state.check_fdt(evolution.thermal, time_index=-1)
 
         # Extract diagonal element error for both tau_2 and tau_3
         fdt_error_tau2 = fdt_error.trace(pauli_index=2) / 2  # Shape (1, N_t)

@@ -264,32 +264,35 @@ def main(num_steps=25):
     print("="*70)
 
     # Ensure thermal distributions are computed
-    if not hasattr(evolution, 'thermal_dist'):
-        evolution.get_thermal_occupation(system_parameters['temperature'])
-        evolution.get_thermal_integral(system_parameters['temperature'])
-        evolution.get_log_two_time(system_parameters['temperature'])
-        evolution.get_thermal_sum(system_parameters['temperature'])
+    #~ if not hasattr(evolution, 'thermal_dist'):
+        #~ evolution.get_thermal_occupation(system_parameters['temperature'])
+        #~ evolution.get_thermal_integral(system_parameters['temperature'])
+        #~ evolution.get_log_two_time(system_parameters['temperature'])
+        #~ evolution.get_thermal_sum(system_parameters['temperature'])
+    #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
 
     # Check initial state
     print("\nChecking initial state...")
     gr_errors_init, gr_totals_init = initial_state_copy.check_gr_normalization(t1_idx=-1)
-    gk_errors_init, gk_totals_init, gk_components_init = initial_state_copy.check_keldysh_normalization(
-        t1_idx=-1,
-        thermal_dist=evolution.thermal_dist,
-        thermal_integral=evolution.thermal_integral,
-        thermal_sum_left=evolution.thermal_sum_left,
-        thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time
-    )
-    gk_fdt_init, gk_actual_init, fdt_error_init, fdt_max_error_init = initial_state_copy.check_fdt(
-        f_thermal=evolution.thermal_dist,
-        f_thermal_integral=evolution.thermal_integral,
-        time_index=-1,
-        thermal_sum_left=evolution.thermal_sum_left,
-        thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time,
-        tmax=evolution.tmax
-    )
+    #~ gk_errors_init, gk_totals_init, gk_components_init = initial_state_copy.check_keldysh_normalization(
+        #~ t1_idx=-1,
+        #~ thermal_dist=evolution.thermal_dist,
+        #~ thermal_integral=evolution.thermal_integral,
+        #~ thermal_sum_left=evolution.thermal_sum_left,
+        #~ thermal_sum_right=evolution.thermal_sum_right,
+        #~ log_two_time=evolution.log_two_time
+    #~ )
+    gk_errors_init, gk_totals_init, gk_components_init = initial_state_copy.check_keldysh_normalization(t1_idx=-1, thermal=evolution.thermal)
+    #~ gk_fdt_init, gk_actual_init, fdt_error_init, fdt_max_error_init = initial_state_copy.check_fdt(
+        #~ f_thermal=evolution.thermal_dist,
+        #~ f_thermal_integral=evolution.thermal_integral,
+        #~ time_index=-1,
+        #~ thermal_sum_left=evolution.thermal_sum_left,
+        #~ thermal_sum_right=evolution.thermal_sum_right,
+        #~ log_two_time=evolution.log_two_time,
+        #~ tmax=evolution.tmax
+    #~ )
+    gk_fdt_init, gk_actual_init, fdt_error_init, fdt_max_error_init = initial_state_copy.check_fdt(evolution.thermal, time_index=-1)
 
     print(f"  gr norm error (max):  {np.max(gr_errors_init):.2e}")
     print(f"  gk constraint error (max): {np.max(gk_errors_init):.2e}")
@@ -298,23 +301,25 @@ def main(num_steps=25):
     # Check final state
     print("\nChecking final state...")
     gr_errors_final, gr_totals_final = final_state.check_gr_normalization(t1_idx=-1)
-    gk_errors_final, gk_totals_final, gk_components_final = final_state.check_keldysh_normalization(
-        t1_idx=-1,
-        thermal_dist=evolution.thermal_dist,
-        thermal_integral=evolution.thermal_integral,
-        thermal_sum_left=evolution.thermal_sum_left,
-        thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time
-    )
-    gk_fdt_final, gk_actual_final, fdt_error_final, fdt_max_error_final = final_state.check_fdt(
-        f_thermal=evolution.thermal_dist,
-        f_thermal_integral=evolution.thermal_integral,
-        time_index=-1,
-        thermal_sum_left=evolution.thermal_sum_left,
-        thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time,
-        tmax=evolution.tmax
-    )
+    #~ gk_errors_final, gk_totals_final, gk_components_final = final_state.check_keldysh_normalization(
+        #~ t1_idx=-1,
+        #~ thermal_dist=evolution.thermal_dist,
+        #~ thermal_integral=evolution.thermal_integral,
+        #~ thermal_sum_left=evolution.thermal_sum_left,
+        #~ thermal_sum_right=evolution.thermal_sum_right,
+        #~ log_two_time=evolution.log_two_time
+    #~ )
+    gk_errors_final, gk_totals_final, gk_components_final = final_state.check_keldysh_normalization(t1_idx=-1, thermal=evolution.thermal)
+    #~ gk_fdt_final, gk_actual_final, fdt_error_final, fdt_max_error_final = final_state.check_fdt(
+        #~ f_thermal=evolution.thermal_dist,
+        #~ f_thermal_integral=evolution.thermal_integral,
+        #~ time_index=-1,
+        #~ thermal_sum_left=evolution.thermal_sum_left,
+        #~ thermal_sum_right=evolution.thermal_sum_right,
+        #~ log_two_time=evolution.log_two_time,
+        #~ tmax=evolution.tmax
+    #~ )
+    gk_fdt_final, gk_actual_final, fdt_error_final, fdt_max_error_final = final_state.check_fdt(evolution.thermal, time_index=-1)
 
     print(f"  gr norm error (max):  {np.max(gr_errors_final):.2e}")
     print(f"  gk constraint error (max): {np.max(gk_errors_final):.2e}")

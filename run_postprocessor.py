@@ -372,9 +372,10 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
                 if final_state is not None:
                     # Create evolution object to get thermal distributions
                     evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
-                    evolution.get_thermal_occupation(system_parameters['temperature'])
-                    evolution.get_thermal_integral(system_parameters['temperature'])
-                    evolution.get_thermal_sum(system_parameters['temperature'])
+                    #~ evolution.get_thermal_occupation(system_parameters['temperature'])
+                    #~ evolution.get_thermal_integral(system_parameters['temperature'])
+                    #~ evolution.get_thermal_sum(system_parameters['temperature'])
+                    #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
 
                     # Check g^R normalization at last row
                     gr_errors, gr_totals = final_state.check_gr_normalization(t1_idx=-1)
@@ -382,20 +383,22 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
                     gr_errors_last = gr_totals[:, -1]  # Shape (4,)
 
                     # Check Keldysh normalization at last row
-                    gk_errors, gk_totals, gk_components = final_state.check_keldysh_normalization(
-                        -1, evolution.thermal_dist, evolution.thermal_integral,
-                        thermal_sum_left=evolution.thermal_sum_left,
-                        thermal_sum_right=evolution.thermal_sum_right
-                    )
+                    #~ gk_errors, gk_totals, gk_components = final_state.check_keldysh_normalization(
+                        #~ -1, evolution.thermal_dist, evolution.thermal_integral,
+                        #~ thermal_sum_left=evolution.thermal_sum_left,
+                        #~ thermal_sum_right=evolution.thermal_sum_right
+                    #~ )
+                    gk_errors, gk_totals, gk_components = final_state.check_keldysh_normalization(-1, evolution.thermal)
                     # gk_totals has shape (4, N_t), extract last element for each Pauli component
                     gk_errors_last = gk_totals[:, -1]  # Shape (4,)
 
                     # Check FDT relation at last row
-                    gk_fdt_row, gk_actual_row, error_row, max_error = final_state.check_fdt(
-                        evolution.thermal_dist, evolution.thermal_integral, time_index=-1,
-                        thermal_sum_left=evolution.thermal_sum_left,
-                        thermal_sum_right=evolution.thermal_sum_right
-                    )
+                    #~ gk_fdt_row, gk_actual_row, error_row, max_error = final_state.check_fdt(
+                        #~ evolution.thermal_dist, evolution.thermal_integral, time_index=-1,
+                        #~ thermal_sum_left=evolution.thermal_sum_left,
+                        #~ thermal_sum_right=evolution.thermal_sum_right
+                    #~ )
+                    gk_fdt_row, gk_actual_row, error_row, max_error = final_state.check_fdt(evolution.thermal, time_index=-1)
                     # Extract FDT error for each Pauli component at last element
                     fdt_errors_pauli = np.zeros(4)
                     for pauli_idx in range(4):

@@ -18,6 +18,7 @@ from demler_tools.file_manager import path_management, io
 from nambu_keldysh_class import NambuKeldyshTensor
 from state_object_class import StateObject
 from usadel_keldysh_evolution import UsadelKeldyshEvolution
+from numerical_support import ThermalConvolutions, interpolate_two_time_state
 from driving_field_utils import compute_driving_field
 
 
@@ -30,7 +31,9 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         num_timesteps: Number of time steps to evolve
         initial_state_timestamp: Optional timestamp to load initial state from
         initial_state_index: Index of result file (default 0)
-        grid_parameters: Dict with time_sampling, time_duration, eta
+        grid_parameters: Dict with time_sampling, time_duration, eta. If an initial state is loaded and
+                         (time_sampling, time_duration) differ from the loaded state, the loaded gr, gk
+                         (and occupation_function) are interpolated onto this grid. If None, the loaded grid is used.
         system_parameters: Dict with critical_temperature, temperature, eta
         driving_field: Optional time-dependent driving field. Can be:
                        - None: No driving (zero field)
@@ -101,7 +104,31 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         if not hasattr(initial_state, 'occupation_function'):
             initial_state.occupation_function = None
 
-        grid_parameters = {'time_sampling': initial_state.gr.data.shape[2], 'time_duration': initial_state.T_max, 'eta': system_parameters['eta']}
+        #~ grid_parameters = {'time_sampling': initial_state.gr.data.shape[2], 'time_duration': initial_state.T_max, 'eta': system_parameters['eta']}
+        loaded_ntpoints = initial_state.gr.data.shape[2]
+        loaded_T_max = initial_state.T_max
+        grid_mismatch = (grid_parameters is not None
+                         and (grid_parameters['time_sampling'] != loaded_ntpoints
+                              or not np.isclose(grid_parameters['time_duration'], loaded_T_max)))
+
+        if grid_mismatch:
+            if loaded_ntpoints == 1 or initial_state.gr.data.shape[3] != loaded_ntpoints:
+                raise ValueError("Loaded state holds a single time row (save_full_state=False) and cannot be interpolated onto a new grid")
+
+            new_ntpoints = grid_parameters['time_sampling']
+            new_T_max = grid_parameters['time_duration']
+            print(f"Interpolating loaded state: (N_t, T_max) = ({loaded_ntpoints}, {loaded_T_max}) -> ({new_ntpoints}, {new_T_max})")
+
+            initial_state.gr = interpolate_two_time_state(initial_state.gr, loaded_T_max, new_T_max, new_ntpoints, hermitian=False)
+            initial_state.gk = interpolate_two_time_state(initial_state.gk, loaded_T_max, new_T_max, new_ntpoints, hermitian=True)
+            if initial_state.occupation_function is not None:
+                initial_state.occupation_function = interpolate_two_time_state(initial_state.occupation_function, loaded_T_max, new_T_max, new_ntpoints, hermitian=True)
+
+            grid_parameters = {'time_sampling': new_ntpoints, 'time_duration': new_T_max, 'eta': system_parameters['eta']}
+            initial_state.T_max = new_T_max
+            initial_state.dt = new_T_max / (new_ntpoints - 1)
+        else:
+            grid_parameters = {'time_sampling': loaded_ntpoints, 'time_duration': loaded_T_max, 'eta': system_parameters['eta']}
 
         # Apply temperature correction to gk if temperature has changed
         # Get old temperature from initial_state_kwargs instead of initial_state object
@@ -110,14 +137,16 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 
         if not np.isclose(old_temperature, new_temperature):
             # Create temporary evolution object to generate thermal distributions
-            temp_evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+            #~ temp_evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
 
-            # Generate thermal distributions for both temperatures
-            temp_evolution.get_thermal_occupation(old_temperature)
-            thermal_dist_old = temp_evolution.thermal_dist
+            #~ # Generate thermal distributions for both temperatures
+            #~ temp_evolution.get_thermal_occupation(old_temperature)
+            #~ thermal_dist_old = temp_evolution.thermal_dist
 
-            temp_evolution.get_thermal_occupation(new_temperature)
-            thermal_dist_new = temp_evolution.thermal_dist
+            #~ temp_evolution.get_thermal_occupation(new_temperature)
+            #~ thermal_dist_new = temp_evolution.thermal_dist
+            thermal_dist_old = ThermalConvolutions(old_temperature, grid_parameters).thermal_dist
+            thermal_dist_new = ThermalConvolutions(new_temperature, grid_parameters).thermal_dist
 
             # Construct tau_3
             tau_3 = NambuKeldyshTensor(1.0, pauli_channel=3)
@@ -144,7 +173,8 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         # Save occupation_function before recreating StateObject
         saved_occupation = initial_state.occupation_function
 
-        initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, grid_params=grid_parameters)
+        #~ initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, grid_params=grid_parameters)
+        initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, temperature=system_parameters['temperature'], grid_params=grid_parameters)
 
         # Restore occupation_function after StateObject creation
         if saved_occupation is not None:
@@ -192,7 +222,7 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 
         # Create reduced state with only last timestep
         # Preserve original grid parameters (time_sampling from grid_parameters, not 1)
-        reduced_state = StateObject( gr=gr_last, gk=gk_last, bcs_coupling_constant=final_state.bcs_coupling_constant, grid_params={'time_duration': final_state.T_max, 'time_sampling': grid_parameters['time_sampling'], 'dt': final_state.dt})
+        reduced_state = StateObject( gr=gr_last, gk=gk_last, bcs_coupling_constant=final_state.bcs_coupling_constant, temperature=system_parameters['temperature'], grid_params={'time_duration': final_state.T_max, 'time_sampling': grid_parameters['time_sampling'], 'dt': final_state.dt})
 
         final_state = reduced_state
 

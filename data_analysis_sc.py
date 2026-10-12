@@ -419,12 +419,14 @@ def check_normalizations(timestamp, job_index, save_plot=False, save_dir='analys
     grid_params = _get_grid_parameters(save_data, input_kwargs)
 
     evolution = UsadelKeldyshEvolution(grid_params, system_params)
-    evolution.get_thermal_occupation(system_params['temperature'])
-    evolution.get_thermal_integral(system_params['temperature'])
-    evolution.get_thermal_sum(system_params['temperature'])
+    #~ evolution.get_thermal_occupation(system_params['temperature'])
+    #~ evolution.get_thermal_integral(system_params['temperature'])
+    #~ evolution.get_thermal_sum(system_params['temperature'])
+    #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
 
     gr_errors, gr_totals = state.check_gr_normalization(t1_idx=-1)
-    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, evolution.thermal_dist, evolution.thermal_integral, thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right)
+    #~ gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, evolution.thermal_dist, evolution.thermal_integral, thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right)
+    gk_errors, gk_totals, gk_components = state.check_keldysh_normalization(-1, evolution.thermal)
 
     # Compute max error per Pauli channel from totals
     # gr_totals and gk_totals have shape (4, N_t) for 4 Pauli components
@@ -523,11 +525,13 @@ def check_fdt(timestamp, job_index, save_plot=False, save_dir='analysis_plots'):
     grid_params = _get_grid_parameters(save_data, input_kwargs)
 
     evolution = UsadelKeldyshEvolution(grid_params, system_params)
-    evolution.get_thermal_occupation(system_params['temperature'])
-    evolution.get_thermal_integral(system_params['temperature'])
-    evolution.get_thermal_sum(system_params['temperature'])
+    #~ evolution.get_thermal_occupation(system_params['temperature'])
+    #~ evolution.get_thermal_integral(system_params['temperature'])
+    #~ evolution.get_thermal_sum(system_params['temperature'])
+    #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
 
-    gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(evolution.thermal_dist, evolution.thermal_integral, time_index=-1, thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right)
+    #~ gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(evolution.thermal_dist, evolution.thermal_integral, time_index=-1, thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right)
+    gk_fdt_row, gk_actual_row, error_row, max_error = state.check_fdt(evolution.thermal, time_index=-1)
 
     # Compute max error per Pauli channel
     max_errors_per_channel = np.zeros(4)
@@ -1899,9 +1903,10 @@ def compare_fdt_error_across_timestamps(timestamps, job_indices=None, x_paramete
 
         # Create evolution object for thermal distributions
         evolution = UsadelKeldyshEvolution(grid_params, system_params)
-        evolution.get_thermal_occupation(system_params['temperature'])
-        evolution.get_thermal_integral(system_params['temperature'])
-        evolution.get_thermal_sum(system_params['temperature'])
+        #~ evolution.get_thermal_occupation(system_params['temperature'])
+        #~ evolution.get_thermal_integral(system_params['temperature'])
+        #~ evolution.get_thermal_sum(system_params['temperature'])
+        #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
 
         # Compute FDT errors at all time indices
         time_indices = np.arange(0, n_times, plot_every)
@@ -1911,13 +1916,14 @@ def compare_fdt_error_across_timestamps(timestamps, job_indices=None, x_paramete
 
         for t_idx in time_indices:
             # Check FDT at this time index
-            _, _, error_row, _ = state.check_fdt(
-                evolution.thermal_dist,
-                evolution.thermal_integral,
-                time_index=t_idx,
-                thermal_sum_left=evolution.thermal_sum_left,
-                thermal_sum_right=evolution.thermal_sum_right
-            )
+            #~ _, _, error_row, _ = state.check_fdt(
+                #~ evolution.thermal_dist,
+                #~ evolution.thermal_integral,
+                #~ time_index=t_idx,
+                #~ thermal_sum_left=evolution.thermal_sum_left,
+                #~ thermal_sum_right=evolution.thermal_sum_right
+            #~ )
+            _, _, error_row, _ = state.check_fdt(evolution.thermal, time_index=t_idx)
 
             # Extract max error per Pauli channel
             errors_per_channel = np.zeros(4)
@@ -5415,8 +5421,10 @@ def get_current_kernel(timestamp, job_indices=None, running_machine='laptop',
         system_parameters = input_kwargs['system_parameters']
 
         evol = UsadelKeldyshEvolution(grid_parameters, system_parameters)
-        evol.get_thermal_occupation(temperature)
-        thermal_dist = evol.thermal_dist
+        #~ evol.get_thermal_occupation(temperature)
+        #~ thermal_dist = evol.thermal_dist
+        from numerical_support import ThermalConvolutions
+        thermal_dist = ThermalConvolutions(temperature, grid_parameters).thermal_dist
 
         # Check if we have full time-time structure or just last row
         gr_shape = state.gr.data.shape

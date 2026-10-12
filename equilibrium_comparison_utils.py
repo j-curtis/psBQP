@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from data_analysis import load_job_data
+from data_analysis_sc import load_job_data
 from equilibrium_class import EquilibriumSolver
 
 

@@ -40,26 +40,35 @@ print("="*70)
 
 # Get thermal integral and thermal sum
 T = 0.5
-evolution.get_thermal_integral(T)
-evolution.get_thermal_sum(T)
+#~ evolution.get_thermal_integral(T)
+#~ evolution.get_thermal_sum(T)
+#* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
 
 # Extract thermal_sum and thermal_integral from evolution object
 # thermal_sum_left and thermal_sum_right have shape (2, 2, 2, N_t)
 # thermal_integral has shape (2, 2, N_t, N_t)
 
 # Extract the two time rows from thermal_sum
-thermal_sum_left_minus = evolution.thermal_sum_left.data[0, 0, -2, :]  # [-2,:] row
-thermal_sum_left = evolution.thermal_sum_left.data[0, 0, -1, :]  # [-1,:] row
+#~ thermal_sum_left_minus = evolution.thermal_sum_left.data[0, 0, -2, :]  # [-2,:] row
+thermal_sum_left_minus = evolution.thermal.thermal_sum_left.data[0, 0, -2, :]  # [-2,:] row
+#~ thermal_sum_left = evolution.thermal_sum_left.data[0, 0, -1, :]  # [-1,:] row
+thermal_sum_left = evolution.thermal.thermal_sum_left.data[0, 0, -1, :]  # [-1,:] row
 
-thermal_sum_right_minus = evolution.thermal_sum_right.data[0, 0, -2, :]  # [-2,:] row
-thermal_sum_right = evolution.thermal_sum_right.data[0, 0, -1, :]  # [-1,:] row
+#~ thermal_sum_right_minus = evolution.thermal_sum_right.data[0, 0, -2, :]  # [-2,:] row
+thermal_sum_right_minus = evolution.thermal.thermal_sum_right.data[0, 0, -2, :]  # [-2,:] row
+#~ thermal_sum_right = evolution.thermal_sum_right.data[0, 0, -1, :]  # [-1,:] row
+thermal_sum_right = evolution.thermal.thermal_sum_right.data[0, 0, -1, :]  # [-1,:] row
 
 # Extract thermal_integral elements for comparison
 # thermal_integral is the two-time function F(t, t')
-thermal_integral_last_row = evolution.thermal_integral.data[0, 0, -1, :]  # [-1,:] for right sum
-thermal_integral_second_last_row = evolution.thermal_integral.data[0, 0, -2, :]  # [-2,:] for right sum
-thermal_integral_last_col = evolution.thermal_integral.data[0, 0, :, -1]  # [:,-1] for left sum
-thermal_integral_second_last_col = evolution.thermal_integral.data[0, 0, :, -2]  # [:,-2] for left sum
+#~ thermal_integral_last_row = evolution.thermal_integral.data[0, 0, -1, :]  # [-1,:] for right sum
+thermal_integral_last_row = evolution.thermal.thermal_integral.data[0, 0, -1, :]  # [-1,:] for right sum
+#~ thermal_integral_second_last_row = evolution.thermal_integral.data[0, 0, -2, :]  # [-2,:] for right sum
+thermal_integral_second_last_row = evolution.thermal.thermal_integral.data[0, 0, -2, :]  # [-2,:] for right sum
+#~ thermal_integral_last_col = evolution.thermal_integral.data[0, 0, :, -1]  # [:,-1] for left sum
+thermal_integral_last_col = evolution.thermal.thermal_integral.data[0, 0, :, -1]  # [:,-1] for left sum
+#~ thermal_integral_second_last_col = evolution.thermal_integral.data[0, 0, :, -2]  # [:,-2] for left sum
+thermal_integral_second_last_col = evolution.thermal.thermal_integral.data[0, 0, :, -2]  # [:,-2] for left sum
 
 # Debug: check shapes
 print(f"\nDebug - Shapes:")
@@ -235,15 +244,20 @@ for N_t_test in N_t_values:
     )
 
     # Compute thermal integral and sum
-    evolution_test.get_thermal_integral(T)
-    evolution_test.get_thermal_sum(T)
+    #~ evolution_test.get_thermal_integral(T)
+    #~ evolution_test.get_thermal_sum(T)
+    #* thermal quantities are in evolution_test.thermal (numerical_support.ThermalConvolutions)
 
     # Extract data (only [-1,:] elements)
-    ts_left = evolution_test.thermal_sum_left.data[0, 0, -1, :]
-    ts_right = evolution_test.thermal_sum_right.data[0, 0, -1, :]
+    #~ ts_left = evolution_test.thermal_sum_left.data[0, 0, -1, :]
+    ts_left = evolution_test.thermal.thermal_sum_left.data[0, 0, -1, :]
+    #~ ts_right = evolution_test.thermal_sum_right.data[0, 0, -1, :]
+    ts_right = evolution_test.thermal.thermal_sum_right.data[0, 0, -1, :]
 
-    ti_last_row = evolution_test.thermal_integral.data[0, 0, -1, :]
-    ti_last_col = evolution_test.thermal_integral.data[0, 0, :, -1]
+    #~ ti_last_row = evolution_test.thermal_integral.data[0, 0, -1, :]
+    ti_last_row = evolution_test.thermal.thermal_integral.data[0, 0, -1, :]
+    #~ ti_last_col = evolution_test.thermal_integral.data[0, 0, :, -1]
+    ti_last_col = evolution_test.thermal.thermal_integral.data[0, 0, :, -1]
 
     # Compute errors
     err_left = np.abs(ts_left) - np.abs(ti_last_col)

@@ -118,7 +118,8 @@ class StateObject:
         return gap_history
 
     #** Skipped for now, not important for equilibrium 
-    def get_current_kernel_prefactor(self, thermal_dist, time_index=-1):
+    #~ def get_current_kernel_prefactor(self, thermal_dist, time_index=-1):
+    def get_current_kernel_prefactor(self, thermal, time_index=-1):
         """
         Compute current kernel prefactor: tr(K_(t,t)) for Crank-Nicolson update.
 
@@ -132,7 +133,7 @@ class StateObject:
                     + 2F(t,t) τ₃ g'^A(t,t)
 
         Args:
-            thermal_dist: Thermal distribution F(t,t') - NambuKeldyshTensor
+            thermal: ThermalConvolutions object (numerical_support) holding f, F, thermal sums and the convolutions
             time_index: Time index to compute kernel at (default -1, supports negative indexing)
 
         Returns:
@@ -152,7 +153,8 @@ class StateObject:
         gr_diag = self.gr[t_idx, t_idx]      # g'^R(t, t) - shape (2,2)
         gk_diag = self.gk[t_idx, t_idx]      # g'^K(t, t) - shape (2,2)
         ga_diag = ga[t_idx, t_idx]           # g'^A(t, t) - shape (2,2)
-        F_diag = thermal_dist[t_idx, t_idx]  # F(t, t) - shape (2,2)
+        #~ F_diag = thermal_dist[t_idx, t_idx]  # F(t, t) - shape (2,2)
+        F_diag = thermal.thermal_dist[t_idx, t_idx]  # F(t, t) - shape (2,2)
 
         # Term 1: τ₃ g'^R(t,t) τ₃ g'^K(t,t)
         term1 = tau3 * gr_diag * tau3 * gk_diag
@@ -176,8 +178,9 @@ class StateObject:
         return kernel_trace * (-1j * np.pi/4)/2.0 # diving by 2 because its the midpoint contribution
     
     #** Skipped for now, not important for equilibrium
-    def get_current_at_time_t(self, A_history, thermal_dist, thermal_integral, time_index=-1,
-                               thermal_sum_left=None, thermal_sum_right=None, include_derivative = True):
+    #~ def get_current_at_time_t(self, A_history, thermal_dist, thermal_integral, time_index=-1,
+                               #~ thermal_sum_left=None, thermal_sum_right=None, include_derivative = True):
+    def get_current_at_time_t(self, A_history, thermal, time_index=-1, include_derivative = True):
         """
         Compute current J(t) at specific time with thermal distribution (tex Eq. 942-945).
 
@@ -192,11 +195,8 @@ class StateObject:
 
         Args:
             A_history: Vector potential A(t') - array of length N_t
-            thermal_dist: Thermal distribution F(t,t') - NambuKeldyshTensor
-            thermal_integral: Integral of F - NambuKeldyshTensor
+            thermal: ThermalConvolutions object (numerical_support) holding f, F, thermal sums and the convolutions
             time_index: Time index to compute current at (default -1, supports negative indexing)
-            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
-            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
 
         Returns:
             complex: Current J(t) at specified time
@@ -219,15 +219,15 @@ class StateObject:
         gk_row = self.gk[t_idx:t_idx+1, :]      # g'^K(t, :) shape (2,2,1,Nt)
         gk_col = self.gk[:, t_idx:t_idx+1]      # g'^K(:, t) shape (2,2,Nt,1)
         ga_col = ga[:, t_idx:t_idx+1]           # g'^A(:, t) shape (2,2,Nt,1)
-        F_col = thermal_dist[:, t_idx:t_idx+1]  # F(:, t) shpe (2,2,Nt,1)
-        F_row = thermal_dist[t_idx:t_idx+1, :]  # F(t, :) shape (2,2,1,Nt)
+        #~ F_col = thermal_dist[:, t_idx:t_idx+1]  # F(:, t) shpe (2,2,Nt,1)
+        #~ F_row = thermal_dist[t_idx:t_idx+1, :]  # F(t, :) shape (2,2,1,Nt)
 
-        # Thermal integrals for precise_convolution
-        F_integral_row = thermal_integral[t_idx:t_idx+1, :]  # ∫F(t,:)
+        #~ # Thermal integrals for precise_convolution
+        #~ F_integral_row = thermal_integral[t_idx:t_idx+1, :]  # ∫F(t,:)
 
-        # Thermal sums for precise_convolution (if provided)
-        t_pos_precom = t_idx % thermal_sum_left.shape[2]
-        thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
+        #~ # Thermal sums for precise_convolution (if provided)
+        #~ t_pos_precom = t_idx % thermal_sum_left.shape[2]
+        #~ thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
 
         # Term 1: ∫ dt' τ₃ g'^R(t,t') A(t') τ₃ g'^K(t',t)
         # = τ₃ [g'^R(t,:) @ (A(:) τ₃ g'^K(:,t))]=
@@ -248,11 +248,13 @@ class StateObject:
         # Term 3: ∫ dt' 2τ₃ g'^R(t,t') A(t') F(t',t)
         # Multiply gr with A*tau3, then precise_convolution_left with F (regularized)
         #print((A_tensor * tau3 * gr_row).shape)
-        term3 = 2.0 * (tau3 * gr_row * A_tensor).precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right)[-1,-1]
+        #~ term3 = 2.0 * (tau3 * gr_row * A_tensor).precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right)[-1,-1]
+        term3 = 2.0 * thermal.convolve_thermal_dist_left(tau3 * gr_row * A_tensor, time_index)[-1,-1]
 
         # Term 4: ∫ dt' 2F(t,t') A(t') τ₃ g'^A(t',t)
         # Multiply ga with A*tau3, then precise_convolution_right with F (regularized)
-        term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)[-1,-1]
+        #~ term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)[-1,-1]
+        term4 = 2.0 * thermal.convolve_thermal_dist_right(A_tensor * tau3 * ga, time_index)[-1,-1]
 
         # Sum all terms and take Nambu trace
         total = term1 + term2 + term3 + term4
@@ -377,8 +379,9 @@ class StateObject:
         return errors, totals
 
     #** Skipped for now, not important for equilibrium computation, but useful for debugging
-    def check_keldysh_normalization(self, t1_idx, thermal_dist, thermal_integral,
-                                     thermal_sum_left=None, thermal_sum_right=None, log_two_time=None):
+    #~ def check_keldysh_normalization(self, t1_idx, thermal_dist, thermal_integral,
+                                     #~ thermal_sum_left=None, thermal_sum_right=None, log_two_time=None):
+    def check_keldysh_normalization(self, t1_idx, thermal):
         """
         Verify FDT normalization constraint at fixed t₁ for all t₂.
 
@@ -388,11 +391,7 @@ class StateObject:
 
         Args:
             t1_idx: Index for t₁ time (supports negative indexing)
-            thermal_dist: Thermal distribution f(t,t') - NambuKeldyshTensor
-            thermal_integral: Integral of thermal distribution F(t,t') - NambuKeldyshTensor
-            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
-            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
-            log_two_time: Pre-computed log(|t-t'|) matrix; enables log regularization of the thermal_gap_term convolutions (optional)
+            thermal: ThermalConvolutions object (numerical_support) holding f, F, thermal sums and the convolutions
 
         Returns:
             errors: np.ndarray of shape (N_t,) with error norm at each t₂
@@ -414,7 +413,8 @@ class StateObject:
         gap_history = self.get_gap_history()
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
 
-        thermal_gap_term = (- thermal_integral * gap_tensor - gap_tensor * thermal_integral)
+        #~ thermal_gap_term = (- thermal_integral * gap_tensor - gap_tensor * thermal_integral)
+        thermal_gap_term = thermal.thermal_gap_term(gap_tensor)
 
         # Add thermal_gap_term commutator:
         thermal_gap_commutator = tau3 * thermal_gap_term[t1_pos:t1_pos+1, :] - thermal_gap_term[t1_pos:t1_pos+1, :] * tau3
@@ -435,30 +435,31 @@ class StateObject:
 
         conv1 = (gr_row @ self.gk) * self.dt - 0.5 * self.dt * first_endpoint_1  - 0.5 * self.dt * last_endpoint_1
 
-        # Add thermal_gap_term convolution: ∫ g^R(t1, t') thermal_gap_term(t', t2) dt'
-        thermal_gap_0_row = thermal_gap_term[0:1, :]
-        thermal_gap_gr_first = gr_t1_0 * thermal_gap_0_row
-        thermal_gap_gr_last = gr_t1_t1 * thermal_gap_term[t1_pos:t1_pos+1, :]
-        thermal_gap_gr_conv =  (gr_row @ thermal_gap_term) * self.dt - 0.5 * self.dt * thermal_gap_gr_first - 0.5 * self.dt * thermal_gap_gr_last
+        #~ # Add thermal_gap_term convolution: ∫ g^R(t1, t') thermal_gap_term(t', t2) dt'
+        #~ thermal_gap_0_row = thermal_gap_term[0:1, :]
+        #~ thermal_gap_gr_first = gr_t1_0 * thermal_gap_0_row
+        #~ thermal_gap_gr_last = gr_t1_t1 * thermal_gap_term[t1_pos:t1_pos+1, :]
+        #~ thermal_gap_gr_conv =  (gr_row @ thermal_gap_term) * self.dt - 0.5 * self.dt * thermal_gap_gr_first - 0.5 * self.dt * thermal_gap_gr_last
 
-        #* log regularization: F(τ) ≈ L(τ) = -i/π ln|πTτ/2| near τ=0. Factor the smooth part A at the singular point,
-        #* subtract its trapezoid sum A*·Σ_trap L and add the exact integral A*·∫L, same idea as precise_convolution
-        if log_two_time is not None:
-            L_mat = log_two_time.data[0, 0]
-            t0, t1 = self.time_grid[0], self.time_grid[t1_pos]
+        #~ #* log regularization: F(τ) ≈ L(τ) = -i/π ln|πTτ/2| near τ=0. Factor the smooth part A at the singular point,
+        #~ #* subtract its trapezoid sum A*·Σ_trap L and add the exact integral A*·∫L, same idea as precise_convolution
+        #~ if log_two_time is not None:
+            #~ L_mat = log_two_time.data[0, 0]
+            #~ t0, t1 = self.time_grid[0], self.time_grid[t1_pos]
 
-            def log_antiderivative(u):
-                u_safe = np.where(u == 0, 1.0, u)
-                return np.where(u == 0, 0.0, -1j/np.pi * u * (np.log(np.abs(np.pi * u_safe * self.temperature / 2.0)) - 1.0))
+            #~ def log_antiderivative(u):
+                #~ u_safe = np.where(u == 0, 1.0, u)
+                #~ return np.where(u == 0, 0.0, -1j/np.pi * u * (np.log(np.abs(np.pi * u_safe * self.temperature / 2.0)) - 1.0))
 
-            # ∫ gr(t1,t'') thermal_gap_term(t'',t2) dt'' for t'' in [t0, t1], singular at t''=t2, A* = -2 gr(t1,t2) Δ(t2)
-            trap_weights_gr = np.ones(t1_pos + 1)
-            trap_weights_gr[0] -= 0.5
-            trap_weights_gr[-1] -= 0.5
-            log_bracket_gr = (log_antiderivative(t1 - self.time_grid) - log_antiderivative(t0 - self.time_grid)
-                              - self.dt * (trap_weights_gr @ L_mat[:t1_pos+1, :]))
-            log_reg_gr = -2 * gr_row * gap_tensor * NambuKeldyshTensor(log_bracket_gr[np.newaxis, :], pauli_channel=0)
-            thermal_gap_gr_conv = thermal_gap_gr_conv + log_reg_gr
+            #~ # ∫ gr(t1,t'') thermal_gap_term(t'',t2) dt'' for t'' in [t0, t1], singular at t''=t2, A* = -2 gr(t1,t2) Δ(t2)
+            #~ trap_weights_gr = np.ones(t1_pos + 1)
+            #~ trap_weights_gr[0] -= 0.5
+            #~ trap_weights_gr[-1] -= 0.5
+            #~ log_bracket_gr = (log_antiderivative(t1 - self.time_grid) - log_antiderivative(t0 - self.time_grid)
+                              #~ - self.dt * (trap_weights_gr @ L_mat[:t1_pos+1, :]))
+            #~ log_reg_gr = -2 * gr_row * gap_tensor * NambuKeldyshTensor(log_bracket_gr[np.newaxis, :], pauli_channel=0)
+            #~ thermal_gap_gr_conv = thermal_gap_gr_conv + log_reg_gr
+        thermal_gap_gr_conv = thermal.convolve_thermal_int_left(gr_row, gap_tensor, t1_idx)
 
         conv1 = conv1 + thermal_gap_gr_conv
 
@@ -477,35 +478,38 @@ class StateObject:
 
         conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
 
-        # Add thermal_gap_term convolution: ∫ thermal_gap_term(t1, t') g^A(t', t2) dt'
-        thermal_gap_ga_conv = (thermal_gap_term[t1_pos:t1_pos+1, :] @ ga) * self.dt
-        thermal_gap_t1_0 = thermal_gap_term[t1_pos, 0]
-        thermal_gap_ga_first = thermal_gap_t1_0 * ga_0_row
-        thermal_gap_ga_last = thermal_gap_term[t1_pos:t1_pos+1, :] * ga.diagonal_time()
-        thermal_gap_ga_conv = thermal_gap_ga_conv - 0.5 * self.dt * thermal_gap_ga_first - 0.5 * self.dt * thermal_gap_ga_last
+        #~ # Add thermal_gap_term convolution: ∫ thermal_gap_term(t1, t') g^A(t', t2) dt'
+        #~ thermal_gap_ga_conv = (thermal_gap_term[t1_pos:t1_pos+1, :] @ ga) * self.dt
+        #~ thermal_gap_t1_0 = thermal_gap_term[t1_pos, 0]
+        #~ thermal_gap_ga_first = thermal_gap_t1_0 * ga_0_row
+        #~ thermal_gap_ga_last = thermal_gap_term[t1_pos:t1_pos+1, :] * ga.diagonal_time()
+        #~ thermal_gap_ga_conv = thermal_gap_ga_conv - 0.5 * self.dt * thermal_gap_ga_first - 0.5 * self.dt * thermal_gap_ga_last
 
-        # ∫ thermal_gap_term(t1,t'') ga(t'',t2) dt'' for t'' in [t0, t2], singular at t''=t1 >= t2,
-        # smooth part factored at the nearest edge t''=t2 (as in precise_convolution_right): A* = -(Δ(t2) + Δ(t1)) ga(t2,t2)
-        if log_two_time is not None:
-            L_row = L_mat[t1_pos, :]
-            trap_sum_ga = self.dt * (np.cumsum(L_row) - 0.5 * L_row[0] - 0.5 * L_row)
-            log_bracket_ga = (log_antiderivative(self.time_grid - t1) - log_antiderivative(t0 - t1) - trap_sum_ga)
-            expansion_tensor = NambuKeldyshTensor(np.ones(N_t), pauli_channel=0)
-            gap_sum = gap_tensor + gap_tensor[t1_pos] * expansion_tensor
-            log_reg_ga = NambuKeldyshTensor(log_bracket_ga[np.newaxis, :], pauli_channel=0) * (-1 * gap_sum * ga.diagonal_time())
-            thermal_gap_ga_conv = thermal_gap_ga_conv + log_reg_ga
+        #~ # ∫ thermal_gap_term(t1,t'') ga(t'',t2) dt'' for t'' in [t0, t2], singular at t''=t1 >= t2,
+        #~ # smooth part factored at the nearest edge t''=t2 (as in precise_convolution_right): A* = -(Δ(t2) + Δ(t1)) ga(t2,t2)
+        #~ if log_two_time is not None:
+            #~ L_row = L_mat[t1_pos, :]
+            #~ trap_sum_ga = self.dt * (np.cumsum(L_row) - 0.5 * L_row[0] - 0.5 * L_row)
+            #~ log_bracket_ga = (log_antiderivative(self.time_grid - t1) - log_antiderivative(t0 - t1) - trap_sum_ga)
+            #~ expansion_tensor = NambuKeldyshTensor(np.ones(N_t), pauli_channel=0)
+            #~ gap_sum = gap_tensor + gap_tensor[t1_pos] * expansion_tensor
+            #~ log_reg_ga = NambuKeldyshTensor(log_bracket_ga[np.newaxis, :], pauli_channel=0) * (-1 * gap_sum * ga.diagonal_time())
+            #~ thermal_gap_ga_conv = thermal_gap_ga_conv + log_reg_ga
+        thermal_gap_ga_conv = thermal.convolve_thermal_int_right(ga, gap_tensor, t1_idx)
 
         conv2 = conv2 + thermal_gap_ga_conv
         
-        # Thermal term 1: gr_row @ (gr @ f) for all t2 at once
-        thermal_gr = gr_row.precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t1_idx, precomputed_sum=thermal_sum_right) * tau3 * 2
+        #~ # Thermal term 1: gr_row @ (gr @ f) for all t2 at once
+        #~ thermal_gr = gr_row.precise_convolution_left(thermal_dist, thermal_integral, self.dt, other_index=t1_idx, precomputed_sum=thermal_sum_right) * tau3 * 2
 
-        # Thermal term 2: (f_row @ ga) @ ga for all t2 at once
-        f_row = thermal_dist[t1_pos:t1_pos+1, :]
-        F_row = thermal_integral[t1_pos:t1_pos+1, :]
-        t1_pos_precom = t1_idx % thermal_sum_left.shape[2]
-        thermal_sum_left_row = thermal_sum_left[t1_pos_precom:t1_pos_precom+1, :]
-        thermal_ga = 2 * tau3 * ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t1_idx, precomputed_sum=thermal_sum_left_row)
+        #~ # Thermal term 2: (f_row @ ga) @ ga for all t2 at once
+        #~ f_row = thermal_dist[t1_pos:t1_pos+1, :]
+        #~ F_row = thermal_integral[t1_pos:t1_pos+1, :]
+        #~ t1_pos_precom = t1_idx % thermal_sum_left.shape[2]
+        #~ thermal_sum_left_row = thermal_sum_left[t1_pos_precom:t1_pos_precom+1, :]
+        #~ thermal_ga = 2 * tau3 * ga.precise_convolution_right(f_row, F_row, self.dt, self_index=t1_idx, precomputed_sum=thermal_sum_left_row)
+        thermal_gr = thermal.convolve_thermal_dist_left(gr_row, t1_idx) * tau3 * 2
+        thermal_ga = 2 * tau3 * thermal.convolve_thermal_dist_right(ga, t1_idx)
 
         # Save pure convolutions before adding thermal terms
         conv1_gk_only = (gr_row @ self.gk) * self.dt - 0.5 * self.dt * first_endpoint_1 - 0.5 * self.dt * last_endpoint_1
@@ -555,8 +559,9 @@ class StateObject:
         }
     
     #** Skipped for now, not important for equilibrium computation, but useful for debugging
-    def check_fdt(self, f_thermal, f_thermal_integral, time_index,
-                   thermal_sum_left=None, thermal_sum_right=None, log_two_time=None, tmax=None):
+    #~ def check_fdt(self, f_thermal, f_thermal_integral, time_index,
+                   #~ thermal_sum_left=None, thermal_sum_right=None, log_two_time=None, tmax=None):
+    def check_fdt(self, thermal, time_index):
         """
         Check FDT relation: g^K = g^R @ f - f @ g^A - thermal_gap_term using precise convolution.
 
@@ -570,13 +575,8 @@ class StateObject:
         4. Combining as: gk = (gr @ f) - (f @ ga) - thermal_gap_term
 
         Args:
-            f_thermal: NambuKeldyshTensor - thermal distribution f(t, t')
-            f_thermal_integral: NambuKeldyshTensor - integral of thermal distribution F(t, t')
+            thermal: ThermalConvolutions object (numerical_support) holding f, F, thermal sums and the convolutions
             time_index: int - time index to check (supports negative indexing)
-            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
-            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
-            log_two_time: Pre-computed log(|t-t'|) matrix for regularization (optional)
-            tmax: Maximum time for log regularization (optional)
 
         Returns:
             gk_fdt_row: NambuKeldyshTensor - FDT prediction for g^K[time_index, :]
@@ -597,20 +597,23 @@ class StateObject:
         # Compute gap_tensor and thermal_gap_term (the direct shift)
         gap_history = self.get_gap_history()
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
-        thermal_gap_term = (- f_thermal_integral * gap_tensor - gap_tensor * f_thermal_integral)
+        #~ thermal_gap_term = (- f_thermal_integral * gap_tensor - gap_tensor * f_thermal_integral)
+        thermal_gap_term = thermal.thermal_gap_term(gap_tensor)
 
         # Extract rows for time t_idx
         gr_row = self.gr[t_idx:t_idx+1, :]
-        f_row = f_thermal[t_idx:t_idx+1, :]
-        F_row = f_thermal_integral[t_idx:t_idx+1, :]
-        t1_pos_precom = time_index % thermal_sum_left.shape[2]
-        thermal_sum_left_row = thermal_sum_left[t1_pos_precom:t1_pos_precom+1, :]
+        #~ f_row = f_thermal[t_idx:t_idx+1, :]
+        #~ F_row = f_thermal_integral[t_idx:t_idx+1, :]
+        #~ t1_pos_precom = time_index % thermal_sum_left.shape[2]
+        #~ thermal_sum_left_row = thermal_sum_left[t1_pos_precom:t1_pos_precom+1, :]
 
         # First term: regularized gr @ f (f is regularized, on the right)
-        term1 = gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right)
+        #~ term1 = gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right)
+        term1 = thermal.convolve_thermal_dist_left(gr_row, time_index)
 
         # Second term: regularized f @ ga (f is regularized, on the left)
-        term2 = ga.precise_convolution_right(f_row, F_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
+        #~ term2 = ga.precise_convolution_right(f_row, F_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
+        term2 = thermal.convolve_thermal_dist_right(ga, time_index)
 
         # FDT relation: g^K = gr @ f - f @ ga - thermal_gap_term
         # thermal_gap_term is a direct shift, not convolved
@@ -698,8 +701,9 @@ class StateObject:
         return { 'energy_grid': energy_grid, 'g_energy': g_energy}
 
     #** Skipped for now, not important for equilibrium
-    def update_state_occupation(self, f_thermal, f_thermal_integral,
-                                 thermal_sum_left=None, thermal_sum_right=None):
+    #~ def update_state_occupation(self, f_thermal, f_thermal_integral,
+                                 #~ thermal_sum_left=None, thermal_sum_right=None):
+    def update_state_occupation(self, thermal):
         """
         Compute and update occupation distribution n(t,t') at specified time.
 
@@ -707,10 +711,7 @@ class StateObject:
         where source = g^K - Δt·g^R⊗(n+f) + Δt·(n+f)⊗g^A
 
         Args:
-            f_thermal: Thermal distribution F(t,t') - NambuKeldyshTensor (2,2,N_t,N_t)
-            f_thermal_integral: Integral of F - NambuKeldyshTensor (2,2,N_t,N_t)
-            thermal_sum_left: Pre-computed thermal sum for left convolutions (optional)
-            thermal_sum_right: Pre-computed thermal sum for right convolutions (optional)
+            thermal: ThermalConvolutions object (numerical_support) holding f, F, thermal sums and the convolutions
 
         Updates:
             self.occupation_function[time_index, :] with computed n(t,t') row
@@ -726,11 +727,12 @@ class StateObject:
         gr_row = self.gr[t_idx:t_idx+1, :]
         gk_row = self.gk[t_idx:t_idx+1, :]
 
-        f_thermal_row = f_thermal[t_idx:t_idx+1, :]
-        f_thermal_integral_row = f_thermal_integral[t_idx:t_idx+1, :]
-        t_pos_precom = t_idx % thermal_sum_left.shape[2]
-        thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
-        rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right) + ga.precise_convolution_right(f_thermal_row, f_thermal_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
+        #~ f_thermal_row = f_thermal[t_idx:t_idx+1, :]
+        #~ f_thermal_integral_row = f_thermal_integral[t_idx:t_idx+1, :]
+        #~ t_pos_precom = t_idx % thermal_sum_left.shape[2]
+        #~ thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
+        #~ rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right) + ga.precise_convolution_right(f_thermal_row, f_thermal_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
+        rhs_vector = gk_row - thermal.convolve_thermal_dist_left(gr_row, time_index) + thermal.convolve_thermal_dist_right(ga, time_index)
         rhs_vector += - gr_row[:,:-1] @ self.occupation_function[:-1,:] * self.dt
         solution_tensor = self.gr[-1,-1:] * 0
         for time in range(N_t):

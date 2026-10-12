@@ -43,21 +43,23 @@ for N_t in N_t_values:
     initial_state, _, _, _ = evolution.generate_initial_state(Q=0.0)
     
     # Get thermal distributions
-    evolution.get_thermal_occupation(temperature)
-    evolution.get_thermal_integral(temperature)
-    evolution.get_log_two_time(temperature)
-    evolution.get_thermal_sum(temperature)
+    #~ evolution.get_thermal_occupation(temperature)
+    #~ evolution.get_thermal_integral(temperature)
+    #~ evolution.get_log_two_time(temperature)
+    #~ evolution.get_thermal_sum(temperature)
+    #* thermal quantities are in evolution.thermal (numerical_support.ThermalConvolutions)
     
     # Check FDT
-    gk_fdt, gk_actual, error, max_error = initial_state.check_fdt(
-        f_thermal=evolution.thermal_dist,
-        f_thermal_integral=evolution.thermal_integral,
-        time_index=-1,
-        thermal_sum_left=evolution.thermal_sum_left,
-        thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time,
-        tmax=evolution.tmax
-    )
+    #~ gk_fdt, gk_actual, error, max_error = initial_state.check_fdt(
+        #~ f_thermal=evolution.thermal_dist,
+        #~ f_thermal_integral=evolution.thermal_integral,
+        #~ time_index=-1,
+        #~ thermal_sum_left=evolution.thermal_sum_left,
+        #~ thermal_sum_right=evolution.thermal_sum_right,
+        #~ log_two_time=evolution.log_two_time,
+        #~ tmax=evolution.tmax
+    #~ )
+    gk_fdt, gk_actual, error, max_error = initial_state.check_fdt(evolution.thermal, time_index=-1)
     
     # Extract tau_2 error (most important for gap)
     error_tau2 = error.trace(pauli_index=2) / 2

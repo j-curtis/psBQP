@@ -8,6 +8,7 @@ import os
 import re
 from tqdm import tqdm
 from nambu_keldysh_class import NambuKeldyshTensor, get_pauli_matrix
+from numerical_support import ThermalConvolutions
 from state_object_class import StateObject
 from equilibrium_class import EquilibriumSolver
 import self_energy_class
@@ -52,6 +53,9 @@ class UsadelKeldyshEvolution:
 
         self.critical_temperature = system_parameters['critical_temperature']
         self.temperature = system_parameters['temperature']
+
+        #* thermal distribution, its integral, sums and convolutions
+        self.thermal = ThermalConvolutions(self.temperature, self.grid_parameters)
 
     # ========== Grid and Parameter Setup ==========
 
@@ -140,6 +144,7 @@ class UsadelKeldyshEvolution:
             self.d_omega: Omega spacing
             self.n_extended: Number of points in extended grid (2*N_t - 1)
         """
+
         # Extended grid for FFT: [-T_max, T_max] with same delta_t
         # Number of points: 2*T_max / delta_t + 1 = 2*(N_t-1) + 1 = 2*N_t - 1
         self.n_extended = 2 * self.ntpoints - 1
@@ -244,222 +249,226 @@ class UsadelKeldyshEvolution:
 
     # ========== Thermal Occupations and integrals ==========
 
-    def get_thermal_occupation(self, temperature):
-        """
-        Generate thermal occupation function as a two-time object.
+    #* deprecated: thermal quantities now live in self.thermal (numerical_support.ThermalConvolutions)
+#    def get_thermal_occupation(self, temperature):
+#        """
+#        Generate thermal occupation function as a two-time object.
 
-        Uses analytic form: f(τ) = -i T / sinh(π τ T)
-        Returns f(t,t') = f(t-t') as a NambuKeldyshTensor with two time axes.
+#        Uses analytic form: f(τ) = -i T / sinh(π τ T)
+#        Returns f(t,t') = f(t-t') as a NambuKeldyshTensor with two time axes.
 
-        Args:
-            temperature: Temperature in energy units
+#        Args:
+#            temperature: Temperature in energy units
 
-        Returns:
-            None (stores result in self.thermal_dist as (2, 2, ntpoints, ntpoints) tensor)
-        """
-        # Use time grid from -T_max to 0 (already defined in _generate_time_grid)
-        time_grid = self.time_grid
+#        Returns:
+#            None (stores result in self.thermal_dist as (2, 2, ntpoints, ntpoints) tensor)
+#        """
+#        # Use time grid from -T_max to 0 (already defined in _generate_time_grid)
+#        time_grid = self.time_grid
 
-        # Create meshgrid for all time pairs (t_i, t_j)
-        t_i, t_j = np.meshgrid(time_grid, time_grid, indexing='ij')
+#        # Create meshgrid for all time pairs (t_i, t_j)
+#        t_i, t_j = np.meshgrid(time_grid, time_grid, indexing='ij')
 
-        # Compute tau = t_i - t_j for all pairs
-        tau_matrix = t_i - t_j
+#        # Compute tau = t_i - t_j for all pairs
+#        tau_matrix = t_i - t_j
 
-        # Initialize two-time thermal distribution
-        f_two_time = np.zeros((self.ntpoints, self.ntpoints), dtype=complex)
+#        # Initialize two-time thermal distribution
+#        f_two_time = np.zeros((self.ntpoints, self.ntpoints), dtype=complex)
 
-        # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
-        mask = (np.abs(tau_matrix) > 1e-6)
+#        # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
+#        mask = (np.abs(tau_matrix) > 1e-6)
 
-        # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
-        f_two_time[mask] = -1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
+#        # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
+#        f_two_time[mask] = -1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
 
-        # Diagonal (τ=0) remains zero (already initialized to zero)
+#        # Diagonal (τ=0) remains zero (already initialized to zero)
 
-        # Store as NambuKeldyshTensor with two time axes (identity in Nambu space)
-        self.thermal_dist = NambuKeldyshTensor(f_two_time, pauli_channel=0)
+#        # Store as NambuKeldyshTensor with two time axes (identity in Nambu space)
+#        self.thermal_dist = NambuKeldyshTensor(f_two_time, pauli_channel=0)
 
-    def get_thermal_integral(self, temperature):
-        """
-        Compute cumulative integral of thermal distribution on finite time grid.
+    #* deprecated: thermal quantities now live in self.thermal (numerical_support.ThermalConvolutions)
+#    def get_thermal_integral(self, temperature):
+#        """
+#        Compute cumulative integral of thermal distribution on finite time grid.
 
-        For convolutions on finite grid [-T_max, 0], computes:
-        F(t, t') = ∫_{-T_max - t'}^{t - t'} f(τ') dτ'
-                 = F_full(t - t') - F_full(-T_max - t')
+#        For convolutions on finite grid [-T_max, 0], computes:
+#        F(t, t') = ∫_{-T_max - t'}^{t - t'} f(τ') dτ'
+#                 = F_full(t - t') - F_full(-T_max - t')
 
-        where F_full(τ) = -i/π · ln(tanh(πτT/2)) is the infinite-domain integral
-        and f(τ) = -i T / sinh(π τ T) is the thermal distribution.
+#        where F_full(τ) = -i/π · ln(tanh(πτT/2)) is the infinite-domain integral
+#        and f(τ) = -i T / sinh(π τ T) is the thermal distribution.
 
-        Args:
-            temperature: Temperature in energy units
+#        Args:
+#            temperature: Temperature in energy units
 
-        Stores:
-            self.thermal_integral: NambuKeldyshTensor of shape (2, 2, ntpoints, ntpoints)
-                                  Identity in Nambu space
-        """
-        # Create meshgrid for all time pairs (t_i, t_j)
-        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
+#        Stores:
+#            self.thermal_integral: NambuKeldyshTensor of shape (2, 2, ntpoints, ntpoints)
+#                                  Identity in Nambu space
+#        """
+#        # Create meshgrid for all time pairs (t_i, t_j)
+#        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
 
-        # Compute upper bound: tau = t_i - t_j
-        tau_upper = t_i - t_j
+#        # Compute upper bound: tau = t_i - t_j
+#        tau_upper = t_i - t_j
 
-        # Compute lower bound: -T_max - t_j 
-        tau_lower = -self.tmax * 2 - t_j * 0 #* remove -t_j since assuming -infinity actually
+#        # Compute lower bound: -T_max - t_j 
+#        tau_lower = -self.tmax * 2 - t_j * 0 #* remove -t_j since assuming -infinity actually
 
-        # Helper function to compute F(τ) = -i/π · ln(tanh(πτT/2))
-        def compute_F_full(tau_vals):
-            """Compute analytical thermal integral from -∞ to τ (no constant)."""
-            result = np.zeros_like(tau_vals, dtype=complex)
+#        # Helper function to compute F(τ) = -i/π · ln(tanh(πτT/2))
+#        def compute_F_full(tau_vals):
+#            """Compute analytical thermal integral from -∞ to τ (no constant)."""
+#            result = np.zeros_like(tau_vals, dtype=complex)
 
-            # Mask to avoid singularity at τ = 0
-            mask = (np.abs(tau_vals) > 1e-6)
+#            # Mask to avoid singularity at τ = 0
+#            mask = (np.abs(tau_vals) > 1e-6)
 
-            # Compute where τ ≠ 0
-            x = np.pi * tau_vals[mask] * temperature
-            # F(τ) = -i/π · ln(tanh(πτT/2))
-            # Must be purely imaginary since f(τ) is purely imaginary
-            tanh_half = np.tanh(x / 2.0)
-            result[mask] = -1j/np.pi * np.log(tanh_half + 0j)
-            # At τ = 0, set to 0 (principal value)
-            return result
+#            # Compute where τ ≠ 0
+#            x = np.pi * tau_vals[mask] * temperature
+#            # F(τ) = -i/π · ln(tanh(πτT/2))
+#            # Must be purely imaginary since f(τ) is purely imaginary
+#            tanh_half = np.tanh(x / 2.0)
+#            result[mask] = -1j/np.pi * np.log(tanh_half + 0j)
+#            # At τ = 0, set to 0 (principal value)
+#            return result
 
-        # Compute finite-domain integral
-        # F must be purely imaginary since f(τ) is purely imaginary
-        # Force this by taking only imaginary part
-        F_upper = compute_F_full(tau_upper)
-        F_lower = compute_F_full(tau_lower)
+#        # Compute finite-domain integral
+#        # F must be purely imaginary since f(τ) is purely imaginary
+#        # Force this by taking only imaginary part
+#        F_upper = compute_F_full(tau_upper)
+#        F_lower = compute_F_full(tau_lower)
 
-        # Take only imaginary part and multiply by 1j to ensure purely imaginary result
-        F_two_time = 1j * np.imag(F_upper -  F_lower)
+#        # Take only imaginary part and multiply by 1j to ensure purely imaginary result
+#        F_two_time = 1j * np.imag(F_upper -  F_lower)
 
-        # Set F(0) to BCS regularization: 1/λ + ln(T_c/T)
-        bcs_coupling = self._get_BCS_coupling()#/ (2 + 1/2/np.pi * np.log(self.critical_temperature/self.temperature)) 
+#        # Set F(0) to BCS regularization: 1/λ + ln(T_c/T)
+#        bcs_coupling = self._get_BCS_coupling()#/ (2 + 1/2/np.pi * np.log(self.critical_temperature/self.temperature)) 
 
-        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature))  * 0
+#        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature))  * 0
 
-        # Replace diagonal (τ=0) with BCS value
-        diagonal_mask = (np.abs(tau_upper) < 1e-6)
-        F_two_time[diagonal_mask] = F_zero_bcs 
+#        # Replace diagonal (τ=0) with BCS value
+#        diagonal_mask = (np.abs(tau_upper) < 1e-6)
+#        F_two_time[diagonal_mask] = F_zero_bcs 
 
-        # Store as NambuKeldyshTensor (identity in Nambu space)
-        self.thermal_integral = NambuKeldyshTensor(F_two_time, pauli_channel=0)
+#        # Store as NambuKeldyshTensor (identity in Nambu space)
+#        self.thermal_integral = NambuKeldyshTensor(F_two_time, pauli_channel=0)
 
-    def get_log_two_time(self,temperature):
-        """
-        Compute logarithmic two-time function that mimics thermal_integral divergence.
+    #* deprecated: thermal quantities now live in self.thermal (numerical_support.ThermalConvolutions)
+#    def get_log_two_time(self,temperature):
+#        """
+#        Compute logarithmic two-time function that mimics thermal_integral divergence.
 
-        The thermal_integral has the form:
-            F(τ) = -i/π · ln(tanh(πτT/2))
+#        The thermal_integral has the form:
+#            F(τ) = -i/π · ln(tanh(πτT/2))
 
-        For small τ:
-            F(τ) ≈ -i/π · ln(πτT/2)
+#        For small τ:
+#            F(τ) ≈ -i/π · ln(πτT/2)
 
-        This function computes the singular part with constants:
-            log_two_time(t,t') = -i/π · ln(|π(t-t')T/2|)
+#        This function computes the singular part with constants:
+#            log_two_time(t,t') = -i/π · ln(|π(t-t')T/2|)
 
-        This has the same logarithmic divergence as thermal_integral at τ=0.
+#        This has the same logarithmic divergence as thermal_integral at τ=0.
 
-        Stores:
-            self.log_two_time: NambuKeldyshTensor of shape (2,2,ntpoints,ntpoints)
-                              Identity in Nambu space, pauli_channel=0
-        """
-        # Create meshgrid for all time pairs (t_i, t_j)
-        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
+#        Stores:
+#            self.log_two_time: NambuKeldyshTensor of shape (2,2,ntpoints,ntpoints)
+#                              Identity in Nambu space, pauli_channel=0
+#        """
+#        # Create meshgrid for all time pairs (t_i, t_j)
+#        t_i, t_j = np.meshgrid(self.time_grid, self.time_grid, indexing='ij')
 
-        # Compute tau = t_i - t_j for all pairs
-        tau_matrix = t_i - t_j
+#        # Compute tau = t_i - t_j for all pairs
+#        tau_matrix = t_i - t_j
 
-        # Initialize result (purely imaginary)
-        log_two_time = np.zeros_like(tau_matrix, dtype=complex)
+#        # Initialize result (purely imaginary)
+#        log_two_time = np.zeros_like(tau_matrix, dtype=complex)
 
-        # Mask to avoid singularity at τ = 0
-        mask = (np.abs(tau_matrix) > 1e-6)
+#        # Mask to avoid singularity at τ = 0
+#        mask = (np.abs(tau_matrix) > 1e-6)
 
-        # Compute -i/π · ln(|πτT/2|) where τ ≠ 0
-        # This matches the singular behavior of thermal_integral with natural constants
-        log_two_time[mask] = -1j/np.pi * np.log(np.abs(np.pi * tau_matrix[mask] * self.temperature / 2.0))
+#        # Compute -i/π · ln(|πτT/2|) where τ ≠ 0
+#        # This matches the singular behavior of thermal_integral with natural constants
+#        log_two_time[mask] = -1j/np.pi * np.log(np.abs(np.pi * tau_matrix[mask] * self.temperature / 2.0))
         
-        bcs_coupling = self._get_BCS_coupling()
-        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature)) * 0
+#        bcs_coupling = self._get_BCS_coupling()
+#        F_zero_bcs = 2j * (1/bcs_coupling + 1/(2 * np.pi) * np.log(self.critical_temperature / temperature)) * 0
         
-        # At τ = 0 (diagonal), set to 0 for now
-        # This could be regularized differently if needed
-        log_two_time[~mask] = F_zero_bcs
+#        # At τ = 0 (diagonal), set to 0 for now
+#        # This could be regularized differently if needed
+#        log_two_time[~mask] = F_zero_bcs
 
-        # Store as NambuKeldyshTensor (identity in Nambu space)
-        self.log_two_time = NambuKeldyshTensor(log_two_time, pauli_channel=0)
+#        # Store as NambuKeldyshTensor (identity in Nambu space)
+#        self.log_two_time = NambuKeldyshTensor(log_two_time, pauli_channel=0)
 
-    def get_thermal_sum(self, temperature):
-        """
-        Pre-compute cumulative sums of thermal distribution over extended grid.
+    #* deprecated: thermal quantities now live in self.thermal (numerical_support.ThermalConvolutions)
+#    def get_thermal_sum(self, temperature):
+#        """
+#        Pre-compute cumulative sums of thermal distribution over extended grid.
 
-        Computes two-time matrices similar to get_thermal_occupation:
-        - SUM_right(t,t') = ∫_{-2*T_max}^{t'} f(t,t'') dt'' for all (t,t') pairs
-        - SUM_left(t,t') = ∫_{-2*T_max}^{t} f(t'',t') dt'' for all (t,t') pairs
+#        Computes two-time matrices similar to get_thermal_occupation:
+#        - SUM_right(t,t') = ∫_{-2*T_max}^{t'} f(t,t'') dt'' for all (t,t') pairs
+#        - SUM_left(t,t') = ∫_{-2*T_max}^{t} f(t'',t') dt'' for all (t,t') pairs
 
-        Uses extended time grid (2× size) to simulate -∞ starting point.
+#        Uses extended time grid (2× size) to simulate -∞ starting point.
 
-        Args:
-            temperature: Temperature in energy units
+#        Args:
+#            temperature: Temperature in energy units
 
-        Stores:
-            self.thermal_sum_right: NambuKeldyshTensor of shape (2,2,N_t,N_t)
-            self.thermal_sum_left: NambuKeldyshTensor of shape (2,2,N_t,N_t)
-        """
-        # Define N_t from existing grid
-        N_t = self.ntpoints
-        N_t_extended = 2 * N_t -1
+#        Stores:
+#            self.thermal_sum_right: NambuKeldyshTensor of shape (2,2,N_t,N_t)
+#            self.thermal_sum_left: NambuKeldyshTensor of shape (2,2,N_t,N_t)
+#        """
+#        # Define N_t from existing grid
+#        N_t = self.ntpoints
+#        N_t_extended = 2 * N_t -1
 
-        # Create extended time grid: from -2*T_max to 0 with same spacing
-        dt = self.delta_t
-        extended_time_grid = np.append(np.linspace(-2 * self.tmax, - self.tmax, N_t-1, endpoint=False), self.time_grid)
+#        # Create extended time grid: from -2*T_max to 0 with same spacing
+#        dt = self.delta_t
+#        extended_time_grid = np.append(np.linspace(-2 * self.tmax, - self.tmax, N_t-1, endpoint=False), self.time_grid)
 
-        # Create meshgrid for all time pairs (t_i, t_j)
-        t_i, t_j = np.meshgrid(extended_time_grid, self.time_grid, indexing='ij')
+#        # Create meshgrid for all time pairs (t_i, t_j)
+#        t_i, t_j = np.meshgrid(extended_time_grid, self.time_grid, indexing='ij')
 
-        # Compute tau = t_i - t_j for all pairs
-        tau_matrix = t_i - t_j
+#        # Compute tau = t_i - t_j for all pairs
+#        tau_matrix = t_i - t_j
 
-        # Initialize two-time thermal distribution (extended grid × original grid)
-        f_two_time = np.zeros((N_t_extended, N_t), dtype=complex)
+#        # Initialize two-time thermal distribution (extended grid × original grid)
+#        f_two_time = np.zeros((N_t_extended, N_t), dtype=complex)
 
-        # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
-        mask = (np.abs(tau_matrix) > 1e-6)
+#        # Create mask to avoid division by zero where τ = 0 (diagonal and near-diagonal)
+#        mask = (np.abs(tau_matrix) > 1e-6)
 
-        # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
-        f_two_time[mask] = -1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
+#        # Compute f(τ) = -i T / sinh(π τ T) for all non-zero tau values
+#        f_two_time[mask] = -1j * temperature / np.sinh(np.pi * tau_matrix[mask] * temperature)
 
-        f_two_time_nk = NambuKeldyshTensor(f_two_time, pauli_channel=0)
+#        f_two_time_nk = NambuKeldyshTensor(f_two_time, pauli_channel=0)
 
-        ones_data_left_minus = np.ones((N_t_extended))
+#        ones_data_left_minus = np.ones((N_t_extended))
 
-        #* this is added because we are producing two rows of the tensor, summed until t-dt and t
-        ones_data_left_minus[-1] = 0
-        ones_data_left_minus[-2] = 1/2 
+#        #* this is added because we are producing two rows of the tensor, summed until t-dt and t
+#        ones_data_left_minus[-1] = 0
+#        ones_data_left_minus[-2] = 1/2 
         
-        extension_indices = NambuKeldyshTensor(np.ones((1, N_t)), pauli_channel=0)
+#        extension_indices = NambuKeldyshTensor(np.ones((1, N_t)), pauli_channel=0)
 
-        ones_tensor_left_minus = NambuKeldyshTensor([ones_data_left_minus], pauli_channel=0)
+#        ones_tensor_left_minus = NambuKeldyshTensor([ones_data_left_minus], pauli_channel=0)
         
-        ones_data_left = np.ones((N_t_extended))
-        ones_data_left[-1] = 1/2
-        ones_tensor_left = NambuKeldyshTensor([ones_data_left], pauli_channel=0)
+#        ones_data_left = np.ones((N_t_extended))
+#        ones_data_left[-1] = 1/2
+#        ones_tensor_left = NambuKeldyshTensor([ones_data_left], pauli_channel=0)
 
-        f_sum_left_minus = (ones_tensor_left_minus @ f_two_time_nk) * dt
-        f_sum_left = (ones_tensor_left @ f_two_time_nk) * dt
-        # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')
-        row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
-        col_indices = np.arange(N_t)[np.newaxis, :]  # Shape (1, N_t')
-        ones_data = (row_indices <= col_indices).astype(complex)
-        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
+#        f_sum_left_minus = (ones_tensor_left_minus @ f_two_time_nk) * dt
+#        f_sum_left = (ones_tensor_left @ f_two_time_nk) * dt
+#        # Create mask matrix: ones_data[i, j] = 1 if i <= j (strict inequality for t <= t')
+#        row_indices = np.arange(N_t)[:, np.newaxis]  # Shape (N_t, 1)
+#        col_indices = np.arange(N_t)[np.newaxis, :]  # Shape (1, N_t')
+#        ones_data = (row_indices <= col_indices).astype(complex)
+#        ones_tensor = NambuKeldyshTensor(ones_data, pauli_channel=0)
 
-        f_sum_right_minus = (f_two_time_nk[-2:-1,:] @ ones_tensor - extension_indices * f_two_time_nk[-2:-1,:] * 0.5) * dt
-        f_sum_right = (f_two_time_nk[-1:,:] @ ones_tensor - extension_indices * f_two_time_nk[-1:,:] * 0.5) * dt
+#        f_sum_right_minus = (f_two_time_nk[-2:-1,:] @ ones_tensor - extension_indices * f_two_time_nk[-2:-1,:] * 0.5) * dt
+#        f_sum_right = (f_two_time_nk[-1:,:] @ ones_tensor - extension_indices * f_two_time_nk[-1:,:] * 0.5) * dt
 
-        # swapped left and right since they were wrong way around
-        self.thermal_sum_left = NambuKeldyshTensor(np.append(f_sum_right_minus.data[0,0], f_sum_right.data[0,0], axis=0), pauli_channel=0)
-        self.thermal_sum_right = NambuKeldyshTensor(np.append(f_sum_left_minus.data[0,0], f_sum_left.data[0,0], axis=0), pauli_channel=0)
+#        # swapped left and right since they were wrong way around
+#        self.thermal_sum_left = NambuKeldyshTensor(np.append(f_sum_right_minus.data[0,0], f_sum_right.data[0,0], axis=0), pauli_channel=0)
+#        self.thermal_sum_right = NambuKeldyshTensor(np.append(f_sum_left_minus.data[0,0], f_sum_left.data[0,0], axis=0), pauli_channel=0)
 
     # ========== CN implementation of the operators from continous to discrete space ========== #TODO: check Terms 3 onwards -- as only 1/2 come into equilibrium at A = 0 
     #! fix diagonal term contributions; minus sign is wrong, because it goes to rhs it should be the same -- fixed 1 and 2 for now
@@ -1039,7 +1048,8 @@ class UsadelKeldyshEvolution:
 
         right_matrix = -tau3 * expansion_tensor + self.delta_t * ga.diagonal_time()/2
 
-        thermal_gap_term = (- self.thermal_integral * gap_tensor - gap_tensor * self.thermal_integral)
+        #~ thermal_gap_term = (- self.thermal_integral * gap_tensor - gap_tensor * self.thermal_integral)
+        thermal_gap_term = self.thermal.thermal_gap_term(gap_tensor)
 
         # RHS vector (V_old): mixed convolution terms + gap sources
 
@@ -1052,36 +1062,39 @@ class UsadelKeldyshEvolution:
 
         diag_g_history_list += [(-gr_last_row * self.delta_t, tau0)] 
 
-        rhs_term_1 += -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:]) + gr_last_row.precise_convolution_left(self.thermal_dist , self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right) * tau3)
+        #~ rhs_term_1 += -2 * (tau3 * ga.precise_convolution_right(self.thermal_dist[-1:,:],self.thermal_integral[-1:,:],self.delta_t,self_index=-1, precomputed_sum=self.thermal_sum_left[-1:,:]) + gr_last_row.precise_convolution_left(self.thermal_dist , self.thermal_integral, self.delta_t, other_index=-1, precomputed_sum=self.thermal_sum_right) * tau3)
         
-        # convolution with the midpoint rule
-        thermal_gap_conv = -1  * self.delta_t  *  (gr_last_row @ thermal_gap_term - 0.5 * gr_last_row[-1:,0:1] * thermal_gap_term[0:1,:] - 0.5 * gr_last_row[-1:,-1:] * thermal_gap_term[-1:,:]
-                                                     + thermal_gap_term[-1:,:] @ ga - 0.5 * thermal_gap_term[-1:,0] * ga[0:1,:] - 0.5 * thermal_gap_term[-1:,:] * ga.diagonal_time())
+        #~ # convolution with the midpoint rule
+        #~ thermal_gap_conv = -1  * self.delta_t  *  (gr_last_row @ thermal_gap_term - 0.5 * gr_last_row[-1:,0:1] * thermal_gap_term[0:1,:] - 0.5 * gr_last_row[-1:,-1:] * thermal_gap_term[-1:,:]
+                                                     #~ + thermal_gap_term[-1:,:] @ ga - 0.5 * thermal_gap_term[-1:,0] * ga[0:1,:] - 0.5 * thermal_gap_term[-1:,:] * ga.diagonal_time())
 
-        #* log regularization of F ≈ L = -i/π ln|πTτ/2| (same as check_keldysh_normalization with t1 = last row), RHS sign flipped
-        L_mat = self.log_two_time.data[0, 0]
-        t0, t1 = self.time_grid[0], self.time_grid[-1]
+        #~ #* log regularization of F ≈ L = -i/π ln|πTτ/2| (same as check_keldysh_normalization with t1 = last row), RHS sign flipped
+        #~ L_mat = self.log_two_time.data[0, 0]
+        #~ t0, t1 = self.time_grid[0], self.time_grid[-1]
 
-        def log_antiderivative(u):
-            u_safe = np.where(u == 0, 1.0, u)
-            return np.where(u == 0, 0.0, -1j/np.pi * u * (np.log(np.abs(np.pi * u_safe * self.temperature / 2.0)) - 1.0))
+        #~ def log_antiderivative(u):
+            #~ u_safe = np.where(u == 0, 1.0, u)
+            #~ return np.where(u == 0, 0.0, -1j/np.pi * u * (np.log(np.abs(np.pi * u_safe * self.temperature / 2.0)) - 1.0))
 
-        # gr @ thermal_gap_term: t'' in [t0, t1], singular at t''=t', A* = -2 gr(t,t') Δ(t')
-        trap_weights_gr = np.ones(self.ntpoints)
-        trap_weights_gr[0] -= 0.5
-        trap_weights_gr[-1] -= 0.5
-        log_bracket_gr = (log_antiderivative(t1 - self.time_grid) - log_antiderivative(t0 - self.time_grid)
-                          - self.delta_t * (trap_weights_gr @ L_mat))
-        thermal_gap_conv += 2 * gr_last_row * gap_tensor * NambuKeldyshTensor(log_bracket_gr[np.newaxis, :], pauli_channel=0)
+        #~ # gr @ thermal_gap_term: t'' in [t0, t1], singular at t''=t', A* = -2 gr(t,t') Δ(t')
+        #~ trap_weights_gr = np.ones(self.ntpoints)
+        #~ trap_weights_gr[0] -= 0.5
+        #~ trap_weights_gr[-1] -= 0.5
+        #~ log_bracket_gr = (log_antiderivative(t1 - self.time_grid) - log_antiderivative(t0 - self.time_grid)
+                          #~ - self.delta_t * (trap_weights_gr @ L_mat))
+        #~ thermal_gap_conv += 2 * gr_last_row * gap_tensor * NambuKeldyshTensor(log_bracket_gr[np.newaxis, :], pauli_channel=0)
 
-        # thermal_gap_term @ ga: t'' in [t0, t'], singular at t''=t, A* = -(Δ(t') + Δ(t)) ga(t',t') at the edge t''=t'
-        L_row = L_mat[-1, :]
-        trap_sum_ga = self.delta_t * (np.cumsum(L_row) - 0.5 * L_row[0] - 0.5 * L_row)
-        log_bracket_ga = log_antiderivative(self.time_grid - t1) - log_antiderivative(t0 - t1) - trap_sum_ga
-        gap_sum = gap_tensor + gap_tensor[-1] * expansion_tensor
-        thermal_gap_conv += NambuKeldyshTensor(log_bracket_ga[np.newaxis, :], pauli_channel=0) * (gap_sum * ga.diagonal_time())
+        #~ # thermal_gap_term @ ga: t'' in [t0, t'], singular at t''=t, A* = -(Δ(t') + Δ(t)) ga(t',t') at the edge t''=t'
+        #~ L_row = L_mat[-1, :]
+        #~ trap_sum_ga = self.delta_t * (np.cumsum(L_row) - 0.5 * L_row[0] - 0.5 * L_row)
+        #~ log_bracket_ga = log_antiderivative(self.time_grid - t1) - log_antiderivative(t0 - t1) - trap_sum_ga
+        #~ gap_sum = gap_tensor + gap_tensor[-1] * expansion_tensor
+        #~ thermal_gap_conv += NambuKeldyshTensor(log_bracket_ga[np.newaxis, :], pauli_channel=0) * (gap_sum * ga.diagonal_time())
 
-        rhs_term_1 += thermal_gap_conv
+        #~ rhs_term_1 += thermal_gap_conv
+
+        #* f- and F-parts (with 2*tau3 and log regularization) from ThermalConvolutions; usadel RHS carries the opposite sign
+        rhs_term_1 += -(self.thermal.convolve_thermal_full_left(gr_last_row, gap_tensor, -1) + self.thermal.convolve_thermal_full_right(ga, gap_tensor, -1))
         # new term coming from the commutator
         rhs_term_1 += -(tau3 * thermal_gap_term[-1:,:] - thermal_gap_term[-1:,:] * tau3)  
         
@@ -1462,15 +1475,20 @@ class UsadelKeldyshEvolution:
             for dt_shift in [0,1]:
                 dt_end = None if dt_shift == 0 else -dt_shift
                 # Dynes self-energy terms -- sigma^K g^A + g^R sigma^K 
-                thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
-                - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * tau3)
+                #~ thermal_term += cn_factor * -2j * self.eta * ( tau3 * ga.precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
+                #~ - gr[-1-dt_shift:dt_end,:].precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * tau3)
+                thermal_term += cn_factor * -2j * self.eta * ( tau3 * self.thermal.convolve_thermal_dist_right(ga, time_index=-1-dt_shift).shift(dt_prime_shift, axis=1)
+                - self.thermal.convolve_thermal_dist_left(gr[-1-dt_shift:dt_end,:], time_index=-1-dt_shift).shift(dt_prime_shift, axis=1) * tau3)
                 # gap-f term
-                thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
+                #~ thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
+                thermal_term += cn_factor * -2 * (-1j  * gap_tensor[-1-dt_shift] * tau3 * self.thermal.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) + 1j * tau3 * self.thermal.thermal_dist[-1-dt_shift:dt_end,:].shift(dt_prime_shift, axis=1) * gap_tensor.shift(dt_prime_shift, axis=0))
                 # new term 
                 
 
-        shifted_derivative_term = (- gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor) 
-        new_source_term = -1j * (gap_tensor * gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor * gap_tensor) 
+        #~ shifted_derivative_term = (- gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor) 
+        shifted_derivative_term = (- gap_tensor * self.thermal.thermal_integral - self.thermal.thermal_integral * gap_tensor) 
+        #~ new_source_term = -1j * (gap_tensor * gap_tensor * self.thermal_integral - self.thermal_integral * gap_tensor * gap_tensor) 
+        new_source_term = -1j * (gap_tensor * gap_tensor * self.thermal.thermal_integral - self.thermal.thermal_integral * gap_tensor * gap_tensor) 
         thermal_term += -(1j * tau3 * cn_derivative1_average(shifted_derivative_term) + cn_derivative2_average(shifted_derivative_term) * tau3 * 1j)
         thermal_term += cn_plaquette_average(new_source_term)
 
@@ -1486,7 +1504,8 @@ class UsadelKeldyshEvolution:
                     dt_end = None if dt_shift == 0 else -dt_shift
                     A_past = A_tensor[-1-dt_shift]  # CHANGED: Use -1-dt_shift instead of -2
                     A_tprime = A_tensor.shift(dt_prime_shift, axis=0)
-                    thermal_past = self.thermal_dist[-1-dt_shift:dt_end, :].shift(dt_prime_shift, axis=1)
+                    #~ thermal_past = self.thermal_dist[-1-dt_shift:dt_end, :].shift(dt_prime_shift, axis=1)
+                    thermal_past = self.thermal.thermal_dist[-1-dt_shift:dt_end, :].shift(dt_prime_shift, axis=1)
 
                     A_diff = A_past * expansion_tensor - A_tprime
                     contribution = -2j  * thermal_past * (A_diff * A_diff)
@@ -1502,9 +1521,12 @@ class UsadelKeldyshEvolution:
                 for dt_shift in [0, 1]:  # NEW: Add missing dt_shift loop
                     dt_end = None if dt_shift == 0 else -dt_shift
 
-                    term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1)
-                    term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
-                    term1and2_right = -2j * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3).precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
+                    #~ term1_left = -2j * (A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1)
+                    term1_left = -2j * self.thermal.convolve_thermal_dist_left(A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor, time_index=-1-dt_shift).shift(dt_prime_shift, axis=1)
+                    #~ term2_left = +2j * (gr[-1-dt_shift:dt_end, :] * A_tensor * tau3).precise_convolution_left(self.thermal_dist, self.thermal_integral, self.delta_t, other_index=-1-dt_shift, precomputed_sum=self.thermal_sum_right).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
+                    term2_left = +2j * self.thermal.convolve_thermal_dist_left(gr[-1-dt_shift:dt_end, :] * A_tensor * tau3, time_index=-1-dt_shift).shift(dt_prime_shift, axis=1) * A_tensor.shift(dt_prime_shift, axis=0)
+                    #~ term1and2_right = -2j * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3).precise_convolution_right(self.thermal_dist[-1-dt_shift:dt_end,:],self.thermal_integral[-1-dt_shift:dt_end,:], self.delta_t,self_index=-1-dt_shift, precomputed_sum=self.thermal_sum_left[-1-dt_shift:dt_end,:]).shift(dt_prime_shift, axis=1)
+                    term1and2_right = -2j * self.thermal.convolve_thermal_dist_right(A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3, time_index=-1-dt_shift).shift(dt_prime_shift, axis=1)
 
                     em_thermal_conv1 += cn_factor * (term1_left + term2_left + term1and2_right)
 
@@ -1575,17 +1597,19 @@ class UsadelKeldyshEvolution:
             - _evolve_trial_state(state, gap_history, A_external)
         """
         # Initialize thermal distribution if not already done
-        if not hasattr(self, 'thermal_dist'):
-            self.get_thermal_occupation(self.temperature)
-            self.get_thermal_integral(self.temperature)
-            self.get_log_two_time(self.temperature)
-            # Pre-compute thermal sums over extended grid for precision
-            self.get_thermal_sum(self.temperature)
+        #~ if not hasattr(self, 'thermal_dist'):
+            #~ self.get_thermal_occupation(self.temperature)
+            #~ self.get_thermal_integral(self.temperature)
+            #~ self.get_log_two_time(self.temperature)
+            #~ # Pre-compute thermal sums over extended grid for precision
+            #~ self.get_thermal_sum(self.temperature)
+        #* thermal quantities are created in __init__ as self.thermal (numerical_support.ThermalConvolutions)
 
         #* we compute honest current at the same time, before evolving the state.
-        current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
-                                                   thermal_sum_left=self.thermal_sum_left,
-                                                   thermal_sum_right=self.thermal_sum_right)
+        #~ current_new = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
+                                                   #~ thermal_sum_left=self.thermal_sum_left,
+                                                   #~ thermal_sum_right=self.thermal_sum_right)
+        current_new = state.get_current_at_time_t(A_external, self.thermal)
 
         # Step 1: guess Δ(t) by linear extrapolation, old_gap is on the old grid (last entry is Δ(t-dt))
         old_gap = state.get_gap_history()
@@ -1618,9 +1642,10 @@ class UsadelKeldyshEvolution:
 
         # Step 2.5: Update occupation function if tracking is enabled
         if state.occupation_function is not None:
-            state.update_state_occupation(self.thermal_dist, self.thermal_integral,
-                                           thermal_sum_left=self.thermal_sum_left,
-                                           thermal_sum_right=self.thermal_sum_right)
+            #~ state.update_state_occupation(self.thermal_dist, self.thermal_integral,
+                                           #~ thermal_sum_left=self.thermal_sum_left,
+                                           #~ thermal_sum_right=self.thermal_sum_right)
+            state.update_state_occupation(self.thermal)
 
         # Step 3: Extract observables
         gap_history = state.get_gap_history()
@@ -1679,12 +1704,14 @@ class UsadelKeldyshEvolution:
             j_dp_prime = circuit_params['J_DP_prime']
             r_contact = circuit_params['R_c'] if 'R_c' in circuit_params else 0.0
 
-            kernel_prefactor = state.get_current_kernel_prefactor(self.thermal_dist)
+            #~ kernel_prefactor = state.get_current_kernel_prefactor(self.thermal_dist)
+            kernel_prefactor = state.get_current_kernel_prefactor(self.thermal)
             A_external_newest = np.append(old_vector_potential[1:], 0.0)
 
-            current_newest = state.get_current_at_time_t(A_external_newest, self.thermal_dist, self.thermal_integral,
-                                                   thermal_sum_left=self.thermal_sum_left,
-                                                   thermal_sum_right=self.thermal_sum_right, include_derivative = False)
+            #~ current_newest = state.get_current_at_time_t(A_external_newest, self.thermal_dist, self.thermal_integral,
+                                                   #~ thermal_sum_left=self.thermal_sum_left,
+                                                   #~ thermal_sum_right=self.thermal_sum_right, include_derivative = False)
+            current_newest = state.get_current_at_time_t(A_external_newest, self.thermal, include_derivative = False)
 
             # Get current I_in values at current and next timesteps (for Crank-Nicolson midpoint)
             i_in_current = driving_field_current if driving_field_current is not None else 0.0
@@ -1759,12 +1786,13 @@ class UsadelKeldyshEvolution:
             - update_vector_potential(A_external, driving_field, state, circuit_params, ...)
             - _evolve_state_by_one_timestep(state, A_external)
         """
-        if not hasattr(self, 'thermal_dist'):
-            self.get_thermal_occupation(self.temperature)
-            self.get_thermal_integral(self.temperature)
-            self.get_log_two_time(self.temperature)
-            # Pre-compute thermal sums over extended grid for precision
-            self.get_thermal_sum(self.temperature)
+        #~ if not hasattr(self, 'thermal_dist'):
+            #~ self.get_thermal_occupation(self.temperature)
+            #~ self.get_thermal_integral(self.temperature)
+            #~ self.get_log_two_time(self.temperature)
+            #~ # Pre-compute thermal sums over extended grid for precision
+            #~ self.get_thermal_sum(self.temperature)
+        #* thermal quantities are created in __init__ as self.thermal (numerical_support.ThermalConvolutions)
 
         # Initialize arrays to track observables
         gaps = []
@@ -1820,9 +1848,10 @@ class UsadelKeldyshEvolution:
                 # Evolve state FIRST to get current and kernel
                 # Compute kernel prefactor from evolved state
 
-                current_no_gradient = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
-                                                thermal_sum_left=self.thermal_sum_left,
-                                                thermal_sum_right=self.thermal_sum_right,include_derivative = False)
+                #~ current_no_gradient = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
+                                                #~ thermal_sum_left=self.thermal_sum_left,
+                                                #~ thermal_sum_right=self.thermal_sum_right,include_derivative = False)
+                current_no_gradient = state.get_current_at_time_t(A_external, self.thermal, include_derivative = False)
 
                 # Get driving field values (I_in at current and next timesteps)
                 gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)

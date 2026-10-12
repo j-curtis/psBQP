@@ -29,14 +29,16 @@ PAULI_NAMES = [r'$\tau_0$', r'$\tau_1$', r'$\tau_2$', r'$\tau_3$']
 def max_errors(state, evolution):
     """Maximum |error| per Pauli channel of the FDT, g^K constraint and g^R normalization checks (last row)."""
     _, gr_totals = state.check_gr_normalization(t1_idx=-1)
-    _, gk_totals, _ = state.check_keldysh_normalization(
-        -1, evolution.thermal_dist, evolution.thermal_integral,
-        thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time)
-    _, _, fdt_error_row, _ = state.check_fdt(
-        evolution.thermal_dist, evolution.thermal_integral, time_index=-1,
-        thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right,
-        log_two_time=evolution.log_two_time, tmax=evolution.tmax)
+    #~ _, gk_totals, _ = state.check_keldysh_normalization(
+    #~     -1, evolution.thermal_dist, evolution.thermal_integral,
+    #~     thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right,
+    #~     log_two_time=evolution.log_two_time)
+    #~ _, _, fdt_error_row, _ = state.check_fdt(
+    #~     evolution.thermal_dist, evolution.thermal_integral, time_index=-1,
+    #~     thermal_sum_left=evolution.thermal_sum_left, thermal_sum_right=evolution.thermal_sum_right,
+    #~     log_two_time=evolution.log_two_time, tmax=evolution.tmax)
+    _, gk_totals, _ = state.check_keldysh_normalization(-1, evolution.thermal)
+    _, _, fdt_error_row, _ = state.check_fdt(evolution.thermal, time_index=-1)
 
     fdt_totals = np.array([(fdt_error_row.trace(p) / 2)[0, :] for p in range(4)])
     return {'fdt': np.abs(fdt_totals).max(axis=1),

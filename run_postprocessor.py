@@ -51,6 +51,37 @@ def load_job_data(timestamp, job_index, running_machine='laptop'):
     return input_kwargs, save_data
 
 
+def compute_state_rows(final_state, thermal, time_duration=None):
+    """
+    Rows at t = -1 versus t' of a final state: g^R, g^K and the g^R normalization, Keldysh normalization and FDT error rows.
+
+    Args:
+        final_state: StateObject
+        thermal: ThermalConvolutions object (evolution.thermal) for the temperature of the run
+        time_duration: T_max, only used if the state has no time grid
+
+    Returns:
+        dict with 't_prime' (N_t,) and 'gr_row', 'gk_row', 'gr_normalization_row', 'gk_normalization_row', 'fdt_row' ((4, N_t) complex,
+        Pauli components 0..3), same content as the 'rows' entries saved by the 'static' postprocessing
+    """
+    def pauli_row(tensor_row):
+        return np.array([tensor_row.trace(p) / 2 for p in range(4)]).reshape(4, -1)
+
+    n_t = final_state.gr.data.shape[2]
+    t_prime = final_state.time_grid if final_state.time_grid is not None else np.linspace(-time_duration, 0, n_t)
+
+    _, gr_totals = final_state.check_gr_normalization(t1_idx=-1)
+    _, gk_totals, _ = final_state.check_keldysh_normalization(-1, thermal)
+    _, _, error_row, _ = final_state.check_fdt(thermal, time_index=-1)
+
+    return {'t_prime': np.array(t_prime),
+            'gr_row': pauli_row(final_state.gr[-1:, :]),
+            'gk_row': pauli_row(final_state.gk[-1:, :]),
+            'gr_normalization_row': np.array(gr_totals),
+            'gk_normalization_row': np.array(gk_totals),
+            'fdt_row': pauli_row(error_row)}
+
+
 def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
     """
     Postprocess Keldysh simulation data and extract observables.
@@ -79,6 +110,10 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             - 'incoming_current_amplitudes': Array of I_in_max values
             - 'transmitted_current_amplitudes': Array of J_max values
             - 'transmitivity': Array of transmitivity values (J_max/I_in_max)
+
+    Saved data format for 'static': system/field/grid parameters per job, averaged gap/current/vector potential,
+    (N_jobs, 4) gr/gk normalization and FDT errors at (t=-1,t'=-1), and 'rows': list (one per job, None on failure) of dicts with
+    't_prime', 'gr_row', 'gk_row', 'gr_normalization_row', 'gk_normalization_row', 'fdt_row' ((4, N_t) complex) at t = -1.
     """
     # Detect which machine we're running on
     if 'SLURM_JOB_ID' in os.environ:
@@ -336,6 +371,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         gk_normalization_errors_list = []  # List of arrays shape (4,)
         fdt_errors_list = []  # List of arrays shape (4,)
 
+        #* rows at t = -1 versus t' (Pauli components, complex) for every job
+        rows_list = []
+
         # Loop over all jobs
         for job_idx in job_indices:
             # Load data
@@ -407,19 +445,38 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
                             error_pauli = error_pauli[0, :]  # shape (N_t,)
                         fdt_errors_pauli[pauli_idx] = np.abs(error_pauli[-1])  # Value at last element
 
+                    #* rows at t = -1: g^R, g^K and the three error rows, Pauli components 0..3 as (4, N_t) complex
+                    #* (built before anything is appended so a failure leaves all lists consistent)
+                    def pauli_row(tensor_row):
+                        components = np.array([tensor_row.trace(p) / 2 for p in range(4)])
+                        return components.reshape(4, -1)
+
+                    t_prime = final_state.time_grid if final_state.time_grid is not None else np.linspace(-grid_parameters['time_duration'], 0, final_state.gr.data.shape[2])
+                    row_entry = {
+                        't_prime': np.array(t_prime),
+                        'gr_row': pauli_row(final_state.gr[-1:, :]),
+                        'gk_row': pauli_row(final_state.gk[-1:, :]),
+                        'gr_normalization_row': np.array(gr_totals),
+                        'gk_normalization_row': np.array(gk_totals),
+                        'fdt_row': pauli_row(error_row)
+                    }
+
                     gr_normalization_errors_list.append(gr_errors_last)
                     gk_normalization_errors_list.append(gk_errors_last)
                     fdt_errors_list.append(fdt_errors_pauli)
+                    rows_list.append(row_entry)
                 else:
                     # If state not available, store NaN
                     gr_normalization_errors_list.append(np.full(4, np.nan))
                     gk_normalization_errors_list.append(np.full(4, np.nan))
                     fdt_errors_list.append(np.full(4, np.nan))
+                    rows_list.append(None)
             except Exception as e:
                 print(f"Warning: Could not compute consistency checks for job {job_idx}: {e}")
                 gr_normalization_errors_list.append(np.full(4, np.nan))
                 gk_normalization_errors_list.append(np.full(4, np.nan))
                 fdt_errors_list.append(np.full(4, np.nan))
+                rows_list.append(None)
 
         # Convert to arrays
         averaged_gaps = np.array(averaged_gaps)
@@ -439,7 +496,8 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             'averaged_vector_potentials': averaged_vector_potentials,
             'gr_normalization_errors': gr_normalization_errors,
             'gk_normalization_errors': gk_normalization_errors,
-            'fdt_errors': fdt_errors
+            'fdt_errors': fdt_errors,
+            'rows': rows_list
         }
 
         # Save results

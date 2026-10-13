@@ -196,196 +196,195 @@ class NambuKeldyshTensor:
 
         return NambuKeldyshTensor(result_data)
 
-    def precise_convolution_left(self, other, other_integral, dt, other_index=-1, precomputed_sum=None,gap_tensor = None):
-        """ 
-        Compute regularized left convolution: self @ other (regularized).
+    """
+        def precise_convolution_left(self, other, other_integral, dt, other_index=-1, precomputed_sum=None,gap_tensor = None):
+            Compute regularized left convolution: self @ other (regularized).
 
-        The regularized matrix (other) is on the right side.
-        Regularization suppresses Gibbs oscillations from other.
+            The regularized matrix (other) is on the right side.
+            Regularization suppresses Gibbs oscillations from other.
 
-        the same boundary treatment, so the cancellation in regularization works correctly.
+            the same boundary treatment, so the cancellation in regularization works correctly.
 
-        Formula:
-            result = dt * (self @ other)
-                   - dt * (self * (ones @ other))
-                   + (self * other_integral)
+            Formula:
+                result = dt * (self @ other)
+                    - dt * (self * (ones @ other))
+                    + (self * other_integral)
 
-        When self is a row (shape 2,2,1,N_t), other_integral_row = other_integral[other_index:other_index+1,:]
-        is used for the analytic term, while full other is used for convolution.
+            When self is a row (shape 2,2,1,N_t), other_integral_row = other_integral[other_index:other_index+1,:]
+            is used for the analytic term, while full other is used for convolution.
 
-        Args:
-            other: NambuKeldyshTensor - function to convolve with (regularized)
-            other_integral: NambuKeldyshTensor - integral of other
-            dt: float - time step for discretization
-            other_index: int - row index to extract from other_integral when self is a row (default -1)
-            precomputed_sum: NambuKeldyshTensor - optional pre-computed cumulative sum over extended grid
-                            Shape (2,2,N_t). If provided, replaces (ones @ other) computation.
+            Args:
+                other: NambuKeldyshTensor - function to convolve with (regularized)
+                other_integral: NambuKeldyshTensor - integral of other
+                dt: float - time step for discretization
+                other_index: int - row index to extract from other_integral when self is a row (default -1)
+                precomputed_sum: NambuKeldyshTensor - optional pre-computed cumulative sum over extended grid
+                                Shape (2,2,N_t). If provided, replaces (ones @ other) computation.
 
-        Returns:
-            NambuKeldyshTensor - regularized convolution result
-        """
-        # ========== Input shape validation for midpoint rule ==========
-        # Check that self is a row: (2,2,1,N_t)
-        if self.data.ndim != 4 or self.data.shape[:3] != (2, 2, 1):
-            raise ValueError(f"precise_convolution_left requires self to have shape (2,2,1,N_t) for proper midpoint rule.\n"
-                f"Got shape {self.data.shape}. The third dimension must be 1 (row tensor).")
+            Returns:
+                NambuKeldyshTensor - regularized convolution result
+            # ========== Input shape validation for midpoint rule ==========
+            # Check that self is a row: (2,2,1,N_t)
+            if self.data.ndim != 4 or self.data.shape[:3] != (2, 2, 1):
+                raise ValueError(f"precise_convolution_left requires self to have shape (2,2,1,N_t) for proper midpoint rule.\n"
+                    f"Got shape {self.data.shape}. The third dimension must be 1 (row tensor).")
 
-        # Check that other is a full matrix: (2,2,N_t,N_t')
-        if other.data.ndim != 4 or other.data.shape[:2] != (2, 2):
-            raise ValueError(f"precise_convolution_left requires other to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
-                f"Got shape {other.data.shape}.")
+            # Check that other is a full matrix: (2,2,N_t,N_t')
+            if other.data.ndim != 4 or other.data.shape[:2] != (2, 2):
+                raise ValueError(f"precise_convolution_left requires other to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
+                    f"Got shape {other.data.shape}.")
 
-        # Check contraction dimension compatibility: self.shape[-1] == other.shape[2]
-        N_t_self = self.data.shape[3]
-        N_t_other = other.data.shape[2]
-        if N_t_self != N_t_other:
-            raise ValueError(
-                f"Contraction dimension mismatch: self has N_t={N_t_self} but other has N_t={N_t_other}.\n"
-                f"Expected shapes: self=(2,2,1,{N_t_other}), other=(2,2,{N_t_other},N_t').\n"
-                f"Got: self={self.data.shape}, other={other.data.shape}")
-
-
-        N_t = other_integral.data.shape[2]
-        positive_index = other_index % N_t
-        positive_index_precomp = other_index % precomputed_sum.data.shape[2]
-
-        #* self is the row at time t_k (k = positive_index); causality restricts t'' to [t_0, t_k]
-        k = positive_index
-
-        #Applying midpoint rule: subtract 1/2 weight from BOTH endpoints, the upper one being the causal edge t''=t_k
-        first_endpoint_std = 1*self[:,0:1] * other[0:1,:]
-        last_endpoint_std = self[:,k:k+1] * other[k:k+1,:]
-        result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
-
-        precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
-        other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
-        ones_tensor = NambuKeldyshTensor(np.ones((1,N_t_self)), pauli_channel=0)
-
-        #* smooth factor at the singular point t''=t'; for t' > t_k the singularity lies beyond the edge, so factor at t''=t_k
-        self_for_reg_data = self.data.copy()
-        self_for_reg_data[:, :, :, k+1:] = self.data[:, :, :, k:k+1]
-        self_for_reg = NambuKeldyshTensor(self_for_reg_data)
-
-        # Old gap regularization code, its commented out since best regularization comes differently
-        #if gap_tensor is not None:
-        #    self_for_reg = -(gap_tensor[-1] * ones_tensor +  ones_tensor * gap_tensor)/2
-
-        result_fact = self_for_reg * precomputed_sum_row
-
-        # Analytic term (using integral)
-        #result_anal = self[-1:,-1:] * other_integral_for_reg
-        result_anal = self_for_reg * other_integral_for_reg #* changed on 01/09/26
-
-        # Gradient correction for f(0) = 0
-        # The missing diagonal contribution is approximately dgr/dt * dt
-        dgr_dt = self.gradient(dt, axis=1)  # Gradient along t'' direction
-        gradient_correction = dgr_dt[-1:, :] * dt * -1j/np.pi # the extra factor is the limit of thermal distribution going to zero 
-
-        #* singular point inside the range: weight 1, at the edge t'=t_k: 1/2, beyond the edge: 0
-        midpoint_scaling = np.ones((1,N_t_self))
-        midpoint_scaling[0,k] = 0.0
-        midpoint_scaling[0,k+1:] = 0.0
-        scaling_tensor = NambuKeldyshTensor(midpoint_scaling, pauli_channel=0)
-
-        return (result_std + (- result_fact + result_anal) + scaling_tensor * gradient_correction ) 
+            # Check contraction dimension compatibility: self.shape[-1] == other.shape[2]
+            N_t_self = self.data.shape[3]
+            N_t_other = other.data.shape[2]
+            if N_t_self != N_t_other:
+                raise ValueError(
+                    f"Contraction dimension mismatch: self has N_t={N_t_self} but other has N_t={N_t_other}.\n"
+                    f"Expected shapes: self=(2,2,1,{N_t_other}), other=(2,2,{N_t_other},N_t').\n"
+                    f"Got: self={self.data.shape}, other={other.data.shape}")
 
 
-    def precise_convolution_right(self, other, other_integral, dt, self_index=-1, precomputed_sum=None,gap_tensor = None):
-        """
-        Compute regularized right convolution: other @ self (regularized).
+            N_t = other_integral.data.shape[2]
+            positive_index = other_index % N_t
+            positive_index_precomp = other_index % precomputed_sum.data.shape[2]
 
-        The regularized matrix (other) is on the left side.
-        Regularization suppresses Gibbs oscillations from other.
+            #* self is the row at time t_k (k = positive_index); causality restricts t'' to [t_0, t_k]
+            k = positive_index
 
-        NOTE: Trapezoidal boundary weighting (0.5 at endpoints) is automatically
-        handled by the @ operator. Both (other @ self) and (other @ ones) receive
-        the same boundary treatment, so the cancellation in regularization works correctly.
+            #Applying midpoint rule: subtract 1/2 weight from BOTH endpoints, the upper one being the causal edge t''=t_k
+            first_endpoint_std = 1*self[:,0:1] * other[0:1,:]
+            last_endpoint_std = self[:,k:k+1] * other[k:k+1,:]
+            result_std = (self @ other) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
 
-        Formula:
-            result = dt * (other @ self)
-                   - dt * ((other @ ones) * self_row)
-                   + (other_integral * self_row)
+            precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
+            other_integral_for_reg = other_integral[positive_index:positive_index+1, :]
+            #~ ones_tensor = NambuKeldyshTensor(np.ones((1,N_t_self)), pauli_channel=0)
+            ones_tensor = get_expansion_tensor((1, N_t_self))
 
-        When other is a row (shape 2,2,1,N_t), self_row = self[0:1,:] is used
-        for factored and analytic terms, while full self is used for convolution.
+            #* smooth factor at the singular point t''=t'; for t' > t_k the singularity lies beyond the edge, so factor at t''=t_k
+            self_for_reg_data = self.data.copy()
+            self_for_reg_data[:, :, :, k+1:] = self.data[:, :, :, k:k+1]
+            self_for_reg = NambuKeldyshTensor(self_for_reg_data)
 
-        Args:
-            other: NambuKeldyshTensor - function to convolve with (regularized)
-            other_integral: NambuKeldyshTensor - integral of other
-            dt: float - time step for discretization
-            self_index: int - index for extracting diagonal (default -1)
-            precomputed_sum: NambuKeldyshTensor - optional pre-computed cumulative sum over extended grid
-                            Shape (2,2,1,N_t'). If provided, replaces (other @ ones) computation.
+            # Old gap regularization code, its commented out since best regularization comes differently
+            #if gap_tensor is not None:
+            #    self_for_reg = -(gap_tensor[-1] * ones_tensor +  ones_tensor * gap_tensor)/2
 
-        Returns:
-            NambuKeldyshTensor - regularized convolution result
-        """
-        # ========== Input shape validation for midpoint rule ==========
-        # Check that other is a row: (2,2,1,N_t)
-        if other.data.ndim != 4 or other.data.shape[:3] != (2, 2, 1):
-            raise ValueError(f"precise_convolution_right requires other to have shape (2,2,1,N_t) for proper midpoint rule.\n"
-                f"Got shape {other.data.shape}. The third dimension must be 1 (row tensor).")
+            result_fact = self_for_reg * precomputed_sum_row
 
-        # Check that self is a full matrix: (2,2,N_t,N_t')
-        if self.data.ndim != 4 or self.data.shape[:2] != (2, 2):
-            raise ValueError(f"precise_convolution_right requires self to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
-                f"Got shape {self.data.shape}.")
+            # Analytic term (using integral)
+            #result_anal = self[-1:,-1:] * other_integral_for_reg
+            result_anal = self_for_reg * other_integral_for_reg #* changed on 01/09/26
 
-        # Check contraction dimension compatibility: other.shape[-1] == self.shape[2]
-        N_t_other = other.data.shape[3]
-        N_t_self = self.data.shape[2]
-        if N_t_other != N_t_self:
-            raise ValueError(f"Contraction dimension mismatch: other has N_t={N_t_other} but self has N_t={N_t_self}.\n"
-                f"Expected shapes: other=(2,2,1,{N_t_self}), self=(2,2,{N_t_self},N_t').\n"
-                f"Got: other={other.data.shape}, self={self.data.shape}")
+            # Gradient correction for f(0) = 0
+            # The missing diagonal contribution is approximately dgr/dt * dt
+            dgr_dt = self.gradient(dt, axis=1)  # Gradient along t'' direction
+            gradient_correction = dgr_dt[-1:, :] * dt * -1j/np.pi # the extra factor is the limit of thermal distribution going to zero 
 
-        # Create ones tensor as a 2D matrix (identity in Nambu space)
-        # Shape: (2, 2, N_t, N_t') where ones_data[t, t'] = 1 if t < t', else 0
-        # This enforces causality: integration only up to each t'
-        # pauli_channel=0 automatically creates the (2,2) identity structure
-        N_t = other.data.shape[-1]
-        N_tprime = self.data.shape[-1]
+            #* singular point inside the range: weight 1, at the edge t'=t_k: 1/2, beyond the edge: 0
+            midpoint_scaling = np.ones((1,N_t_self))
+            midpoint_scaling[0,k] = 0.0
+            midpoint_scaling[0,k+1:] = 0.0
+            scaling_tensor = NambuKeldyshTensor(midpoint_scaling, pauli_channel=0)
 
-        is_other_row = (other.data.shape[2] == 1)
+            return (result_std + (- result_fact + result_anal) + scaling_tensor * gradient_correction ) 
 
-        # Standard convolution (always uses full self)
-        positive_index = self_index % N_t
-        first_endpoint_std = other[:,0:1] * self[0:1,:]
-        last_endpoint_std = other[:,:] * self.diagonal_time()
-        result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
-        # For factored and analytic terms: use row of self if other is a row
+        def precise_convolution_right(self, other, other_integral, dt, self_index=-1, precomputed_sum=None,gap_tensor = None):
+            Compute regularized right convolution: other @ self (regularized).
 
-        #* other is the row at time t_k (k = positive_index), singular at t''=t_k; ga(t'',t') restricts t'' to [t_0, t']
-        #* smooth factor at the edge t''=t' for t' <= t_k, at the singular point t''=t_k for t' > t_k (singularity inside the range)
-        k = positive_index
-        self_for_reg_data = self.diagonal_time().data.copy()
-        self_for_reg_data[:, :, k+1:] = self.data[:, :, k, k+1:]
-        self_for_reg = NambuKeldyshTensor(self_for_reg_data)
-        ones_tensor = NambuKeldyshTensor(np.ones((1,N_t)), pauli_channel=0)
-        # Old gap regularization
-        #if gap_tensor is not None:
-        #    self_for_reg = -(gap_tensor[positive_index] * ones_tensor + ones_tensor * gap_tensor)/2
-    
-        positive_index_precomp = self_index % precomputed_sum.data.shape[2]
+            The regularized matrix (other) is on the left side.
+            Regularization suppresses Gibbs oscillations from other.
+
+            NOTE: Trapezoidal boundary weighting (0.5 at endpoints) is automatically
+            handled by the @ operator. Both (other @ self) and (other @ ones) receive
+            the same boundary treatment, so the cancellation in regularization works correctly.
+
+            Formula:
+                result = dt * (other @ self)
+                    - dt * ((other @ ones) * self_row)
+                    + (other_integral * self_row)
+
+            When other is a row (shape 2,2,1,N_t), self_row = self[0:1,:] is used
+            for factored and analytic terms, while full self is used for convolution.
+
+            Args:
+                other: NambuKeldyshTensor - function to convolve with (regularized)
+                other_integral: NambuKeldyshTensor - integral of other
+                dt: float - time step for discretization
+                self_index: int - index for extracting diagonal (default -1)
+                precomputed_sum: NambuKeldyshTensor - optional pre-computed cumulative sum over extended grid
+                                Shape (2,2,1,N_t'). If provided, replaces (other @ ones) computation.
+
+            Returns:
+                NambuKeldyshTensor - regularized convolution result
+            # ========== Input shape validation for midpoint rule ==========
+            # Check that other is a row: (2,2,1,N_t)
+            if other.data.ndim != 4 or other.data.shape[:3] != (2, 2, 1):
+                raise ValueError(f"precise_convolution_right requires other to have shape (2,2,1,N_t) for proper midpoint rule.\n"
+                    f"Got shape {other.data.shape}. The third dimension must be 1 (row tensor).")
+
+            # Check that self is a full matrix: (2,2,N_t,N_t')
+            if self.data.ndim != 4 or self.data.shape[:2] != (2, 2):
+                raise ValueError(f"precise_convolution_right requires self to have shape (2,2,N_t,N_t') for proper midpoint rule.\n"
+                    f"Got shape {self.data.shape}.")
+
+            # Check contraction dimension compatibility: other.shape[-1] == self.shape[2]
+            N_t_other = other.data.shape[3]
+            N_t_self = self.data.shape[2]
+            if N_t_other != N_t_self:
+                raise ValueError(f"Contraction dimension mismatch: other has N_t={N_t_other} but self has N_t={N_t_self}.\n"
+                    f"Expected shapes: other=(2,2,1,{N_t_self}), self=(2,2,{N_t_self},N_t').\n"
+                    f"Got: other={other.data.shape}, self={self.data.shape}")
+
+            # Create ones tensor as a 2D matrix (identity in Nambu space)
+            # Shape: (2, 2, N_t, N_t') where ones_data[t, t'] = 1 if t < t', else 0
+            # This enforces causality: integration only up to each t'
+            # pauli_channel=0 automatically creates the (2,2) identity structure
+            N_t = other.data.shape[-1]
+            N_tprime = self.data.shape[-1]
+
+            is_other_row = (other.data.shape[2] == 1)
+
+            # Standard convolution (always uses full self)
+            positive_index = self_index % N_t
+            first_endpoint_std = other[:,0:1] * self[0:1,:]
+            last_endpoint_std = other[:,:] * self.diagonal_time()
+            result_std = (other @ self) * dt - 0.5 * dt * first_endpoint_std - 0.5 * dt * last_endpoint_std
+            # For factored and analytic terms: use row of self if other is a row
+
+            #* other is the row at time t_k (k = positive_index), singular at t''=t_k; ga(t'',t') restricts t'' to [t_0, t']
+            #* smooth factor at the edge t''=t' for t' <= t_k, at the singular point t''=t_k for t' > t_k (singularity inside the range)
+            k = positive_index
+            self_for_reg_data = self.diagonal_time().data.copy()
+            self_for_reg_data[:, :, k+1:] = self.data[:, :, k, k+1:]
+            self_for_reg = NambuKeldyshTensor(self_for_reg_data)
+            #~ ones_tensor = NambuKeldyshTensor(np.ones((1,N_t)), pauli_channel=0)
+            ones_tensor = get_expansion_tensor((1, N_t))
+            # Old gap regularization
+            #if gap_tensor is not None:
+            #    self_for_reg = -(gap_tensor[positive_index] * ones_tensor + ones_tensor * gap_tensor)/2
         
-        precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
-        result_fact = precomputed_sum_row * self_for_reg
+            positive_index_precomp = self_index % precomputed_sum.data.shape[2]
+            
+            precomputed_sum_row = precomputed_sum[positive_index_precomp:positive_index_precomp+1, :]
+            result_fact = precomputed_sum_row * self_for_reg
 
-        # Analytic term (using integral)
-        result_anal = (- other_integral) * self_for_reg
+            # Analytic term (using integral)
+            result_anal = (- other_integral) * self_for_reg
 
-        # Gradient correction for f(0) = 0
-        # The missing diagonal contribution is approximately dga/dt * dt
-        dga_dt = self.gradient(dt, axis=0)  # Gradient along t'' direction (first time index)
-        gradient_correction = dga_dt[k:k+1,:] * dt * +1j/np.pi
+            # Gradient correction for f(0) = 0
+            # The missing diagonal contribution is approximately dga/dt * dt
+            dga_dt = self.gradient(dt, axis=0)  # Gradient along t'' direction (first time index)
+            gradient_correction = dga_dt[k:k+1,:] * dt * +1j/np.pi
 
-        #* singular point beyond the edge (t' < t_k): 0, at the edge t'=t_k: 1/2, inside the range (t' > t_k): 1
-        filter_tensor = np.zeros((1,N_t))
-        filter_tensor[0,k] = 0.0
-        filter_tensor[0,k+1:] = 1.0
-        filter_tensor = NambuKeldyshTensor(filter_tensor, pauli_channel=0)
+            #* singular point beyond the edge (t' < t_k): 0, at the edge t'=t_k: 1/2, inside the range (t' > t_k): 1
+            filter_tensor = np.zeros((1,N_t))
+            filter_tensor[0,k] = 0.0
+            filter_tensor[0,k+1:] = 1.0
+            filter_tensor = NambuKeldyshTensor(filter_tensor, pauli_channel=0)
 
-        return (result_std + (- result_fact + result_anal) + filter_tensor * gradient_correction)
+            return (result_std + (- result_fact + result_anal) + filter_tensor * gradient_correction)
+    """
 
     def _check_binary_shape_compatibility(self, other):
         """
@@ -873,7 +872,6 @@ class NambuKeldyshTensor:
 
         # Update only the specified diagonal position
         self.data[:, :, time_index, time_index] = diag_data
-
 
 def get_pauli_matrix(index = None) -> np.array:
     """A function returning the Pauli matrices or the whole list (if index is none)

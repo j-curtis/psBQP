@@ -17,7 +17,7 @@ class ThermalConvolutions:
         self.thermal_integral = self._build_thermal_integral()
         self.log_two_time = self._build_log_two_time()
         self.thermal_sum_left, self.thermal_sum_right = self._build_thermal_sums()
-
+ 
     # ========== Grid and thermal quantities ==========
 
     def _generate_time_grid(self):
@@ -130,9 +130,11 @@ class ThermalConvolutions:
         result_std = (g_row @ f) * dt - 0.5 * dt * first_endpoint - 0.5 * dt * last_endpoint
 
         #* smooth factor at the singular point t''=t'; for t' > t_k the singularity lies beyond the edge, so factor at t''=t_k
+        #! need to understand this point better
         g_for_reg_data = g_row.data.copy()
         g_for_reg_data[:, :, :, k + 1:] = g_row.data[:, :, :, k:k + 1]
         g_for_reg = NambuKeldyshTensor(g_for_reg_data)
+        #g_for_reg = g_row
 
         result_fact = g_for_reg * self.thermal_sum_right[k_sum:k_sum + 1, :]
         result_anal = g_for_reg * F[k:k + 1, :]
@@ -140,10 +142,10 @@ class ThermalConvolutions:
         dg_dt = g_row.gradient(dt, axis=1)
         gradient_correction = dg_dt[-1:, :] * dt * -1j / np.pi
 
-        #* singular point inside the range: weight 1, at the edge t'=t_k and beyond: 0
-        midpoint_scaling = np.ones((1, N_t))
-        midpoint_scaling[0, k:] = 0.0
-        scaling_tensor = NambuKeldyshTensor(midpoint_scaling, pauli_channel=0)
+        #* singular point inside the range: weight 1, at the edge t'=t_k and beyond: 0 
+        edge_scaling = np.ones((1, N_t))
+        edge_scaling[0, k:] = 0.0
+        scaling_tensor = NambuKeldyshTensor(edge_scaling, pauli_channel=0)
 
         return result_std + (-result_fact + result_anal) + scaling_tensor * gradient_correction
 
@@ -161,9 +163,11 @@ class ThermalConvolutions:
         result_std = (f_row @ g) * dt - 0.5 * dt * first_endpoint - 0.5 * dt * last_endpoint
 
         #* smooth factor at the edge t''=t' for t' <= t_k, at the singular point t''=t_k for t' > t_k
+        #! Understand this better
         g_for_reg_data = g_diagonal.data.copy()
         g_for_reg_data[:, :, k + 1:] = g.data[:, :, k, k + 1:]
         g_for_reg = NambuKeldyshTensor(g_for_reg_data)
+        #g_for_reg = g_diagonal 
 
         result_fact = self.thermal_sum_left[k_sum:k_sum + 1, :] * g_for_reg
         result_anal = (-F_row) * g_for_reg
@@ -194,8 +198,7 @@ class ThermalConvolutions:
         trapezoid_weights = np.ones(k + 1)
         trapezoid_weights[0] -= 0.5
         trapezoid_weights[-1] -= 0.5
-        log_bracket = (self._log_antiderivative(t1 - self.time_grid) - self._log_antiderivative(t0 - self.time_grid)
-                       - dt * (trapezoid_weights @ L_mat[:k + 1, :]))
+        log_bracket = (self._log_antiderivative(t1 - self.time_grid) - self._log_antiderivative(t0 - self.time_grid) - dt * (trapezoid_weights @ L_mat[:k + 1, :]))
         log_bracket_tensor = NambuKeldyshTensor(log_bracket[np.newaxis, :], pauli_channel=0)
 
         return result + (-2 * g_row * gap_tensor * log_bracket_tensor)
@@ -214,8 +217,7 @@ class ThermalConvolutions:
         L_row = self.log_two_time.data[0, 0][k, :]
         t0, t1 = self.time_grid[0], self.time_grid[k]
         trapezoid_sum = dt * (np.cumsum(L_row) - 0.5 * L_row[0] - 0.5 * L_row)
-        log_bracket = (self._log_antiderivative(self.time_grid - t1) - self._log_antiderivative(t0 - t1)
-                       - trapezoid_sum)
+        log_bracket = (self._log_antiderivative(self.time_grid - t1) - self._log_antiderivative(t0 - t1) - trapezoid_sum)
         log_bracket_tensor = NambuKeldyshTensor(log_bracket[np.newaxis, :], pauli_channel=0)
         gap_sum = gap_tensor + gap_tensor[k] * self.expansion_tensor
 
@@ -224,13 +226,10 @@ class ThermalConvolutions:
     # ========== Sum of the f and F convolutions ==========
 
     def convolve_thermal_full_left(self, g_row, gap_tensor, time_index=-1):
-        return (self.convolve_thermal_dist_left(g_row, time_index) * self.tau3 * 2
-                + self.convolve_thermal_int_left(g_row, gap_tensor, time_index))
+        return (self.convolve_thermal_dist_left(g_row, time_index) * self.tau3 * 2 + self.convolve_thermal_int_left(g_row, gap_tensor, time_index))
 
     def convolve_thermal_full_right(self, g, gap_tensor, time_index=-1):
-        return (2 * self.tau3 * self.convolve_thermal_dist_right(g, time_index)
-                + self.convolve_thermal_int_right(g, gap_tensor, time_index))
-
+        return (2 * self.tau3 * self.convolve_thermal_dist_right(g, time_index) + self.convolve_thermal_int_right(g, gap_tensor, time_index))
 
 # ========== Interpolation of a state onto a different time grid ==========
 

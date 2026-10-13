@@ -1629,3 +1629,569 @@ def plot_xy_data(x_data_list, y_data_list, label_list=None,
     plt.show()
 
     return fig, ax
+
+
+# ======================================================================================================
+# Multi-file analysis: parameters differing between jobs, gap vs parameter, error scaling, rows at t = -1
+# ======================================================================================================
+
+_PARAMETER_LABELS = {
+    'temperature': r'$T/T_c$',
+    'eta': r'$\eta$',
+    'time_sampling': r'$N_t$',
+    'time_duration': r'$T_{\max}$',
+    'dt': r'$\Delta t$',
+    'amplitude': r'$A_0$',
+    'FWHM': r'$\mathrm{FWHM}$',
+    'frequency': r'$\omega$',
+    'critical_temperature': r'$T_c$',
+}
+
+
+def _parameter_label(name):
+    """LaTeX label of a parameter name (falls back to the escaped name)."""
+    if name in _PARAMETER_LABELS:
+        return _PARAMETER_LABELS[name]
+    return r'$\mathrm{' + str(name).replace('_', r'\_') + r'}$'
+
+
+def _list_result_file_indices(timestamp, running_machine='laptop'):
+    """Indices i of the result files sr_i present in the timestamp folder (sorted)."""
+    import re
+    if not hasattr(path_management, 'project_data'):
+        path_management.initialize(project_name='psBQP-keldysh')
+
+    folders = [path_management.default_simulation_data_path(running_machine=running_machine)]
+    if running_machine == 'cluster_euler':
+        folders.append(path_management.default_autoarchive_path(running_machine=running_machine))
+
+    tag = path_management.individual_result_file_tag()
+    for base in folders:
+        folder = os.path.join(base, str(timestamp))
+        if os.path.isdir(folder):
+            indices = [int(m.group(1)) for f in os.listdir(folder) for m in [re.fullmatch(re.escape(tag) + r'(\d+)', f)] if m]
+            if indices:
+                return sorted(indices)
+    raise FileNotFoundError(f"No result files found for timestamp {timestamp}")
+
+
+def _numeric_items(dictionary):
+    """Numeric (non-bool) scalar entries of a dict (None or non-dict -> empty)."""
+    if not isinstance(dictionary, dict):
+        return {}
+    return {k: float(v) for k, v in dictionary.items()
+            if isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, (bool, np.bool_))}
+
+
+def _job_parameters(data, job):
+    """Flat dict of the numeric parameters of inner job `job` of a postprocessed file, including the derived dt."""
+    parameters = {}
+    parameters.update(_numeric_items(data['grid_parameters'][job]))
+    parameters.update(_numeric_items(data['system_parameters'][job]))
+    field_params = data.get('field_params', None)
+    if field_params is not None:
+        parameters.update(_numeric_items(field_params[job]))
+    if 'time_duration' in parameters and 'time_sampling' in parameters and parameters['time_sampling'] > 1:
+        parameters['dt'] = parameters['time_duration'] / (parameters['time_sampling'] - 1)
+    return parameters
+
+
+def _varies(values):
+    values = np.asarray(values, dtype=float)
+    scale = max(1.0, np.max(np.abs(values)))
+    return np.max(values) - np.min(values) > 1e-9 * scale
+
+
+def detect_job_parameters(timestamp, running_machine='laptop', directory_job_index=None, verbose=True):
+    """
+    Classify the parameters of a postprocessed timestamp.
+
+    A timestamp consists of several result files (one per postprocessing job, index directory_job_index); every file holds
+    several inner jobs. Parameters are classified as:
+        - inner: varies between the inner jobs of at least one file (e.g. temperature)
+        - outer: constant inside every file but different between files (e.g. N_t, dt)
+        - constant: the same everywhere
+
+    Args:
+        timestamp: Postprocessed timestamp folder
+        running_machine: 'laptop' or 'cluster_euler'
+        directory_job_index: int or list of file indices to use (default None = all files)
+        verbose: print the classification
+
+    Returns:
+        dict with 'file_indices', 'inner' (list of names), 'outer' (name -> list of values per file), 'constant' (name -> value),
+        'inner_values' (name -> list of arrays per file)
+    """
+    if directory_job_index is None:
+        file_indices = _list_result_file_indices(timestamp, running_machine)
+    elif np.isscalar(directory_job_index):
+        file_indices = [int(directory_job_index)]
+    else:
+        file_indices = [int(i) for i in directory_job_index]
+
+    per_file = []
+    for file_index in file_indices:
+        data = load_postprocessed_data(timestamp, file_index, running_machine)
+        n_inner = len(data['system_parameters'])
+        jobs = [_job_parameters(data, j) for j in range(n_inner)]
+        names = sorted(set().union(*[set(j.keys()) for j in jobs]))
+        per_file.append({n: np.array([j.get(n, np.nan) for j in jobs]) for n in names})
+
+    all_names = sorted(set().union(*[set(f.keys()) for f in per_file]))
+    inner, outer, constant, inner_values = [], {}, {}, {}
+    for name in all_names:
+        values = [f.get(name, np.array([np.nan])) for f in per_file]
+        if any(len(v) > 1 and _varies(v[~np.isnan(v)]) for v in values if np.any(~np.isnan(v))):
+            inner.append(name)
+            inner_values[name] = values
+            continue
+        firsts = np.array([v[0] for v in values])
+        if len(firsts) > 1 and np.any(~np.isnan(firsts)) and _varies(firsts[~np.isnan(firsts)]):
+            outer[name] = list(firsts)
+        else:
+            constant[name] = firsts[0]
+
+    result = {'file_indices': file_indices, 'inner': inner, 'outer': outer, 'constant': constant, 'inner_values': inner_values}
+
+    if verbose:
+        print(f"Timestamp {timestamp}: {len(file_indices)} result file(s), indices {file_indices}")
+        print("  varies inside each file (inner): " + (", ".join(inner) if inner else "-"))
+        if outer:
+            print("  differs between files (outer):")
+            for name, values in outer.items():
+                print(f"    {name}: " + ", ".join(f"{v:.6g}" for v in values))
+        else:
+            print("  differs between files (outer): -")
+        print("  constant: " + ", ".join(f"{k} = {v:.6g}" for k, v in constant.items()))
+
+    return result
+
+
+def _outer_label(detection, position, names=None):
+    """Legend label of file number `position` built from the outer parameters."""
+    outer = detection['outer']
+    if names is None:
+        names = list(outer.keys())
+    if not names:
+        return f"file {detection['file_indices'][position]}"
+    parts = []
+    for name in names:
+        value = outer[name][position]
+        parts.append(f"{_parameter_label(name)} = {value:.4g}" if name != 'time_sampling' else f"{_parameter_label(name)} = {int(round(value))}")
+    return ", ".join(parts)
+
+
+def _constants_text(detection, exclude=()):
+    items = [f"{_parameter_label(k)} = {v:.4g}" for k, v in detection['constant'].items()
+             if k not in exclude and k not in ('critical_temperature',) and not np.isnan(v)]
+    return ", ".join(items)
+
+
+def _save_figure(fig, save_dir, filename, timestamp):
+    if save_dir is None:
+        save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Figures')
+    os.makedirs(save_dir, exist_ok=True)
+    extended_savefig(fig, os.path.join(save_dir, filename), timestamp)
+
+
+def plot_gap_vs_parameter(timestamp, directory_job_index=None, inner_parameter=None, outer_parameters=None,
+                          save_plot=False, save_dir=None, running_machine='laptop', colormap='viridis',
+                          marker='o', ylim=None, xlim=None, show=True):
+    """
+    Plot |gap|/T_c versus the parameter varying inside the files, one curve per file, and write out which parameter
+    differs between the files (legend) together with the parameters that are constant.
+
+    Args:
+        timestamp: Postprocessed timestamp folder (needs 'static' data)
+        directory_job_index: int or list of result file indices (default None = all files of the timestamp)
+        inner_parameter: Parameter on the x axis (default: 'temperature' if it varies, else the first inner parameter)
+        outer_parameters: Names used in the legend (default: all parameters that differ between files)
+        save_plot, save_dir, running_machine: as in the other plotting functions
+        colormap: Colormap for the curves
+        marker: Marker style
+        ylim, xlim: Axis limits
+        show: call plt.show()
+
+    Returns:
+        dict with 'detection' (see detect_job_parameters), 'x' (list of arrays), 'gaps' (list of |gap|/T_c arrays),
+        'labels' (list of legend labels), 'file_indices', 'inner_parameter'
+    """
+    detection = detect_job_parameters(timestamp, running_machine, directory_job_index)
+
+    if inner_parameter is None:
+        if 'temperature' in detection['inner']:
+            inner_parameter = 'temperature'
+        elif detection['inner']:
+            inner_parameter = detection['inner'][0]
+        else:
+            raise ValueError("No parameter varies inside the files; give inner_parameter explicitly")
+    if inner_parameter not in detection['inner_values']:
+        raise ValueError(f"'{inner_parameter}' does not vary inside the files. Inner parameters: {detection['inner']}")
+
+    outer_names = outer_parameters if outer_parameters is not None else list(detection['outer'].keys())
+    if outer_parameters is None and 'dt' in outer_names and 'time_sampling' in outer_names:
+        outer_names = [n for n in outer_names if n != 'dt'] + ['dt']
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    cmap = plt.get_cmap(colormap)
+    n_files = len(detection['file_indices'])
+
+    x_list, gap_list, labels = [], [], []
+    for position, file_index in enumerate(detection['file_indices']):
+        data = load_postprocessed_data(timestamp, file_index, running_machine)
+        x = np.asarray(detection['inner_values'][inner_parameter][position], dtype=float)
+        t_c = data['system_parameters'][0].get('critical_temperature', 1.0)
+        gaps = np.abs(np.asarray(data['averaged_gaps'])) / t_c
+
+        invalid = ~np.isfinite(gaps)
+        if np.any(invalid):
+            print(f"  file {file_index}: {int(invalid.sum())} NaN gap value(s) at {_parameter_label(inner_parameter)} = "
+                  + ", ".join(f"{v:.4g}" for v in x[invalid]) + " (not plotted)")
+
+        label = _outer_label(detection, position, outer_names)
+        color = cmap(position / max(n_files - 1, 1) * 0.85)
+        ax.plot(x[~invalid], gaps[~invalid], marker=marker, color=color, linewidth=2.5, markersize=7, alpha=0.85, label=label)
+        x_list.append(x)
+        gap_list.append(gaps)
+        labels.append(label)
+
+    ax.set_xlabel(_parameter_label(inner_parameter), fontsize=21)
+    ax.set_ylabel(r'$|\Delta|/T_c$', fontsize=21)
+    title = r'Gap vs ' + _parameter_label(inner_parameter)
+    constants = _constants_text(detection, exclude=(inner_parameter,) + tuple(outer_names))
+    ax.set_title(title + (r'' if not constants else '\n' + r'\small{' + constants + '}'), fontsize=21)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if n_files > 1 or detection['outer']:
+        ax.legend(fontsize=13, framealpha=0.9, loc='best')
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    if save_plot:
+        _save_figure(fig, save_dir, f'gap_vs_{inner_parameter}_{timestamp}.svg', timestamp)
+    if show:
+        plt.show()
+
+    return {'detection': detection, 'x': x_list, 'gaps': gap_list, 'labels': labels,
+            'file_indices': detection['file_indices'], 'inner_parameter': inner_parameter}
+
+
+def analyze_errors_vs_grid(timestamp, vary=None, directory_job_index=None, inner_parameter=None,
+                           save_plot=False, save_dir=None, running_machine='laptop', colormap='viridis',
+                           show=True, print_table=True):
+    """
+    Scaling of the gap and of the consistency errors (g^R normalization, g^K normalization, FDT) with the grid
+    parameter that differs between the result files (dt at fixed T_max, or T_max at fixed dt).
+
+    For every inner point (e.g. every temperature) the following is plotted versus the varied parameter on log-log axes:
+        - |gap - gap_reference| (reference = file with the smallest dt, or the largest T_max)
+        - max over Pauli components of |g^R normalization error| at (t=-1,t'=-1)
+        - max over Pauli components of |g^K normalization error|
+        - max over Pauli components of |FDT error|
+    and the exponent p of error ~ x^p is fitted (np.polyfit on the logarithms). dt is T_max/(N_t - 1).
+
+    Args:
+        timestamp: Postprocessed timestamp folder with one varied grid parameter between the files
+        vary: 'dt' or 'time_duration' (default: the grid parameter that differs between files, dt preferred)
+        directory_job_index: list of result file indices to use (default all)
+        inner_parameter: parameter labelling the curves (default 'temperature' if it varies)
+        save_plot, save_dir, running_machine, colormap, show: as in the other plotting functions
+        print_table: print the fitted exponents per inner point
+
+    Returns:
+        dict with 'x' (varied parameter per file), 'inner_parameter', 'inner' (values), 'gap', 'gap_difference',
+        'gr_normalization', 'gk_normalization', 'fdt' (arrays (n_files, n_inner)), 'slopes' (dict of arrays (n_inner,)),
+        'detection'
+    """
+    detection = detect_job_parameters(timestamp, running_machine, directory_job_index)
+
+    if vary is None:
+        if 'dt' in detection['outer']:
+            vary = 'dt'
+        elif 'time_duration' in detection['outer']:
+            vary = 'time_duration'
+        else:
+            raise ValueError("No grid parameter (dt or time_duration) differs between the files")
+    if vary not in detection['outer']:
+        raise ValueError(f"'{vary}' does not differ between the files. Outer parameters: {list(detection['outer'].keys())}")
+
+    if inner_parameter is None:
+        inner_parameter = 'temperature' if 'temperature' in detection['inner'] else (detection['inner'][0] if detection['inner'] else None)
+
+    x_values = np.array(detection['outer'][vary], dtype=float)
+    n_files = len(detection['file_indices'])
+
+    gaps, gr_err, gk_err, fdt_err = [], [], [], []
+    for file_index in detection['file_indices']:
+        data = load_postprocessed_data(timestamp, file_index, running_machine)
+        gaps.append(np.abs(np.asarray(data['averaged_gaps'])))
+        gr_err.append(np.max(np.abs(data['gr_normalization_errors']), axis=1))
+        gk_err.append(np.max(np.abs(data['gk_normalization_errors']), axis=1))
+        fdt_err.append(np.max(np.abs(data['fdt_errors']), axis=1))
+    n_inner = min(len(g) for g in gaps)
+    gaps, gr_err, gk_err, fdt_err = [np.array([a[:n_inner] for a in arr]) for arr in (gaps, gr_err, gk_err, fdt_err)]
+
+    inner_values = (np.array(detection['inner_values'][inner_parameter][0], dtype=float)[:n_inner]
+                    if inner_parameter is not None else np.arange(n_inner, dtype=float))
+
+    reference = np.argmin(x_values) if vary == 'dt' else np.argmax(x_values)
+    gap_difference = np.abs(gaps - gaps[reference][None, :])
+    gap_difference[reference, :] = np.nan
+
+    quantities = [('gap_difference', gap_difference, r'$|\Delta - \Delta_{\mathrm{ref}}|$'),
+                  ('gr_normalization', gr_err, r'$g^R$ normalization error'),
+                  ('gk_normalization', gk_err, r'$g^K$ normalization error'),
+                  ('fdt', fdt_err, r'FDT error')]
+
+    cmap = plt.get_cmap(colormap)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    slopes = {}
+    order = np.argsort(x_values)
+    for ax, (key, values, ylabel) in zip(axes.flat, quantities):
+        slopes[key] = np.full(n_inner, np.nan)
+        for j in range(n_inner):
+            y = values[:, j]
+            ok = np.isfinite(y) & (y > 0) & np.isfinite(x_values) & (x_values > 0)
+            color = cmap(j / max(n_inner - 1, 1) * 0.9)
+            ax.plot(x_values[order][ok[order]], y[order][ok[order]], marker='o', color=color, linewidth=1.5, markersize=5, alpha=0.8)
+            if ok.sum() >= 2:
+                slopes[key][j] = np.polyfit(np.log(x_values[ok]), np.log(y[ok]), 1)[0]
+
+        positive = values[np.isfinite(values) & (values > 0)]
+        if positive.size:
+            x_guide = np.sort(x_values[x_values > 0])
+            anchor = np.median(positive)
+            x_mid = np.sqrt(x_guide[0] * x_guide[-1])
+            ax.plot(x_guide, anchor * (x_guide / x_mid), 'k:', linewidth=1.5, label=r'$\propto x$')
+            ax.plot(x_guide, anchor * (x_guide / x_mid) ** 2, 'k-.', linewidth=1.5, label=r'$\propto x^2$')
+        ax.set_xscale('log')
+        if positive.size:
+            ax.set_yscale('log')
+            ax.legend(fontsize=12, loc='best')
+        else:
+            ax.text(0.5, 0.5, 'all values are zero or NaN', transform=ax.transAxes, ha='center', va='center', fontsize=16)
+        ax.set_xlabel(_parameter_label(vary), fontsize=19)
+        ax.set_ylabel(ylabel, fontsize=19)
+        ax.grid(True, alpha=0.3, which='both')
+
+    if inner_parameter is not None and n_inner > 1:
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=np.nanmin(inner_values), vmax=np.nanmax(inner_values)))
+        fig.colorbar(sm, ax=axes, label=_parameter_label(inner_parameter), pad=0.02)
+    constants = _constants_text(detection, exclude=(vary,))
+    if constants:
+        fig.suptitle(constants, fontsize=16)
+
+    if save_plot:
+        _save_figure(fig, save_dir, f'error_scaling_{vary}_{timestamp}.svg', timestamp)
+    if show:
+        plt.show()
+
+    if print_table:
+        label = inner_parameter if inner_parameter is not None else 'job'
+        print(f"Fitted exponents p of error ~ {vary}^p (reference file index {detection['file_indices'][reference]}, "
+              f"{vary} = {', '.join(f'{x:.4g}' for x in x_values)})")
+        print(f"{label:>14s} | " + " | ".join(f"{k:>17s}" for k, _, _ in quantities))
+        for j in range(n_inner):
+            print(f"{inner_values[j]:14.4g} | " + " | ".join(f"{slopes[k][j]:17.2f}" for k, _, _ in quantities))
+        medians = [np.nanmedian(slopes[k]) if np.any(np.isfinite(slopes[k])) else np.nan for k, _, _ in quantities]
+        print(f"{'median':>14s} | " + " | ".join(f"{m:17.2f}" for m in medians))
+
+    return {'x': x_values, 'vary': vary, 'inner_parameter': inner_parameter, 'inner': inner_values, 'gap': gaps,
+            'gap_difference': gap_difference, 'gr_normalization': gr_err, 'gk_normalization': gk_err, 'fdt': fdt_err,
+            'slopes': slopes, 'reference_file': detection['file_indices'][reference], 'detection': detection}
+
+
+# ------------------------------------------------------------------------------------------------------
+# Rows g(t=-1, t') and the error rows
+# ------------------------------------------------------------------------------------------------------
+
+def get_state_rows(timestamp, directory_job_index=0, job_index=0, source='auto', running_machine='laptop'):
+    """
+    Rows at t = -1 versus t' of g^R, g^K and of the normalization / FDT errors for one inner job.
+
+    Source order for source='auto': the 'rows' entry stored by the 'static' postprocessing; if absent (older folders) the raw
+    evolution run, whose timestamp is read from the calculation arguments of the postprocess folder and which must be present
+    locally. source='rows' or 'raw' forces one of the two.
+
+    Args:
+        timestamp: Postprocessed timestamp folder
+        directory_job_index: Result file (postprocessing job) index
+        job_index: Index of the inner job inside that file (= job index of the raw run)
+        source: 'auto', 'rows' or 'raw'
+        running_machine: 'laptop' or 'cluster_euler'
+
+    Returns:
+        dict with 't_prime' (N_t,), 'gr_row', 'gk_row', 'gr_normalization_row', 'gk_normalization_row', 'fdt_row' ((4, N_t) complex),
+        'system_parameters', 'grid_parameters', 'source' ('rows' or 'raw') and 'raw_timestamp' (or None)
+    """
+    data = load_postprocessed_data(timestamp, directory_job_index, running_machine)
+    system_parameters = data['system_parameters'][job_index]
+    grid_parameters = data['grid_parameters'][job_index]
+
+    rows = data.get('rows', None)
+    if source in ('auto', 'rows') and rows is not None and rows[job_index] is not None:
+        out = dict(rows[job_index])
+        out.update({'system_parameters': system_parameters, 'grid_parameters': grid_parameters, 'source': 'rows', 'raw_timestamp': None})
+        return out
+    if source == 'rows':
+        raise ValueError(f"No 'rows' stored for timestamp {timestamp}, file {directory_job_index}, job {job_index}. "
+                         f"Re-run the 'static' postprocessing (saves rows by default) or use source='raw'.")
+
+    # raw run fallback
+    simulation_data_path = path_management.default_simulation_data_path(running_machine=running_machine)
+    arguments_file = os.path.join(simulation_data_path, str(timestamp), path_management.args_input_filetag())
+    kwargs_array = io.recover_full_calculation_arguments(full_path=arguments_file)
+    raw_timestamp = kwargs_array[directory_job_index].get('timestamp', None)
+    if raw_timestamp is None:
+        raise ValueError(f"Timestamp {timestamp} is not a postprocessing folder (no 'timestamp' in its arguments); "
+                         f"pass the postprocessed timestamp or an evolution timestamp with stored rows")
+
+    raw_folder = os.path.join(simulation_data_path, str(raw_timestamp))
+    from run_postprocessor import load_job_data, compute_state_rows
+    from usadel_keldysh_evolution import UsadelKeldyshEvolution
+    try:
+        input_kwargs, save_data = load_job_data(raw_timestamp, job_index, running_machine)
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            f"No rows stored in postprocessed folder {timestamp} (file {directory_job_index}) and the raw run {raw_timestamp} is not "
+            f"available locally (expected {raw_folder}). Either copy the raw folder from the cluster or re-run the 'static' "
+            f"postprocessing, which now saves the rows. ({error})")
+
+    final_state = save_data.get('final_state', None)
+    if final_state is None or final_state.gr.data.shape[2] != final_state.gr.data.shape[3]:
+        raise ValueError(f"Raw run {raw_timestamp} job {job_index} has no full final state (save_full_state=False?)")
+
+    evolution = UsadelKeldyshEvolution(dict(input_kwargs['grid_parameters']), dict(input_kwargs['system_parameters']))
+    out = compute_state_rows(final_state, evolution.thermal, input_kwargs['grid_parameters'].get('time_duration'))
+    out.update({'system_parameters': system_parameters, 'grid_parameters': grid_parameters, 'source': 'raw', 'raw_timestamp': raw_timestamp})
+    return out
+
+
+_PAULI_NAMES = [r'\tau_0', r'\tau_1', r'\tau_2', r'\tau_3']
+_PAULI_COLORS = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd']
+
+
+def _plot_components(ax, t_prime, rows, ylabel, title, yscale='linear'):
+    """4 Pauli components, real part solid and imaginary part dashed."""
+    for p in range(4):
+        ax.plot(t_prime, np.real(rows[p]), color=_PAULI_COLORS[p], linewidth=2.2, label=r'$\mathrm{Re}\,' + _PAULI_NAMES[p] + '$')
+        ax.plot(t_prime, np.imag(rows[p]), color=_PAULI_COLORS[p], linewidth=2.2, linestyle='--', label=r'$\mathrm{Im}\,' + _PAULI_NAMES[p] + '$')
+    ax.set_xlabel(r"$t'$", fontsize=21)
+    ax.set_ylabel(ylabel, fontsize=21)
+    ax.set_title(title, fontsize=21)
+    ax.set_yscale(yscale)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=11, ncol=2, framealpha=0.9, loc='best')
+
+
+def _rows_title(rows_data):
+    system = rows_data['system_parameters']
+    grid = rows_data['grid_parameters']
+    parts = []
+    if 'temperature' in system:
+        parts.append(r'$T/T_c = %.3g$' % float(system['temperature']))
+    if 'eta' in system:
+        parts.append(r'$\eta = %.3g$' % float(system['eta']))
+    if 'time_sampling' in grid:
+        parts.append(r'$N_t = %d$' % int(grid['time_sampling']))
+    return ', '.join(parts)
+
+
+def plot_green_function_rows(timestamp, directory_job_index=0, job_index=0, source='auto', save_plot=False, save_dir=None,
+                             running_machine='laptop', show=True):
+    """
+    Plot g^R(t=-1, t') (one figure) and g^K(t=-1, t') (another figure): all Pauli components tau_0..tau_3,
+    real part solid, imaginary part dashed.
+
+    Args:
+        timestamp: Postprocessed timestamp folder
+        directory_job_index: Result file index (postprocessing job)
+        job_index: Inner job index inside that file (e.g. temperature index)
+        source: 'auto', 'rows' or 'raw' (see get_state_rows)
+        save_plot, save_dir, running_machine, show: as in the other plotting functions
+
+    Returns:
+        dict returned by get_state_rows (rows used for the plots)
+    """
+    rows_data = get_state_rows(timestamp, directory_job_index, job_index, source, running_machine)
+    t_prime = rows_data['t_prime']
+    subtitle = _rows_title(rows_data)
+
+    figures = []
+    for key, name, label in (('gr_row', 'gr', r'$g^R(t=-1,t^\prime)$'), ('gk_row', 'gk', r'$g^K(t=-1,t^\prime)$')):
+        fig, ax = plt.subplots(figsize=(9, 6))
+        _plot_components(ax, t_prime, rows_data[key], label, label + (('\n' + r'\small{' + subtitle + '}') if subtitle else ''))
+        fig.tight_layout()
+        figures.append(fig)
+        if save_plot:
+            _save_figure(fig, save_dir, f'{name}_row_{timestamp}_file{directory_job_index}_job{job_index}.svg', timestamp)
+    if show:
+        plt.show()
+
+    rows_data['figures'] = figures
+    return rows_data
+
+
+def plot_consistency_rows(timestamp, directory_job_index=0, job_index=0, source='auto', yscale='linear',
+                          save_plot=False, save_dir=None, running_machine='laptop', show=True, print_maxima=True):
+    """
+    Plot the g^R normalization error, the g^K (Keldysh) normalization error and the FDT error at t = -1 versus t'
+    (three panels, all Pauli components, real part solid and imaginary part dashed) and print the maximal errors.
+
+    Args:
+        timestamp: Postprocessed timestamp folder
+        directory_job_index: Result file index (postprocessing job)
+        job_index: Inner job index inside that file
+        source: 'auto', 'rows' or 'raw' (see get_state_rows)
+        yscale: 'linear' (signed values) or 'symlog'
+        save_plot, save_dir, running_machine, show: as in the other plotting functions
+        print_maxima: print max |error| per panel, component and part, with the t' where it occurs
+
+    Returns:
+        dict with the rows (see get_state_rows) and 'maxima': {panel: {'overall', 'overall_t_prime', 'components': {name: value}}}
+    """
+    rows_data = get_state_rows(timestamp, directory_job_index, job_index, source, running_machine)
+    t_prime = rows_data['t_prime']
+
+    panels = [('gr_normalization_row', r'$g^R$ normalization error', 'g^R normalization'),
+              ('gk_normalization_row', r'$g^K$ normalization error', 'g^K normalization'),
+              ('fdt_row', r'FDT error', 'FDT')]
+
+    fig, axes = plt.subplots(1, 3, figsize=(21, 6))
+    maxima = {}
+    for ax, (key, ylabel, name) in zip(axes, panels):
+        rows = rows_data[key]
+        _plot_components(ax, t_prime, rows, ylabel, ylabel, yscale=yscale)
+
+        components = {}
+        for p in range(4):
+            for part, values in (('Re', np.real(rows[p])), ('Im', np.imag(rows[p]))):
+                index = int(np.nanargmax(np.abs(values))) if np.any(np.isfinite(values)) else 0
+                components[f'{part} tau_{p}'] = (float(np.abs(values[index])), float(t_prime[index]))
+        overall_key = max(components, key=lambda k: components[k][0])
+        maxima[name] = {'overall': components[overall_key][0], 'overall_t_prime': components[overall_key][1],
+                        'overall_component': overall_key, 'components': components}
+
+    subtitle = _rows_title(rows_data)
+    if subtitle:
+        fig.suptitle(subtitle, fontsize=18)
+    fig.tight_layout()
+
+    if print_maxima:
+        print(f"Maximal errors at t = -1 (timestamp {timestamp}, file {directory_job_index}, job {job_index}, source: {rows_data['source']}"
+              + (f", raw run {rows_data['raw_timestamp']}" if rows_data['raw_timestamp'] else "") + ")")
+        for name, info in maxima.items():
+            print(f"  {name}: max |error| = {info['overall']:.3e} ({info['overall_component']}, at t' = {info['overall_t_prime']:.3f})")
+            for component, (value, at) in info['components'].items():
+                print(f"      {component}: {value:.3e} (t' = {at:.3f})")
+
+    if save_plot:
+        _save_figure(fig, save_dir, f'consistency_rows_{timestamp}_file{directory_job_index}_job{job_index}.svg', timestamp)
+    if show:
+        plt.show()
+
+    rows_data['maxima'] = maxima
+    rows_data['figure'] = fig
+    return rows_data

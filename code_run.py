@@ -74,6 +74,11 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         running_machine = 'laptop'
         path_management.initialize(project_name='psBQP-keldysh')
 
+    #* self-energies entering the evolution: EM (scattering rate 1.0) only when a vector potential is present
+    self_energy_dictionary = {}
+    if field_type is not None or circuit_params is not None:
+        self_energy_dictionary['em'] = 1.0
+
     #* Load or generate initial state
     if initial_state_timestamp is not None:
         # Construct paths for kwargs and state files
@@ -182,7 +187,8 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 
     else:
         #* generating initial state using equilibrium code
-        evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+        #~ evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+        evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters, self_energy_dictionary=self_energy_dictionary)
         initial_state, _, _, equilibrium_current = evolution.generate_initial_state(Q=0.0)
         dt = grid_parameters['time_duration'] / (grid_parameters['time_sampling'] - 1)
 
@@ -201,7 +207,8 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
 
     # Run evolution
     if 'evolution' not in locals():
-        evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+        #~ evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+        evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters, self_energy_dictionary=self_energy_dictionary)
 
     # Determine if we should track occupations
     track_occupations = (track_every_n is not None)
@@ -227,7 +234,10 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         final_state = reduced_state
 
     # Save results
-    result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': times, 'input_pulse': prepared_driving_field}
+    #* circuit mode: gaps, currents and vector_potentials are all evaluated at t_(n+1), so the saved times are shifted by dt
+    #~ result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': times, 'input_pulse': prepared_driving_field}
+    saved_times = times + dt if circuit_params is not None else times
+    result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': saved_times, 'input_pulse': prepared_driving_field}
 
     # Add energy-time data if tracking was enabled, filtered by track_every_n
     if track_occupations:

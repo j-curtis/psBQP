@@ -243,7 +243,8 @@ class StateObject:
         # Multiply ga with A*tau3, then precise_convolution_right with F (regularized)
         #~ term4 = 2.0 * (A_tensor * tau3 * ga).precise_convolution_right(F_row, F_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)[-1,-1]
         #~ term4 = 2.0 * thermal.convolve_thermal_dist_right(A_tensor * tau3 * ga, time_index)[-1,-1]
-        term4 = thermal.convolve_thermal_full_right(tau3 * (A_tensor * tau3 * ga), gap_tensor, time_index)[-1,-1]
+        #* tau3 stands left of the kernel (2*tau3*F + T, T anticommutes with tau3), so it is applied outside the full convolution
+        term4 = tau3 * thermal.convolve_thermal_full_right(A_tensor * tau3 * ga, gap_tensor, time_index)[-1,-1]
 
         # Sum all terms and take Nambu trace
         total = term1 + term2 + term3 + term4

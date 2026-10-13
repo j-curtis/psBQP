@@ -158,7 +158,6 @@ class UsadelKeldyshEvolution:
         # Generate time grid
         self.time_grid = np.linspace(-self.tmax, 0, self.ntpoints)
 
-    #* skipped for now, not so important for equilibrium
     def _generate_omega_grid(self):
         """
         Generate angular frequency (omega) grid as exact Fourier dual of EXTENDED time grid.
@@ -282,20 +281,18 @@ class UsadelKeldyshEvolution:
 
         return initial_state, gr_tau, gk_tau, equilibrium_current
 
-    # ========== CN implementation of the operators from continous to discrete space ========== 
-    # #TODO: check Terms 3 onwards -- as only 1/2 come into equilibrium at A = 0 
-    #! check diagonal term contributions -- already fixed 
-
     # ---------- CN averaging functions (general, previously nested inside _compute_new_gk_complete) ----------
 
+    #? Remains to be fully checked from Terms 4 onwards
     def cn_derivative1_average(self, tensor, shift_index = 1):
         cn_derivative_factor = 1/2
         return cn_derivative_factor * (tensor[-1:] + tensor[-1:].shift(shift_index, axis=1)) - cn_derivative_factor * (tensor[-2:-1] + tensor[-2:-1].shift(shift_index, axis=1))
-
+    #? Remains to be fully checked from Terms 4 onwards
     def cn_derivative2_average(self, tensor, shift_index = 1):
         cn_derivative_factor = 1/2
         return cn_derivative_factor * (tensor[-1:] + tensor[-2:-1]) - cn_derivative_factor * ( tensor[-1:].shift(shift_index, axis=1) + tensor[-2:-1].shift(shift_index, axis=1))
 
+    #? Remains to be fully checked from Terms 4 onwards
     def cn_plaquette_average(self, tensor, shift_index = 1):
         """
         Computes CN average of a tensor over the four corners (t, t'), (t, t'+shift), (t-dt, t'), (t-dt, t'+shift),
@@ -311,6 +308,7 @@ class UsadelKeldyshEvolution:
 
         return result
 
+    #? Remains to be fully checked from Terms 4 onwards
     def two_row_source(self, row_function):
         """
         Stack row_function(dt_shift) for dt_shift = 1 (row t-dt) and dt_shift = 0 (row t) into a (2,2,2,Nt) tensor.
@@ -319,6 +317,10 @@ class UsadelKeldyshEvolution:
         rows = [row_function(dt_shift) for dt_shift in (1, 0)]
         return NambuKeldyshTensor(np.concatenate([row.data for row in rows], axis=2))
 
+    # ========== CN implementation of the operators from continous to discrete space ========== 
+    # #TODO: check Terms 3 onwards -- as only 1/2 come into equilibrium at A = 0 
+    #! check diagonal term contributions -- already fixed? 
+    #? Remains to be fully checked from Terms 4 onwards
     def construct_discrete_operators(self, terms_dict, state, gap_tensor, g_type = 'r', additional_shift_index = 0):
         #* function assumes that all the terms are computed for the current computation time (t,t)
         #* assumes state last element is (t-dt,t-dt), which is true by default
@@ -1135,9 +1137,6 @@ class UsadelKeldyshEvolution:
 
         if A_history is None:
             A_history = np.zeros(len(gap_history), dtype=complex)
-        A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
-        A_t = A_tensor[-1]
-        A2_t = A_history[-1]**2
 
         #~ expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
         expansion_tensor = get_expansion_tensor(self.ntpoints)
@@ -1238,9 +1237,7 @@ class UsadelKeldyshEvolution:
 
         if A_history is None:
             A_history = np.zeros(len(gap_history), dtype=complex)
-        A_tensor = NambuKeldyshTensor(A_history, pauli_channel=0)
-        A_t = A_tensor[-1]
-        A2_t = A_history[-1]**2
+       
         #~ expansion_tensor = NambuKeldyshTensor(np.ones(self.ntpoints), pauli_channel=0)
         expansion_tensor = get_expansion_tensor(self.ntpoints)
 
@@ -1307,7 +1304,7 @@ class UsadelKeldyshEvolution:
         L2, R2, V2, Vhist2, Vfact2, sandwich2, diag_factor_list_2, diag_hist_list_2 = self.get_gk_constraint(state, gap_tensor)
 
         # ========== 6. Call unified solver with diagonal corrections ==========
-        #? extrapolate from diagonal entries by continuity equation? -- likely source of error? here its not zero but elsewhere we treat it as zero?
+
         gk_boundary = ( 2 * state.gk[-1, 0] - state.gk[-2, 0]) # g^K(t, -infty)
 
         gk_new = self.generalized_g_update_rule( g_type='k',diagonal_entry=gk_boundary, left_matrix_1=L1, left_matrix_2=L2,right_matrix_1=R1, right_matrix_2=R2,
@@ -1338,9 +1335,8 @@ class UsadelKeldyshEvolution:
         return trial_state
 
     #~ def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=10):
-    def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=10,
-                                      circuit_params=None, driving_field_current=None, driving_field_next=None,
-                                      current_no_gradient=None, vector_potential_tolerance=1e-6):
+    def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-3, max_gap_iterations=25, circuit_params=None, driving_field_current=None, driving_field_next=None, current_no_gradient=None, vector_potential_tolerance=1e-3):
+        
         """
         Evolve state by one timestep using Crank-Nicolson discretization, with a self-consistent gap Δ(t).
 
@@ -1422,6 +1418,7 @@ class UsadelKeldyshEvolution:
 
         return gap_new, current_new, vector_potential_new
 
+    #? remains to be checked
     def _evolve_state_gap_and_vector_potential(self, state, A_external, circuit_params, driving_field_current, driving_field_next,
                                                current_no_gradient, gap_tolerance, vector_potential_tolerance, max_iterations):
         """
@@ -1488,6 +1485,7 @@ class UsadelKeldyshEvolution:
 
         return gap_new, current_new, vector_potential_new
 
+    #? remains to be fully checked 
     def update_vector_potential(self, old_vector_potential, driving_field_current=None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None, state=None):
         """
         Update vector potential using sliding window or Crank-Nicolson scheme.
@@ -1616,15 +1614,7 @@ class UsadelKeldyshEvolution:
             - update_vector_potential(A_external, driving_field, state, circuit_params, ...)
             - _evolve_state_by_one_timestep(state, A_external)
         """
-        #~ if not hasattr(self, 'thermal_dist'):
-            #~ self.get_thermal_occupation(self.temperature)
-            #~ self.get_thermal_integral(self.temperature)
-            #~ self.get_log_two_time(self.temperature)
-            #~ # Pre-compute thermal sums over extended grid for precision
-            #~ self.get_thermal_sum(self.temperature)
-        #* thermal quantities are created in __init__ as self.thermal (numerical_support.ThermalConvolutions)
-
-        # Initialize arrays to track observables
+    
         gaps = []
         currents = []
         vector_potentials = []
@@ -1659,32 +1649,19 @@ class UsadelKeldyshEvolution:
             # Mode-dependent order of operations
             if circuit_params is None:
                 # Mode 1: Simple voltage-driven (original behavior)
-                # Update A_external BEFORE evolving (using prescribed driving field)
 
                 # Evolve state using updated A_external
                 gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
 
-                A_external = self.update_vector_potential(
-                    old_vector_potential=A_external,
-                    driving_field_current=driving_field[time_index] if driving_field is not None else None,
-                    driving_field_next=None,
-                    current=None,
-                    kernel_prefactor=None,
-                    circuit_params=None
-                )
+                A_external = self.update_vector_potential(old_vector_potential=A_external, driving_field_current=driving_field[time_index] if driving_field is not None else None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None)
 
+            #? this part remains to be checked!
             else:
                 # Mode 2: Current-driven with Crank-Nicolson
                 # Evolve state FIRST to get current and kernel
                 # Compute kernel prefactor from evolved state
 
-                #~ current_no_gradient = state.get_current_at_time_t(A_external, self.thermal_dist, self.thermal_integral,
-                                                #~ thermal_sum_left=self.thermal_sum_left,
-                                                #~ thermal_sum_right=self.thermal_sum_right,include_derivative = False)
                 current_no_gradient = state.get_current_at_time_t(A_external, self.thermal, include_derivative = False)
-
-                # Get driving field values (I_in at current and next timesteps)
-                #~ gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
 
                 driving_field_current = driving_field[time_index] 
                 driving_field_next = driving_field[time_index + 1] if time_index < num_timesteps - 1 else driving_field[time_index] 
@@ -1694,15 +1671,6 @@ class UsadelKeldyshEvolution:
                     state, A_external, max_gap_iterations=30, circuit_params=circuit_params, driving_field_current=driving_field_current,
                     driving_field_next=driving_field_next, current_no_gradient=current_no_gradient)
 
-                # Update A_external using Crank-Nicolson
-                #~ A_external = self.update_vector_potential(
-                    #~ old_vector_potential=A_external,
-                    #~ driving_field_current=driving_field_current,
-                    #~ driving_field_next=driving_field_next,
-                    #~ current=current_no_gradient,
-                    #~ circuit_params=circuit_params,
-                    #~ state=state
-                #~ )
                 A_external = np.append(A_external[1:], vector_potential_new)
             
             # Store observables

@@ -155,17 +155,20 @@ class EM_selfenergy(SelfEnergy):
             def em_f_row(dt_shift):
                 dt_end = None if dt_shift == 0 else -dt_shift
                 A_diff = A_tensor[-1-dt_shift] * expansion_tensor - A_tensor
-                return -2j * thermal.thermal_dist[-1-dt_shift:dt_end, :] * (A_diff * A_diff)
+                A_sum = A_tensor[-1-dt_shift] * expansion_tensor + A_tensor
+
+                #* second shift g' = g'' + T: T anticommutes with tau3, the local EM terms give (A_1^2 - A_2^2) tau3 T instead of (A_1 - A_2)^2
+                thermal_integral_row = thermal.thermal_integral[-1-dt_shift:dt_end, :]
+                thermal_gap_row = -gap_tensor[-1-dt_shift] * thermal_integral_row - thermal_integral_row * gap_tensor
+                return -2j * thermal.thermal_dist[-1-dt_shift:dt_end, :] * (A_diff * A_diff) - 1j * tau3 * thermal_gap_row * (A_diff * A_sum)
 
             def em_thermal_row(dt_shift):
                 dt_end = None if dt_shift == 0 else -dt_shift
-                #~ term1_left = -2j * thermal.convolve_thermal_dist_left(A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor, time_index=-1-dt_shift)
-                #~ term2_left = +2j * thermal.convolve_thermal_dist_left(gr[-1-dt_shift:dt_end, :] * A_tensor * tau3, time_index=-1-dt_shift) * A_tensor
-                #~ term1and2_right = -2j * thermal.convolve_thermal_dist_right(A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3, time_index=-1-dt_shift)
-                #* full(X*tau3) = 2*dist(X) + int(X*tau3): same dist part as before, plus the F (gap) part
+                #* full convolution kernel 2*tau3*F + T, T anticommutes with tau3: tau3 factors on the far side of the kernel stay outside the convolution
                 term1_left = -1j * thermal.convolve_thermal_full_left(A_tensor[-1-dt_shift] * tau3 * gr[-1-dt_shift:dt_end, :] * A_tensor * tau3, gap_tensor, time_index=-1-dt_shift)
-                term2_left = +1j * thermal.convolve_thermal_full_left(gr[-1-dt_shift:dt_end, :] * A_tensor * tau3 * tau3, gap_tensor, time_index=-1-dt_shift) * A_tensor
-                term1and2_right = -1j * thermal.convolve_thermal_full_right(tau3 * (A_tensor[-1-dt_shift] * tau3 * A_tensor * ga - A_tensor * ga * A_tensor * tau3), gap_tensor, time_index=-1-dt_shift)
+                term2_left = +1j * thermal.convolve_thermal_full_left(gr[-1-dt_shift:dt_end, :] * A_tensor * tau3, gap_tensor, time_index=-1-dt_shift) * tau3 * A_tensor
+                full_right_ga = thermal.convolve_thermal_full_right(A_tensor * tau3 * ga, gap_tensor, time_index=-1-dt_shift)
+                term1and2_right = -1j * (A_tensor[-1-dt_shift] * tau3 * full_right_ga - full_right_ga * A_tensor * tau3)
                 return term1_left + term2_left + term1and2_right
 
             terms['type0_em_f'] = {'S': -_two_row_source(em_f_row)}

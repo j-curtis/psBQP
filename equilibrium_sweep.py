@@ -5,6 +5,9 @@ This script computes equilibrium states and extracts gap and current observables
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import pickle
 import os
 import sys
@@ -89,7 +92,8 @@ def compute_equilibrium_gap_vs_temperature(
                 grid_parameters=grid_parameters,
                 system_parameters=system_parameters,
                 optimization_parameters=None,
-                sigma_scatterings=None
+                sigma_scatterings=None,
+                self_energy_dictionary={}
             )
 
             # Generate equilibrium state (returns state, gr_tau, gk_tau, current)
@@ -249,7 +253,8 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
                 grid_parameters=grid_parameters,
                 system_parameters=system_parameters,
                 optimization_parameters=None,
-                sigma_scatterings=None
+                sigma_scatterings=None,
+                self_energy_dictionary={}
             )
 
             # Generate equilibrium state (returns state, gr_tau, gk_tau, current)
@@ -335,9 +340,23 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
         with open(pkl_filename, 'wb') as f:
             pickle.dump(results, f)
 
+        fig, (ax_gap, ax_current) = plt.subplots(1, 2, figsize=(10, 4))
+        ax_gap.plot(vector_potentials, np.abs(gaps), 'o-')
+        ax_gap.set_xlabel('Q')
+        ax_gap.set_ylabel(r'$|\Delta|$')
+        ax_current.plot(vector_potentials, np.real(currents), 'o-')
+        ax_current.set_xlabel('Q')
+        ax_current.set_ylabel('J')
+        fig.suptitle(f'T = {temperature}, eta = {eta}')
+        fig.tight_layout()
+        png_filename = os.path.join(save_dir, f'gap_current_vs_A_sweep_{timestamp}.png')
+        fig.savefig(png_filename, dpi=200)
+        plt.close(fig)
+
         print(f"\n{'='*70}")
         print(f"Text file saved to: {txt_filename}")
         print(f"Pickle file saved to: {pkl_filename}")
+        print(f"Plot saved to: {png_filename}")
         print(f"{'='*70}\n")
 
     return results
@@ -355,39 +374,16 @@ if __name__ == "__main__":
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*70 + "\n")
 
-    # Common parameters
     critical_temperature = 1.0
-    eta = 0.1
-    time_sampling = 1501
-    time_duration = 2 * np.pi * 30
+    eta = 0.2
+    time_sampling = 501
+    time_duration = 2 * np.pi * 5
     save_dir = 'equilibrium_results'
 
-    # ========== Temperature Sweep (Gap) ==========
-    print("\n" + "#"*70)
-    print("# SWEEP 1: Gap vs Temperature")
-    print("#"*70)
-
-    temp_results = compute_equilibrium_gap_vs_temperature(
-        T_min=0.1,
-        T_max=1.2,
-        n_points=30,
-        critical_temperature=critical_temperature,
-        eta=eta,
-        time_sampling=time_sampling,
-        time_duration=time_duration,
-        save_results=True,
-        save_dir=save_dir
-    )
-
-    # ========== Vector Potential Sweep (Gap & Current) ==========
-    print("\n" + "#"*70)
-    print("# SWEEP 2: Gap & Current vs Vector Potential")
-    print("#"*70)
-
     A_results = compute_equilibrium_current_and_gap_vs_vector_potential(
-        A_min=0.0,
-        A_max=0.9,
-        n_points=20,
+        A_min=0.05,
+        A_max=0.5,
+        n_points=10,
         temperature=0.5,
         critical_temperature=critical_temperature,
         eta=eta,
@@ -397,20 +393,9 @@ if __name__ == "__main__":
         save_dir=save_dir
     )
 
-    # ========== Summary ==========
     print("\n" + "="*70)
     print("SWEEP SUMMARY")
     print("="*70)
-
-    print("\nTemperature Sweep (Gap):")
-    print(f"  Temperature range: [{temp_results['parameters']['T_min']:.2f}, {temp_results['parameters']['T_max']:.2f}]")
-    print(f"  Points computed: {len(temp_results['temperatures'])}")
-    valid_gaps = ~np.isnan(temp_results['gaps'])
-    print(f"  Successful: {np.sum(valid_gaps)}/{len(temp_results['temperatures'])}")
-    if np.sum(valid_gaps) > 0:
-        print(f"  Max gap: {np.max(np.abs(temp_results['gaps'][valid_gaps])):.6f}")
-        max_gap_idx = np.argmax(np.abs(temp_results['gaps'][valid_gaps]))
-        print(f"    at T = {temp_results['temperatures'][valid_gaps][max_gap_idx]:.4f}")
 
     print("\nVector Potential Sweep (Gap & Current):")
     print(f"  Vector potential range: [{A_results['parameters']['A_min']:.2f}, {A_results['parameters']['A_max']:.2f}]")

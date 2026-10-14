@@ -381,7 +381,7 @@ if __name__ == "__main__":
 
     critical_temperature = 1.0
     eta = 0.2
-    time_sampling = 751
+    time_sampling = 501
     time_duration = 2 * np.pi * 5
     save_dir = 'equilibrium_results'
 

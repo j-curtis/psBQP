@@ -283,16 +283,13 @@ class UsadelKeldyshEvolution:
 
     # ---------- CN averaging functions (general, previously nested inside _compute_new_gk_complete) ----------
 
-    #TODO: Remains to be fully checked
     def cn_derivative1_average(self, tensor, shift_index = 1):
         cn_derivative_factor = 1/2
         return cn_derivative_factor * (tensor[-1:] + tensor[-1:].shift(shift_index, axis=1)) - cn_derivative_factor * (tensor[-2:-1] + tensor[-2:-1].shift(shift_index, axis=1))
-    #TODO: Remains to be fully checked
     def cn_derivative2_average(self, tensor, shift_index = 1):
         cn_derivative_factor = 1/2
         return cn_derivative_factor * (tensor[-1:] + tensor[-2:-1]) - cn_derivative_factor * ( tensor[-1:].shift(shift_index, axis=1) + tensor[-2:-1].shift(shift_index, axis=1))
 
-    #TODO: Remains to be fully checked
     def cn_plaquette_average(self, tensor, shift_index = 1):
         """
         Computes CN average of a tensor over the four corners (t, t'), (t, t'+shift), (t-dt, t'), (t-dt, t'+shift),
@@ -308,7 +305,6 @@ class UsadelKeldyshEvolution:
 
         return result
 
-    #TODO: Remains to be fully checked
     def two_row_source(self, row_function):
         """
         Stack row_function(dt_shift) for dt_shift = 1 (row t-dt) and dt_shift = 0 (row t) into a (2,2,2,Nt) tensor.
@@ -318,8 +314,7 @@ class UsadelKeldyshEvolution:
         return NambuKeldyshTensor(np.concatenate([row.data for row in rows], axis=2))
 
     # ========== CN implementation of the operators from continous to discrete space ========== 
-    #! check diagonal term contributions -- already fixed? 
-    #TODO: Remains to be fully checked from Terms 4 onwards
+
     def construct_discrete_operators(self, terms_dict, state, gap_tensor, g_type = 'r', additional_shift_index = 0):
         #* function assumes that all the terms are computed for the current computation time (t,t)
         #* assumes state last element is (t-dt,t-dt), which is true by default
@@ -568,15 +563,16 @@ class UsadelKeldyshEvolution:
                 v_old_boundary_1 = boundary_factor * l_operator[-2:-1, -2] * (g_last_row.shift(-1, axis=1) + g_last_row.shift(shift_index-1, axis=1))
 
                 #* diagonal term in gk, since referencing to g_shift(-1)
-                #~ diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], tau0))
-                diagonal_term_factor_list.append((-boundary_factor * l_operator[-2, -2], tau0))
+                #* the diagonal term history below (l_operator[-2:-1,:]) runs up to t'' = t-dt, which is the end point of F(t-δt, ·) and enters there with the full weight (δt/4),
+                #* so this boundary correction must be -δt/8 to leave the end point weight 1/2
+                #* the sign is positive here because the later history term is double counting the boundary already!
+                #~ diagonal_term_factor_list.append((-boundary_factor * l_operator[-2, -2], tau0))
+                diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], tau0))
 
                 #* Interior sums from F(t-δt, ·): L(t-δt, :) @ g, sum to t-2δt
                 #* the g_matrix starts from 1 since we assume that the g_matrix corresponds to old, so last element is t-dt and last element of L operator is t and then we remove one extra last element due to trapezoid rule
-                #? Endpoint handling: Uses interior_factor = dt²/4 vs boundary_factor = dt²/8
-                #? The factor of 8 vs 4 is meant to implement 0.5 weight at boundaries
-                #? BUT: @ operator still applies uniform weight to all terms in range [:-2] and [1:-1]
-                #? The first and last elements in this range should also get 0.5 weight for full midpoint rule
+                #* no midpoint 1/2 factors because the last element contributes to the diagonal itself and that element has 1/2
+
                 v_old_interior_1 = interior_factor * (l_operator[-2:-1, :-2] @ (g_matrix[1:-1, :].shift(-1, axis=1) + g_matrix[1:-1, :].shift(shift_index-1, axis=1)))
 
                 #* diagonal term convolution since convolving with g_matrix which got shifted by -1
@@ -585,16 +581,12 @@ class UsadelKeldyshEvolution:
 
                 #* Interior sums from F(t, ·): L(t, :) @ g, sum to t-δt
                 #* this summation goes until t-dt so we sum over all elements since the last one corresponds to that time label, the g_matrix starts from 1 since we assume that the g_matrix corresponds to old
-                #? Same endpoint issue as interior_1: @ uses uniform weights for all terms
-                #? Range :-1 and [1:] should have 0.5 weight at their boundaries
                 v_old_interior_3 = interior_factor * (l_operator[-1:, :-1] @ (g_matrix[1:].shift(-1, axis=1) + g_matrix[1:].shift(shift_index-1, axis=1)))
                 
-
                 #* diagonal term convolution since convolving with g_matrix which got shifted by -1
-                #~ diagonal_term_history_list += [(interior_factor * l_operator[-1:,],tau0)]
                 diagonal_term_history_list += [(-interior_factor * l_operator[-1:,],tau0)]
 
-                v_old_contribution = (v_old_boundary_1 + v_old_interior_1 + v_old_interior_3 )
+                v_old_contribution = (v_old_boundary_1 + v_old_interior_1 + v_old_interior_3)
 
                 if rhs_vector is None:
                     rhs_vector = -v_old_contribution
@@ -624,20 +616,20 @@ class UsadelKeldyshEvolution:
 
                 #* V_old contribution: F(t-δt, t') and F(t-δt, t'+shift)
                 #* the extra shift of -1 comes from the fact that g_last_row goes until t-dt, t-dt in both axis, so we need to shift by 1 to multiply g(t-dt, t-dt) with r(t-dt, t-dt)
-                v_old_boundary_1 = boundary_factor * g_last_row.shift(-1, axis=1) * r_diagonal
-                v_old_boundary_2 = boundary_factor * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
+                #* the interior sum below already contains the diagonal R(t',t') with the full weight (δt/4), so the boundary term must be -δt/8 to leave the end point weight 1/2
+                #~ v_old_boundary_1 = boundary_factor * g_last_row.shift(-1, axis=1) * r_diagonal
+                #~ v_old_boundary_2 = boundary_factor * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
+                v_old_boundary_1 = -boundary_factor * g_last_row.shift(-1, axis=1) * r_diagonal
+                v_old_boundary_2 = -boundary_factor * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
 
                 #* diagonal contribution to gk from since shifting g_last_row by -1
-                #~ diagonal_term_factor_list.append((boundary_factor * tau0, r_diagonal[-1]))
                 diagonal_term_factor_list.append((-boundary_factor * tau0, r_diagonal[-1]))
 
                 #* Interior sums: (δt/4)·Σ_{t''} g(t-δt, t'')·R(t'', t')
                 #*  since g is computed using old basis and r is in the new basis, they need to be relatively shifted w.r.t. eachother when summing, last element is t-dt in g and t,.. element is excluded from r term
-                #? Missing endpoint corrections: @ operator uses uniform weights
-                #? Range [1:] for g and [:-1] for r should have 0.5 weight at first/last points
-                #? This is Type 4 right convolution - similar issue as Type 3
+                #* 1/2 weight removed because the diagonal term is used anyway.
                 v_old_interior_1 = interior_factor * (g_last_row[:,1:] @ (r_operator[:-1,:] + r_operator[:-1,:].shift(shift_index, axis=1)))  
-
+                
                 v_old_contribution = v_old_boundary_1 + v_old_boundary_2 + v_old_interior_1
 
                 if rhs_vector is None:
@@ -647,7 +639,9 @@ class UsadelKeldyshEvolution:
 
                 #* V_crt_diag contribution: (δt/8)·g(t, t'+shift)·R(t'+shift, t'+shift)
                 #* here we shift since we are interested in previous term
-                rhs_vector_factor_list.append((-tau0, boundary_factor * r_diagonal.shift(shift_index, axis=0)))
+                #* the history convolution below includes the diagonal of the shifted column R(t'+shift, t'+shift) with the full weight, so this term gets the opposite sign
+                #~ rhs_vector_factor_list.append((-tau0, boundary_factor * r_diagonal.shift(shift_index, axis=0)))
+                rhs_vector_factor_list.append((tau0, boundary_factor * r_diagonal.shift(shift_index, axis=0)))
 
                 #* V_crt interior contributions: (δt/4)·Σ_{t''} g(t, t'')·R(t'', t') and the shifted one 
                 #* the convolution with this term should take approriately such that the last term here is going against the new 1 off diagonal element!
@@ -684,15 +678,15 @@ class UsadelKeldyshEvolution:
 
                 v_old_upper_boundary_shift = boundary_factor * l_operator[-2] * (g_diagonal[-2]) * m_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)
 
-                v_old_lower_boundary = boundary_factor * l_operator[-2] * g_last_row.shift(-1, axis=1) * m_operator * (g_diagonal) * r_operator
+                #* the lower end point t''=t' is also contained in v_old_interior_1 below: g(t'',t') is retarded, so the product picks up t''=t' (g(t',t') = -Δ(t')) with the full weight (δt/4).
+                #* The lower boundary terms are therefore -δt/8 to leave the end point weight 1/2. For t' = t-dt both end points coincide (zero length interval) and the two boundary terms cancel
+                
+                v_old_lower_boundary = -boundary_factor * l_operator[-2] * g_last_row.shift(-1, axis=1) * m_operator * (g_diagonal) * r_operator
 
-                v_old_lower_boundary_shift = boundary_factor * l_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * m_operator.shift(shift_index, axis=0) * (g_diagonal.shift(shift_index, axis=0)) * r_operator.shift(shift_index, axis=0)
+                v_old_lower_boundary_shift = -boundary_factor * l_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * m_operator.shift(shift_index, axis=0) * (g_diagonal.shift(shift_index, axis=0)) * r_operator.shift(shift_index, axis=0)
 
                 #*δt/4 L(t-δt) Σ_{t''=t'+δt}^{t-2δt} g(t-δt,t'')·M(t'')·g(t'',t')·R(t')
                 #* both g's here have the old g_matrix layout we skip first and last elements in g, first due to range and last due to sum going to t-2dt, last element is already included through trapezoidal rule
-                #? Missing endpoint corrections: Type 5 bilinear convolution with @ operator
-                #? Range [1:-1] and [:-2] should have 0.5 weight at boundaries
-                #? This is a sandwich: g @ (M * g * R), both g's need endpoint handling
                 v_old_interior_1 = interior_factor * l_operator[-2] * ((g_last_row[:,1:-1] * m_operator[:-2]) @ (g_matrix[1:-1].shift(-1, axis=1) * r_operator + g_matrix[1:-1,].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0))) 
                 
                 v_old_contribution = (v_old_upper_boundary + v_old_upper_boundary_shift + v_old_lower_boundary + v_old_lower_boundary_shift + v_old_interior_1)
@@ -704,16 +698,17 @@ class UsadelKeldyshEvolution:
 
                 #* Term 1: -δt/8 L(t)·g(t,t'+δt)·M(t'+δt)·Δ(t'+δt)·R(t'+δt)
                 #* these terms convolution has to be controled appropriately in computational part!!!
-                rhs_vector_factor_list.append((-boundary_factor * l_operator[-1], m_operator.shift(shift_index, axis=0) * (g_diagonal.shift(shift_index, axis=0) * r_operator.shift(shift_index, axis=0))))
+                #* lower end point of F(t, t'+δt): the history list below starts at t'' = t'+δt and contains it with the full weight, so this term gets the opposite sign
+                rhs_vector_factor_list.append((boundary_factor * l_operator[-1], m_operator.shift(shift_index, axis=0) * (g_diagonal.shift(shift_index, axis=0) * r_operator.shift(shift_index, axis=0))))
 
                 #* Term 2: -δt/8 L(t)·Δ(t)·M(t)·g(t,t'+δt)·R(t'+δt)
                 rhs_vector_factor_list.append((-boundary_factor * l_operator[-1] * (g_diagonal_current) * m_operator[-1], r_operator.shift(shift_index, axis=0)))
-
                
                 #* V_crt_conv: Interior bilinear sums
                 #*Term 1: δt/4 L(t) Σ_{t''=t'+δt}^{t-δt} g(t,t'')·M(t'')·g(t'',t')·R(t')
                 #* we need to shift the g_matrix operator because the time indicies are shifted by 1 in the passed g_matrix in t' we also shift the other axis since we want the operator to have the proper time indexing w.r.t. new time indices
-                rhs_vector_history_list.append(( -interior_factor * l_operator[-1], m_operator * g_matrix.shift(-1, axis=0).shift(-1, axis=1) * r_operator + m_operator.shift(shift_index, axis=0) * g_matrix.shift(-1, axis=0).shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)))
+                #* M(t'') sits at the integration variable t'' (the row of the history), not at the column t'+δt: it must not be shifted in the second term
+                rhs_vector_history_list.append(( -interior_factor * l_operator[-1], m_operator * g_matrix.shift(-1, axis=0).shift(-1, axis=1) * r_operator + m_operator * g_matrix.shift(-1, axis=0).shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)))
 
             # ========== Type 6: Mixed left-right ∫_{-∞}^t L(t,t'')·g(t'',t')·R(t') dt'' ==========
             elif type_num == 6:
@@ -734,21 +729,20 @@ class UsadelKeldyshEvolution:
 
                 #* diagonal gk contribution since referencing g shifted by -1 
                 #~ diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], r_operator[-1]))
-                diagonal_term_factor_list.append((-boundary_factor * l_operator[-2, -2], r_operator[-1]))
+                #~ diagonal_term_factor_list.append((-boundary_factor * l_operator[-2, -2], r_operator[-1]))
+                #* the diagonal term history below (l_operator[-2:-1,:]) runs up to t'' = t-dt, the end point of F(t-δt, ·), with the full weight (δt/4): the boundary correction must be -δt/8
+                diagonal_term_factor_list.append((boundary_factor * l_operator[-2, -2], r_operator[-1]))
 
                 #*From F(t-δt, ·): L(t-δt, t_init)·g(t_init, t')·R(t')
-                #? Missing endpoint corrections: Type 6 mixed left-right convolution
-                #? @ operator with range [:-2] and [1:-1] uses uniform weights
+
                 v_old_interior_1 = interior_factor * (l_operator[-2:-1, :-2] @ (g_matrix[1:-1, :].shift(-1, axis=1) * r_operator + g_matrix[1:-1, :].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)))
 
-                #~ diagonal_term_history_list += [(interior_factor * l_operator[-2:-1,:],r_operator[-1])]
                 diagonal_term_history_list += [(-interior_factor * l_operator[-2:-1,:],r_operator[-1])]
 
                 #* Interior sums from F(t, ·): L(t, :) @ (g·R), sum to t-δt (Eq. 509)
-                #? Missing endpoint corrections: Type 6 continuation, same issue
-                #? Range [:-1] and [1:] need 0.5 weight at boundaries
+
                 v_old_interior_3 = interior_factor * (l_operator[-1:, :-1] @ (g_matrix[1:].shift(-1, axis=1) * r_operator + g_matrix[1:, :].shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0)))
-                #~ diagonal_term_history_list += [(interior_factor * l_operator[-1:,:],r_operator[-1])]
+
                 diagonal_term_history_list += [(-interior_factor * l_operator[-1:,:],r_operator[-1])]
 
                 # Combine ALL V_old contributions
@@ -780,17 +774,14 @@ class UsadelKeldyshEvolution:
                 right_sandwich = r_diagonal
                 g_sandwich_matrices.append((left_sandwich, right_sandwich))
 
-                v_old_boundary_1 = boundary_factor * l_operator[-2] * g_last_row.shift(-1, axis=1) * r_diagonal
-                v_old_boundary_2 = boundary_factor * l_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
+                #* same as type 4: the interior sum contains the diagonal R(t',t') with the full weight (δt/4), so the boundary terms are -δt/8
+                v_old_boundary_1 = -boundary_factor * l_operator[-2] * g_last_row.shift(-1, axis=1) * r_diagonal
+                v_old_boundary_2 = -boundary_factor * l_operator[-2] * g_last_row.shift(shift_index-1, axis=1) * r_diagonal.shift(shift_index, axis=0)
 
                 #* diagonal gk contribution since referencing g shifted by -1
-                #~ diagonal_term_factor_list.append((boundary_factor * l_operator[-2], r_diagonal[-1]))
                 diagonal_term_factor_list.append((-boundary_factor * l_operator[-2], r_diagonal[-1]))
             
                 #* Interior sums: (δt/4)·L(t-δt)·Σ_{t''=t_init+δt}^{t'} g(t-δt, t'')·R(t'', t') (Eq. 566-567)
-                #? Missing endpoint corrections: Type 7 mixed right-left convolution
-                #? @ operator with range [1:] and [:-1] uses uniform weights
-                #? Variable upper limit at t' means each column has different integration range
                 v_old_interior_1 = interior_factor * l_operator[-2] * (g_last_row[:,1:] @ (r_operator[:-1] +  r_operator[:-1].shift(shift_index, axis=1)))
 
                 v_old_contribution = (v_old_boundary_1 + v_old_boundary_2 + v_old_interior_1)
@@ -801,7 +792,9 @@ class UsadelKeldyshEvolution:
                     rhs_vector = rhs_vector -v_old_contribution
 
                 #* δt/8 L(t)·g(t,t'+δt)·R(t'+δt,t'+δt)
-                rhs_vector_factor_list.append((-boundary_factor * l_operator[-1], r_diagonal.shift(shift_index, axis=0)))
+                #* the history list below contains the diagonal of the shifted column with the full weight, so this term gets the opposite sign (same as type 4)
+                #~ rhs_vector_factor_list.append((-boundary_factor * l_operator[-1], r_diagonal.shift(shift_index, axis=0)))
+                rhs_vector_factor_list.append((boundary_factor * l_operator[-1], r_diagonal.shift(shift_index, axis=0)))
 
                 #*Interior sums 
                 #*δt/4 L(t) Σ_{t''=t_init+δt}^{t'-δt} g(t,t'')·R(t'',t')
@@ -827,7 +820,6 @@ class UsadelKeldyshEvolution:
                 v_old_contribution = cn_factor * l_operator[-2] * (g_last_row.shift(-1, axis=1) * r_operator + g_last_row.shift(shift_index-1, axis=1) * r_operator.shift(shift_index, axis=0) )
 
                 #* Diagonal correction for g^K diagonal element since referencing g shifted by -1
-                #~ diagonal_term_factor_list.append((cn_factor * l_operator[-2], r_operator[-1]))
                 diagonal_term_factor_list.append((-cn_factor * l_operator[-2], r_operator[-1]))
 
                 if rhs_vector is None:

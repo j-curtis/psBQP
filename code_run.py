@@ -138,17 +138,41 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         old_temperature = initial_state_kwargs['system_parameters']['temperature']
         new_temperature = system_parameters['temperature']
 
+        bcs_coupling_constant = initial_state.bcs_coupling_constant
+
         if not np.isclose(old_temperature, new_temperature):
 
-            thermal_dist_old = ThermalConvolutions(old_temperature, grid_parameters).thermal_dist
-            thermal_dist_new = ThermalConvolutions(new_temperature, grid_parameters).thermal_dist
+            #~ thermal_dist_old = ThermalConvolutions(old_temperature, grid_parameters).thermal_dist
+            #~ thermal_dist_new = ThermalConvolutions(new_temperature, grid_parameters).thermal_dist
+            thermal_old = ThermalConvolutions(old_temperature, grid_parameters)
+            thermal_new = ThermalConvolutions(new_temperature, grid_parameters)
+            thermal_dist_old = thermal_old.thermal_dist
+            thermal_dist_new = thermal_new.thermal_dist
 
             tau_3 = NambuKeldyshTensor(1.0, pauli_channel=3)
 
-            # Apply correction: gk_new = gk_old + 2 * tau_3 * (thermal_old - thermal_new)
+            #* the stored gk is g'' = g^K - 2 tau_3 F - T with T = -(Delta*Int_F + Int_F*Delta): the physical g^K is kept and g'' is re-expressed with the kernels of the new temperature
+            #* gap history is read before gk is changed (with the old coupling), the gap is a function of time since the loaded state can be out of equilibrium
+            gap_history = initial_state.get_gap_history()
+            gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
+
+            # Apply correction: gk_new = gk_old + 2 * tau_3 * (thermal_old - thermal_new) + (T_old - T_new)
             thermal_diff = thermal_dist_old - thermal_dist_new
-            correction = 2.0 * tau_3 * thermal_diff
+            thermal_gap_diff = thermal_old.thermal_gap_term(gap_tensor) - thermal_new.thermal_gap_term(gap_tensor)
+            #~ correction = 2.0 * tau_3 * thermal_diff
+            correction = 2.0 * tau_3 * thermal_diff + thermal_gap_diff
+
+            #* thermal_integral is set to zero on the coincident points, but its regularized value there is -(i/pi) ln T + (T independent), this is where the ln(Tc/T) of the coupling comes from.
+            #* so the diagonal of T = -(Delta*Int_F + Int_F*Delta) changes by (2i/pi) ln(T_old/T_new) Delta(t), which changes Tr[tau_- gk(t,t)] by (2/pi) ln(T_old/T_new) Delta(t)
+            diagonal_correction_data = np.zeros_like(initial_state.gk.data)
+            diagonal_index = np.arange(initial_state.gk.data.shape[2])
+            diagonal_correction_data[:, :, diagonal_index, diagonal_index] = (2j/np.pi) * np.log(old_temperature/new_temperature) * gap_tensor.data
+            correction = correction + NambuKeldyshTensor(diagonal_correction_data)
+
             initial_state.gk = initial_state.gk + correction
+
+            #* coupling of the new temperature, same expression as in generate_initial_state, such that the gap read from the shifted gk is the loaded one
+            bcs_coupling_constant = -1 / (1/2/np.pi * np.log(system_parameters['critical_temperature']/new_temperature))
 
             # Determine if we need to track occupations
             track_occupations = (track_every_n is not None)
@@ -167,7 +191,8 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         # Save occupation_function before recreating StateObject
         saved_occupation = initial_state.occupation_function
 
-        initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, temperature=system_parameters['temperature'], grid_params=grid_parameters)
+        #~ initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant= initial_state.bcs_coupling_constant, temperature=system_parameters['temperature'], grid_params=grid_parameters)
+        initial_state = StateObject(gr=initial_state.gr, gk=initial_state.gk, track_occupation=track_occupations, bcs_coupling_constant=bcs_coupling_constant, temperature=system_parameters['temperature'], grid_params=grid_parameters)
 
         # Restore occupation_function after StateObject creation
         if saved_occupation is not None:

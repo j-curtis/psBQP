@@ -292,6 +292,11 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
     gap_errors = np.array(gap_errors)
     currents = np.array(currents)
 
+    print("\nPlotted values (T = %.4g, eta = %.4g):" % (temperature, eta))
+    print(f"  {'A':>10s}  {'|Gap|':>14s}  {'Re(Current)':>14s}")
+    for A, gap, current in zip(vector_potentials, gaps, currents):
+        print(f"  {A:10.6f}  {np.abs(gap):14.8e}  {np.real(current):14.8e}")
+
     # Results dictionary
     results = {
         'vector_potentials': vector_potentials,
@@ -376,7 +381,7 @@ if __name__ == "__main__":
 
     critical_temperature = 1.0
     eta = 0.2
-    time_sampling = 501
+    time_sampling = 751
     time_duration = 2 * np.pi * 5
     save_dir = 'equilibrium_results'
 

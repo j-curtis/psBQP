@@ -1849,6 +1849,11 @@ def plot_gap_vs_parameter(timestamp, directory_job_index=None, inner_parameter=N
                   + ", ".join(f"{v:.4g}" for v in x[invalid]) + " (not plotted)")
 
         label = _outer_label(detection, position, outer_names)
+        print(f"  file {file_index}, {label}:")
+        print(f"    {inner_parameter:>16s}  {'|gap|/T_c':>14s}")
+        for x_value, gap_value in zip(x[~invalid], gaps[~invalid]):
+            print(f"    {x_value:16.6g}  {gap_value:14.8e}")
+
         color = cmap(position / max(n_files - 1, 1) * 0.85)
         ax.plot(x[~invalid], gaps[~invalid], marker=marker, color=color, linewidth=2.5, markersize=7, alpha=0.85, label=label)
         x_list.append(x)
@@ -2195,3 +2200,117 @@ def plot_consistency_rows(timestamp, directory_job_index=0, job_index=0, source=
     rows_data['maxima'] = maxima
     rows_data['figure'] = fig
     return rows_data
+
+
+# ======================================================================================================
+# State evolution results (compute_keywords=['state_evolution'])
+# ======================================================================================================
+
+def _job_labels(data, jobs):
+    """Legend labels of the jobs built from the parameters (system and field) that differ between them, and the common ones."""
+    field_params = data.get('field_params', None)
+    per_job = []
+    for job in jobs:
+        parameters = _numeric_items(data['system_parameters'][job])
+        if field_params is not None:
+            parameters.update(_numeric_items(field_params[job]))
+        per_job.append(parameters)
+
+    names = sorted(set.intersection(*[set(p) for p in per_job])) if per_job else []
+    varying = [n for n in names if len(per_job) > 1 and _varies([p[n] for p in per_job])]
+    common = {n: per_job[0][n] for n in names if n not in varying and n != 'critical_temperature'}
+
+    labels = []
+    for job, parameters in zip(jobs, per_job):
+        parts = [f"{_parameter_label(n)} = {parameters[n]:.4g}" for n in varying]
+        labels.append(", ".join(parts) if parts else f"job {job}")
+    common_text = ", ".join(f"{_parameter_label(n)} = {v:.4g}" for n, v in common.items())
+    return labels, common_text, varying
+
+
+def plot_state_evolution(timestamp, directory_job_index=0, job_indices=None, gap='deviation',
+                         observables=('gap', 'current', 'vector_potential'), save_plot=False, save_dir=None,
+                         running_machine='laptop', colormap='viridis', xlim=None, show=True):
+    """
+    Plot gap, current and vector potential versus time for the jobs of a 'state_evolution' postprocessed file.
+
+    Args:
+        timestamp: Postprocessed timestamp folder (needs 'state_evolution' data)
+        directory_job_index: index of the result file (default 0)
+        job_indices: list of inner jobs to plot (default: all)
+        gap: 'deviation' -> (|Delta(t)| - |Delta(0)|)/T_c (the quantity entering the FFT of 'spectral_analysis'),
+             'relative'  -> (|Delta(t)| - |Delta(0)|)/|Delta(0)|, 'absolute' -> |Delta(t)|/T_c
+        observables: subset of ('gap', 'current', 'vector_potential'), one panel each
+        save_plot, save_dir, running_machine: as in the other plotting functions
+        colormap: colormap over the jobs
+        xlim: time axis limits
+        show: call plt.show()
+
+    Returns:
+        dict with 'times', 'gap' (the plotted gap quantity), 'gap_absolute' (|Delta|/T_c), 'current', 'vector_potential'
+        (lists with one array per plotted job), 'labels', 'job_indices'
+    """
+    data = load_postprocessed_data(timestamp, directory_job_index, running_machine)
+    if 'gap_evolution' not in data:
+        raise ValueError(f"Timestamp {timestamp}, file {directory_job_index} has no time series; "
+                         f"run run_postprocessor with compute_keywords=['state_evolution'] first (keys: {sorted(data.keys())})")
+    if gap not in ('deviation', 'relative', 'absolute'):
+        raise ValueError("gap must be 'deviation', 'relative' or 'absolute'")
+
+    jobs = list(range(len(data['gap_evolution']))) if job_indices is None else [int(j) for j in job_indices]
+    labels, common_text, varying = _job_labels(data, jobs)
+
+    gap_titles = {'deviation': r'$(|\Delta(t)|-|\Delta(0)|)/T_c$',
+                  'relative': r'$(|\Delta(t)|-|\Delta(0)|)/|\Delta(0)|$',
+                  'absolute': r'$|\Delta(t)|/T_c$'}
+    panel_labels = {'gap': gap_titles[gap], 'current': r'$J(t)$', 'vector_potential': r'$A(t)$'}
+
+    fig, axes = plt.subplots(len(observables), 1, figsize=(10, 3.8 * len(observables)), sharex=True, squeeze=False)
+    axes = axes[:, 0]
+    cmap = plt.get_cmap(colormap)
+
+    result = {'times': [], 'gap': [], 'gap_absolute': [], 'current': [], 'vector_potential': [], 'labels': labels, 'job_indices': jobs}
+    for position, job in enumerate(jobs):
+        gaps = np.abs(np.asarray(data['gap_evolution'][job]))
+        t_c = data['system_parameters'][job].get('critical_temperature', 1.0)
+        times = data['times'][job] if data.get('times') is not None and data['times'][job] is not None else np.arange(len(gaps))
+        times = np.asarray(times)
+
+        if gap == 'deviation':
+            gap_plot = (gaps - gaps[0]) / t_c
+        elif gap == 'relative':
+            gap_plot = (gaps - gaps[0]) / gaps[0]
+        else:
+            gap_plot = gaps / t_c
+
+        series = {'gap': gap_plot,
+                  'current': np.real(np.asarray(data['current_evolution'][job])),
+                  'vector_potential': np.real(np.asarray(data['vector_potential_evolution'][job]))}
+        color = cmap(position / max(len(jobs) - 1, 1) * 0.85)
+        for ax, name in zip(axes, observables):
+            ax.plot(times, series[name], color=color, linewidth=2.2, alpha=0.9, label=labels[position])
+
+        result['times'].append(times)
+        result['gap'].append(gap_plot)
+        result['gap_absolute'].append(gaps / t_c)
+        result['current'].append(series['current'])
+        result['vector_potential'].append(series['vector_potential'])
+
+    for ax, name in zip(axes, observables):
+        ax.set_ylabel(panel_labels[name], fontsize=21)
+        ax.grid(True, alpha=0.3)
+    axes[-1].set_xlabel(r'$t$', fontsize=21)
+    if xlim is not None:
+        axes[-1].set_xlim(xlim)
+    if len(jobs) > 1:
+        axes[0].legend(fontsize=12, framealpha=0.9, loc='best', ncol=2 if len(jobs) > 6 else 1)
+    if common_text:
+        axes[0].set_title(r'\small{' + common_text + '}', fontsize=21)
+    fig.tight_layout()
+
+    if save_plot:
+        _save_figure(fig, save_dir, f'state_evolution_{timestamp}_{directory_job_index}.svg', timestamp)
+    if show:
+        plt.show()
+
+    return result

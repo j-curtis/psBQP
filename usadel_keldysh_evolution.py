@@ -283,16 +283,16 @@ class UsadelKeldyshEvolution:
 
     # ---------- CN averaging functions (general, previously nested inside _compute_new_gk_complete) ----------
 
-    #? Remains to be fully checked from Terms 4 onwards
+    #TODO: Remains to be fully checked
     def cn_derivative1_average(self, tensor, shift_index = 1):
         cn_derivative_factor = 1/2
         return cn_derivative_factor * (tensor[-1:] + tensor[-1:].shift(shift_index, axis=1)) - cn_derivative_factor * (tensor[-2:-1] + tensor[-2:-1].shift(shift_index, axis=1))
-    #? Remains to be fully checked from Terms 4 onwards
+    #TODO: Remains to be fully checked
     def cn_derivative2_average(self, tensor, shift_index = 1):
         cn_derivative_factor = 1/2
         return cn_derivative_factor * (tensor[-1:] + tensor[-2:-1]) - cn_derivative_factor * ( tensor[-1:].shift(shift_index, axis=1) + tensor[-2:-1].shift(shift_index, axis=1))
 
-    #? Remains to be fully checked from Terms 4 onwards
+    #TODO: Remains to be fully checked
     def cn_plaquette_average(self, tensor, shift_index = 1):
         """
         Computes CN average of a tensor over the four corners (t, t'), (t, t'+shift), (t-dt, t'), (t-dt, t'+shift),
@@ -308,7 +308,7 @@ class UsadelKeldyshEvolution:
 
         return result
 
-    #? Remains to be fully checked from Terms 4 onwards
+    #TODO: Remains to be fully checked
     def two_row_source(self, row_function):
         """
         Stack row_function(dt_shift) for dt_shift = 1 (row t-dt) and dt_shift = 0 (row t) into a (2,2,2,Nt) tensor.
@@ -318,9 +318,8 @@ class UsadelKeldyshEvolution:
         return NambuKeldyshTensor(np.concatenate([row.data for row in rows], axis=2))
 
     # ========== CN implementation of the operators from continous to discrete space ========== 
-    # #TODO: check Terms 3 onwards -- as only 1/2 come into equilibrium at A = 0 
     #! check diagonal term contributions -- already fixed? 
-    #? Remains to be fully checked from Terms 4 onwards
+    #TODO: Remains to be fully checked from Terms 4 onwards
     def construct_discrete_operators(self, terms_dict, state, gap_tensor, g_type = 'r', additional_shift_index = 0):
         #* function assumes that all the terms are computed for the current computation time (t,t)
         #* assumes state last element is (t-dt,t-dt), which is true by default
@@ -1106,8 +1105,9 @@ class UsadelKeldyshEvolution:
         elif g_type == 'k':
             return solution_tensor
 
-    # ========== Update rules for gr and gk ========== #TODO: check everything is consistent even in A = 0 case
+    # ========== Update rules for gr and gk ==========
 
+    #TODO: Remains to be fully checked 
     def _compute_new_gr_row(self, state, gap_history, A_history=None):
         """
         Evolve retarded Green's function gr by one timestep using Crank-Nicolson discretization.
@@ -1201,6 +1201,7 @@ class UsadelKeldyshEvolution:
         )
         return gr_new, gr_diagonal_new 
 
+    #TODO: Remains to be fully checked 
     def _compute_new_gk_complete(self, state, gap_history, A_history=None):
         """
         Evolve Keldysh Green's function g^K by one timestep using Crank-Nicolson discretization.
@@ -1418,7 +1419,7 @@ class UsadelKeldyshEvolution:
 
         return gap_new, current_new, vector_potential_new
 
-    #? remains to be checked
+    #TODO: Remains to be fully checked 
     def _evolve_state_gap_and_vector_potential(self, state, A_external, circuit_params, driving_field_current, driving_field_next,
                                                current_no_gradient, gap_tolerance, vector_potential_tolerance, max_iterations):
         """
@@ -1485,7 +1486,7 @@ class UsadelKeldyshEvolution:
 
         return gap_new, current_new, vector_potential_new
 
-    #? remains to be fully checked 
+    #TODO: Remains to be fully checked
     def update_vector_potential(self, old_vector_potential, driving_field_current=None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None, state=None):
         """
         Update vector potential using sliding window or Crank-Nicolson scheme.

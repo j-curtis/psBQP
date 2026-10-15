@@ -258,6 +258,9 @@ class UsadelKeldyshEvolution:
             compute_gk=True
         )
 
+        #* gap of the frequency-domain solution (before the FFT to the two-time state), the gap read from the two-time gk differs from it at O(dt)
+        self.equilibrium_gap = equilibrium_solver.gap_0
+
         # Compute equilibrium current using old solver's _get_current method
         # Need thermal distribution in frequency domain from old solver
         f_eq = equilibrium_solver._get_thermal_occupation(self.temperature)
@@ -1168,6 +1171,30 @@ class UsadelKeldyshEvolution:
         boundary_correction =  +1j * tau3 * gr_diagonal_new * NambuKeldyshTensor([np.append(np.zeros(self.ntpoints-1),[1.0])], pauli_channel=0).shift(-1, axis=1) #* correction due to delta jump condition term
         V1 = V1 + v_old_deriv + boundary_correction
 
+        #* the plaquette of the entry t'=t-dt has its centre on the jump of g^R at t=t': the corners (t,t) and (t-dt,t-dt) of the local terms (types 1, 2, 8) enter with theta(0)=1/2,
+        #* construct_discrete_operators weights them with 1, so 1/2 of their (1/4 dt) contribution is added back here
+        #* gap terms cancel since [Delta, g(t,t)] = 0, the damping and EM local terms do not
+        gr_diagonal_old = state.gr[-1, -1]
+        diagonal_corner_sum = None
+        for term_name, term_spec in evolution_terms.items():
+            term_type = int(re.search(r'type(\d+)', term_name).group(1))
+            if term_type == 1:
+                left_op = term_spec['L']
+                corner = left_op[-1] * gr_diagonal_new + left_op[-2] * gr_diagonal_old
+            elif term_type == 2:
+                right_op = term_spec['R']
+                corner = gr_diagonal_new * right_op[-1] + gr_diagonal_old * right_op[-2]
+            elif term_type == 8:
+                left_op, right_op = term_spec['L'], term_spec['R']
+                corner = left_op[-1] * gr_diagonal_new * right_op[-1] + left_op[-2] * gr_diagonal_old * right_op[-2]
+            else:
+                continue
+            diagonal_corner_sum = corner if diagonal_corner_sum is None else diagonal_corner_sum + corner
+
+        if diagonal_corner_sum is not None:
+            first_entry = NambuKeldyshTensor([np.append(np.zeros(self.ntpoints-1),[1.0])], pauli_channel=0).shift(-1, axis=1)
+            V1 = V1 + (self.delta_t / 8.0) * diagonal_corner_sum * first_entry
+
         # ========== 5. Build normalization constraint operators ==========
         L2, R2, V2, Vhist2, Vfact2, sandwich2 = self.get_gr_constraint(state, gap_tensor)
 
@@ -1328,7 +1355,7 @@ class UsadelKeldyshEvolution:
         return trial_state
 
     #~ def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=10):
-    def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-3, max_gap_iterations=25, circuit_params=None, driving_field_current=None, driving_field_next=None, current_no_gradient=None, vector_potential_tolerance=1e-3):
+    def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=25, circuit_params=None, driving_field_current=None, driving_field_next=None, current_no_gradient=None, vector_potential_tolerance=1e-3):
         
         """
         Evolve state by one timestep using Crank-Nicolson discretization, with a self-consistent gap Δ(t).

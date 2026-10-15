@@ -1186,6 +1186,8 @@ def plot_static_observables(timestamp, directory_job_index=0, parameter=None,
 
     # Normalize observables
     gap_normalized = np.abs(averaged_gaps) / T_c
+    #* std of |gap| over the last 50 timesteps, None for files saved before it existed
+    gap_error_normalized = np.asarray(data['gap_std']) / T_c if 'gap_std' in data else None
 
     # For current normalization, need to handle vector potential scaling
     # Each job has one A value, so use max across all jobs as A_0
@@ -1203,8 +1205,14 @@ def plot_static_observables(timestamp, directory_job_index=0, parameter=None,
     color = cmap(0.6)
 
     # ========== Plot gap vs parameter ==========
-    ax_gap.plot(x_normalized, gap_normalized, marker=marker,
-                color=color, linewidth=3, markersize=8, alpha=0.8)
+    #~ ax_gap.plot(x_normalized, gap_normalized, marker=marker,
+    #~             color=color, linewidth=3, markersize=8, alpha=0.8)
+    if gap_error_normalized is None:
+        ax_gap.plot(x_normalized, gap_normalized, marker=marker,
+                    color=color, linewidth=3, markersize=8, alpha=0.8)
+    else:
+        ax_gap.errorbar(x_normalized, gap_normalized, yerr=gap_error_normalized, marker=marker,
+                        color=color, linewidth=3, markersize=8, alpha=0.8, capsize=4, elinewidth=1.8)
     ax_gap.set_xlabel(xlabel, fontsize=21)
     ax_gap.set_ylabel(r'$|\Delta|/T_c$', fontsize=21)
     ax_gap.set_title(r'Gap vs ' + xlabel.strip('$'), fontsize=23)
@@ -1796,7 +1804,7 @@ def _save_figure(fig, save_dir, filename, timestamp):
 
 def plot_gap_vs_parameter(timestamp, directory_job_index=None, inner_parameter=None, outer_parameters=None,
                           save_plot=False, save_dir=None, running_machine='laptop', colormap='viridis',
-                          marker='o', ylim=None, xlim=None, show=True):
+                          marker='o', ylim=None, xlim=None, show=True, error_type='range'):
     """
     Plot |gap|/T_c versus the parameter varying inside the files, one curve per file, and write out which parameter
     differs between the files (legend) together with the parameters that are constant.
@@ -1811,11 +1819,18 @@ def plot_gap_vs_parameter(timestamp, directory_job_index=None, inner_parameter=N
         marker: Marker style
         ylim, xlim: Axis limits
         show: call plt.show()
+        error_type: 'range' (default): error bars from the minimum to the maximum of |gap| over the last 50 timesteps,
+                    'std': symmetric error bars with the standard deviation of |gap| over the last 50 timesteps
 
     Returns:
         dict with 'detection' (see detect_job_parameters), 'x' (list of arrays), 'gaps' (list of |gap|/T_c arrays),
+        'gap_errors' (list of (2, n) arrays, lower and upper error of |gap|/T_c over the last 50 timesteps,
+        None if the file has no gap history / gap_std),
         'labels' (list of legend labels), 'file_indices', 'inner_parameter'
     """
+    if error_type not in ('range', 'std'):
+        raise ValueError(f"error_type must be 'range' or 'std', got '{error_type}'")
+
     detection = detect_job_parameters(timestamp, running_machine, directory_job_index)
 
     if inner_parameter is None:
@@ -1836,12 +1851,23 @@ def plot_gap_vs_parameter(timestamp, directory_job_index=None, inner_parameter=N
     cmap = plt.get_cmap(colormap)
     n_files = len(detection['file_indices'])
 
-    x_list, gap_list, labels = [], [], []
+    x_list, gap_list, error_list, labels = [], [], [], []
     for position, file_index in enumerate(detection['file_indices']):
         data = load_postprocessed_data(timestamp, file_index, running_machine)
         x = np.asarray(detection['inner_values'][inner_parameter][position], dtype=float)
         t_c = data['system_parameters'][0].get('critical_temperature', 1.0)
         gaps = np.abs(np.asarray(data['averaged_gaps'])) / t_c
+        #* errors as (2, n): lower and upper distance from the plotted (averaged) gap
+        gap_errors = None
+        if error_type == 'range' and 'gap_evolution' in data:
+            #* min and max of |gap| over the last 50 timesteps; the averaged gap is clipped into the interval so the bars stay non-negative
+            last_gaps = [np.abs(np.asarray(g))[-50:] / t_c for g in data['gap_evolution']]
+            lower = np.maximum(gaps - np.array([g.min() for g in last_gaps]), 0.0)
+            upper = np.maximum(np.array([g.max() for g in last_gaps]) - gaps, 0.0)
+            gap_errors = np.array([lower, upper])
+        elif 'gap_std' in data:
+            gap_std = np.asarray(data['gap_std']) / t_c
+            gap_errors = np.array([gap_std, gap_std])
 
         invalid = ~np.isfinite(gaps)
         if np.any(invalid):
@@ -1850,14 +1876,26 @@ def plot_gap_vs_parameter(timestamp, directory_job_index=None, inner_parameter=N
 
         label = _outer_label(detection, position, outer_names)
         print(f"  file {file_index}, {label}:")
-        print(f"    {inner_parameter:>16s}  {'|gap|/T_c':>14s}")
-        for x_value, gap_value in zip(x[~invalid], gaps[~invalid]):
-            print(f"    {x_value:16.6g}  {gap_value:14.8e}")
+        if gap_errors is None:
+            print(f"    {inner_parameter:>16s}  {'|gap|/T_c':>14s}")
+            for x_value, gap_value in zip(x[~invalid], gaps[~invalid]):
+                print(f"    {x_value:16.6g}  {gap_value:14.8e}")
+        else:
+            error_header = ('-min (last 50)', '+max (last 50)') if error_type == 'range' else ('-std (last 50)', '+std (last 50)')
+            print(f"    {inner_parameter:>16s}  {'|gap|/T_c':>14s}  {error_header[0]:>14s}  {error_header[1]:>14s}")
+            for x_value, gap_value, lower_value, upper_value in zip(x[~invalid], gaps[~invalid], gap_errors[0][~invalid], gap_errors[1][~invalid]):
+                print(f"    {x_value:16.6g}  {gap_value:14.8e}  {lower_value:14.8e}  {upper_value:14.8e}")
 
         color = cmap(position / max(n_files - 1, 1) * 0.85)
-        ax.plot(x[~invalid], gaps[~invalid], marker=marker, color=color, linewidth=2.5, markersize=7, alpha=0.85, label=label)
+        #~ ax.plot(x[~invalid], gaps[~invalid], marker=marker, color=color, linewidth=2.5, markersize=7, alpha=0.85, label=label)
+        if gap_errors is None:
+            ax.plot(x[~invalid], gaps[~invalid], marker=marker, color=color, linewidth=2.5, markersize=7, alpha=0.85, label=label)
+        else:
+            ax.errorbar(x[~invalid], gaps[~invalid], yerr=gap_errors[:, ~invalid], marker=marker, color=color, linewidth=2.5, markersize=7,
+                        alpha=0.85, capsize=4, elinewidth=1.8, label=label)
         x_list.append(x)
         gap_list.append(gaps)
+        error_list.append(gap_errors)
         labels.append(label)
 
     ax.set_xlabel(_parameter_label(inner_parameter), fontsize=21)
@@ -1879,7 +1917,7 @@ def plot_gap_vs_parameter(timestamp, directory_job_index=None, inner_parameter=N
     if show:
         plt.show()
 
-    return {'detection': detection, 'x': x_list, 'gaps': gap_list, 'labels': labels,
+    return {'detection': detection, 'x': x_list, 'gaps': gap_list, 'gap_errors': error_list, 'labels': labels,
             'file_indices': detection['file_indices'], 'inner_parameter': inner_parameter}
 
 
@@ -2257,6 +2295,10 @@ def plot_state_evolution(timestamp, directory_job_index=0, job_indices=None, gap
     if gap not in ('deviation', 'relative', 'absolute'):
         raise ValueError("gap must be 'deviation', 'relative' or 'absolute'")
 
+    #* 'static' files carry only the gap time series (no current / vector potential): skip the panels that have no data
+    available = {'gap': 'gap_evolution', 'current': 'current_evolution', 'vector_potential': 'vector_potential_evolution'}
+    observables = tuple(name for name in observables if available[name] in data)
+
     jobs = list(range(len(data['gap_evolution']))) if job_indices is None else [int(j) for j in job_indices]
     labels, common_text, varying = _job_labels(data, jobs)
 
@@ -2283,9 +2325,11 @@ def plot_state_evolution(timestamp, directory_job_index=0, job_indices=None, gap
         else:
             gap_plot = gaps / t_c
 
-        series = {'gap': gap_plot,
-                  'current': np.real(np.asarray(data['current_evolution'][job])),
-                  'vector_potential': np.real(np.asarray(data['vector_potential_evolution'][job]))}
+        series = {'gap': gap_plot}
+        if 'current_evolution' in data:
+            series['current'] = np.real(np.asarray(data['current_evolution'][job]))
+        if 'vector_potential_evolution' in data:
+            series['vector_potential'] = np.real(np.asarray(data['vector_potential_evolution'][job]))
         color = cmap(position / max(len(jobs) - 1, 1) * 0.85)
         for ax, name in zip(axes, observables):
             ax.plot(times, series[name], color=color, linewidth=2.2, alpha=0.9, label=labels[position])
@@ -2293,8 +2337,8 @@ def plot_state_evolution(timestamp, directory_job_index=0, job_indices=None, gap
         result['times'].append(times)
         result['gap'].append(gap_plot)
         result['gap_absolute'].append(gaps / t_c)
-        result['current'].append(series['current'])
-        result['vector_potential'].append(series['vector_potential'])
+        result['current'].append(series.get('current'))
+        result['vector_potential'].append(series.get('vector_potential'))
 
     for ax, name in zip(axes, observables):
         ax.set_ylabel(panel_labels[name], fontsize=21)

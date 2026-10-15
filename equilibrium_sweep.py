@@ -57,6 +57,7 @@ def compute_equilibrium_gap_vs_temperature(
 
     # Storage arrays
     gaps = []
+    gaps_solver = []
     gap_errors = []
 
     # Grid parameters (time domain)
@@ -108,26 +109,34 @@ def compute_equilibrium_gap_vs_temperature(
             n_tail = max(1, len(gap_history) // 10)
             gap_std = np.std(np.abs(gap_history[-n_tail:]))
 
+            #* gap of the frequency-domain solution (before the FFT), stored by generate_initial_state
+            gap_solver = float(np.real(evolution.equilibrium_gap))
+
             gaps.append(gap_eq)
+            gaps_solver.append(gap_solver)
             gap_errors.append(gap_std)
 
-            print(f"  → Gap: {gap_magnitude:.6f} (Re: {np.real(gap_eq):.6f}, Im: {np.imag(gap_eq):.6f})")
+            print(f"  → Gap before FFT (solver): {abs(gap_solver):.6f}")
+            print(f"  → Gap after FFT (from two-time gk): {gap_magnitude:.6f} (Re: {np.real(gap_eq):.6f}, Im: {np.imag(gap_eq):.6f}), ratio {gap_magnitude/abs(gap_solver):.5f}")
             print(f"  → Error estimate: {gap_std:.6e}")
 
         except Exception as e:
             print(f"  ERROR: Failed to compute equilibrium at T={T:.4f}")
             print(f"  {str(e)}")
             gaps.append(np.nan)
+            gaps_solver.append(np.nan)
             gap_errors.append(np.nan)
 
     # Convert to arrays
     gaps = np.array(gaps)
+    gaps_solver = np.array(gaps_solver)
     gap_errors = np.array(gap_errors)
 
     # Results dictionary
     results = {
         'temperatures': temperatures,
         'gaps': gaps,
+        'gaps_solver': gaps_solver,
         'gap_errors': gap_errors,
         'parameters': {
             'T_min': T_min,
@@ -216,6 +225,7 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
 
     # Storage arrays
     gaps = []
+    gaps_solver = []
     currents = []
     gap_errors = []
 
@@ -272,11 +282,16 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
             # Current magnitude
             current_magnitude = np.abs(current_eq)
 
+            #* gap of the frequency-domain solution (before the FFT), stored by generate_initial_state
+            gap_solver = float(np.real(evolution.equilibrium_gap))
+
             gaps.append(gap_eq)
+            gaps_solver.append(gap_solver)
             gap_errors.append(gap_std)
             currents.append(current_eq)
 
-            print(f"  → Gap: {gap_magnitude:.6f} (Re: {np.real(gap_eq):.6f}, Im: {np.imag(gap_eq):.6f})")
+            print(f"  → Gap before FFT (solver): {abs(gap_solver):.6f}")
+            print(f"  → Gap after FFT (from two-time gk): {gap_magnitude:.6f} (Re: {np.real(gap_eq):.6f}, Im: {np.imag(gap_eq):.6f}), ratio {gap_magnitude/abs(gap_solver):.5f}")
             print(f"  → Current: {current_magnitude:.6f} (Re: {np.real(current_eq):.6f}, Im: {np.imag(current_eq):.6f})")
             print(f"  → Gap error: {gap_std:.6e}")
 
@@ -284,23 +299,26 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
             print(f"  ERROR: Failed to compute equilibrium at A={A:.4f}")
             print(f"  {str(e)}")
             gaps.append(np.nan)
+            gaps_solver.append(np.nan)
             gap_errors.append(np.nan)
             currents.append(np.nan)
 
     # Convert to arrays
     gaps = np.array(gaps)
+    gaps_solver = np.array(gaps_solver)
     gap_errors = np.array(gap_errors)
     currents = np.array(currents)
 
     print("\nPlotted values (T = %.4g, eta = %.4g):" % (temperature, eta))
-    print(f"  {'A':>10s}  {'|Gap|':>14s}  {'Re(Current)':>14s}")
-    for A, gap, current in zip(vector_potentials, gaps, currents):
-        print(f"  {A:10.6f}  {np.abs(gap):14.8e}  {np.real(current):14.8e}")
+    print(f"  {'A':>10s}  {'|Gap| (FFT)':>14s}  {'Gap (solver)':>14s}  {'Re(Current)':>14s}")
+    for A, gap, gap_solver, current in zip(vector_potentials, gaps, gaps_solver, currents):
+        print(f"  {A:10.6f}  {np.abs(gap):14.8e}  {np.abs(gap_solver):14.8e}  {np.real(current):14.8e}")
 
     # Results dictionary
     results = {
         'vector_potentials': vector_potentials,
         'gaps': gaps,
+        'gaps_solver': gaps_solver,
         'currents': currents,
         'gap_errors': gap_errors,
         'parameters': {
@@ -329,16 +347,16 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
             f.write(f"# T = {temperature}, T_c = {critical_temperature}, eta = {eta}\n")
             f.write(f"# time_sampling = {time_sampling}, time_duration = {time_duration}\n")
             f.write("#\n")
-            f.write("# Columns: A  Re(Gap)  Im(Gap)  |Gap|  Re(Current)  Im(Current)  |Current|  Gap_Error\n")
+            f.write("# Columns: A  Re(Gap)  Im(Gap)  |Gap|  Re(Current)  Im(Current)  |Current|  Gap_Error  Gap_solver (before FFT)\n")
             f.write("#" + "-"*100 + "\n")
 
-            for A, gap, current, err in zip(vector_potentials, gaps, currents, gap_errors):
+            for A, gap, gap_solver, current, err in zip(vector_potentials, gaps, gaps_solver, currents, gap_errors):
                 if not np.isnan(gap):
                     f.write(f"{A:12.6f}  {np.real(gap):12.6e}  {np.imag(gap):12.6e}  {np.abs(gap):12.6e}  "
-                           f"{np.real(current):12.6e}  {np.imag(current):12.6e}  {np.abs(current):12.6e}  {err:12.6e}\n")
+                           f"{np.real(current):12.6e}  {np.imag(current):12.6e}  {np.abs(current):12.6e}  {err:12.6e}  {np.abs(gap_solver):12.6e}\n")
                 else:
                     f.write(f"{A:12.6f}  {'NaN':>12s}  {'NaN':>12s}  {'NaN':>12s}  "
-                           f"{'NaN':>12s}  {'NaN':>12s}  {'NaN':>12s}  {'NaN':>12s}\n")
+                           f"{'NaN':>12s}  {'NaN':>12s}  {'NaN':>12s}  {'NaN':>12s}  {'NaN':>12s}\n")
 
         # Also save pickle for compatibility
         pkl_filename = os.path.join(save_dir, f'gap_current_vs_A_sweep_{timestamp}.pkl')
@@ -346,7 +364,9 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
             pickle.dump(results, f)
 
         fig, (ax_gap, ax_current) = plt.subplots(1, 2, figsize=(10, 4))
-        ax_gap.plot(vector_potentials, np.abs(gaps), 'o-')
+        ax_gap.plot(vector_potentials, np.abs(gaps), 'o-', label='after FFT (two-time $g^K$)')
+        ax_gap.plot(vector_potentials, np.abs(gaps_solver), 's--', label='before FFT (solver)')
+        ax_gap.legend()
         ax_gap.set_xlabel('Q')
         ax_gap.set_ylabel(r'$|\Delta|$')
         ax_current.plot(vector_potentials, np.real(currents), 'o-')

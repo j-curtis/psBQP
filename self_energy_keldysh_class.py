@@ -73,7 +73,6 @@ def _two_row_source(row_function):
     return NambuKeldyshTensor(np.concatenate([row.data for row in rows], axis=2))
 
 
-#! the expressions here need to be checked using analytical expressions!
 class EM_selfenergy(SelfEnergy):
     """
     Electromagnetic (vector potential) self-energy, Sigma^X(t,t') = -i A(t) tau3 g^X(t,t') A(t') tau3 (e^2 D = 1), order 1 in g.
@@ -126,7 +125,7 @@ class EM_selfenergy(SelfEnergy):
             'type8_em_cross2': {'L': -1j * A_tensor, 'R': A_tensor * tau3},
             'type5_em_1': {'L': 1j * A_tensor * tau3, 'M': A_tensor * tau3, 'R': expansion_tensor},
             'type5_em_2': {'L': -1j * expansion_tensor, 'M': A_tensor * tau3, 'R': A_tensor * tau3},
-        }
+            }
 
     def k_equation_coefficients(self, state_object, params=None):
         A_history, A_tensor = self._vector_potential(state_object, params)
@@ -150,7 +149,7 @@ class EM_selfenergy(SelfEnergy):
             terms['type6_em2'] = {'L': -1j * gr * A_tensor * tau3, 'R': A_tensor * tau3}
             terms['type4_em1'] = {'R': -1j * A_tensor * tau3 * ga * A_tensor * tau3}
             terms['type7_em2'] = {'L': 1j * A_tensor * tau3, 'R': A_tensor * tau3 * ga}
-
+    
             #* g-independent sources: type0 puts -CN(S) on the rhs, hence S = -source
             def em_f_row(dt_shift):
                 dt_end = None if dt_shift == 0 else -dt_shift

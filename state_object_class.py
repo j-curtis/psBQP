@@ -434,6 +434,10 @@ class StateObject:
         ga_0_row = ga[0:1, :]  # shape (2,2,1,Nt)
         first_endpoint_2 = gk_t1_0 * ga_0_row  # gk[t1, 0] * ga[0, t2]
 
+        #* upper end point t' = t2 of the right convolution (ga is advanced), was missing: last_endpoint_2 was undefined and conv2 had no end point weights
+        last_endpoint_2 = gk_row * ga.diagonal_time()  # gk[t1, t2] * ga[t2, t2]
+        conv2 = conv2 - 0.5 * self.dt * first_endpoint_2 - 0.5 * self.dt * last_endpoint_2
+
         # Extract diagonal elements of ga as row tensor
         thermal_gap_ga_conv = thermal.convolve_thermal_int_right(ga, gap_tensor, t1_idx)
 

@@ -111,7 +111,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             - 'transmitted_current_amplitudes': Array of J_max values
             - 'transmitivity': Array of transmitivity values (J_max/I_in_max)
 
-    Saved data format for 'static': system/field/grid parameters per job, averaged gap/current/vector potential,
+    Saved data format for 'static': system/field/grid parameters per job, averaged gap/current/vector potential
+    (mean of the last 50 timesteps), 'gap_std' (standard deviation of |gap| over the same 50 timesteps) and the full
+    'gap_evolution' / 'times' (list with one array per job),
     (N_jobs, 4) gr/gk normalization and FDT errors at (t=-1,t'=-1), and 'rows': list (one per job, None on failure) of dicts with
     't_prime', 'gr_row', 'gk_row', 'gr_normalization_row', 'gk_normalization_row', 'fdt_row' ((4, N_t) complex) at t = -1.
     """
@@ -363,6 +365,10 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         field_params_list = []
         grid_parameters_list = []
         averaged_gaps = []
+        gap_stds = []
+        #* full gap time series and time axis of every job (saved by default, not only the average)
+        gap_evolution_list = []
+        times_list = []
         averaged_currents = []
         averaged_vector_potentials = []
 
@@ -392,15 +398,30 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             currents = save_data['currents']
             vector_potentials = save_data['vector_potentials']
 
+            gap_evolution_list.append(np.asarray(gaps))
+            times_list.append(save_data.get('times', None))
+
             # Compute averages over last 50 timesteps
             avg_gap = np.mean(gaps[-50:])
             avg_current = np.mean(currents[-50:])
             avg_vpot = np.mean(vector_potentials[-50:])
+            #* standard deviation of |gap| over the same 50 timesteps (error bar of the averaged gap)
+            gap_std = np.std(np.abs(gaps[-50:]))
 
             # Store averaged values
             averaged_gaps.append(avg_gap)
+            gap_stds.append(gap_std)
             averaged_currents.append(avg_current)
             averaged_vector_potentials.append(avg_vpot)
+
+            #* rows computed in code_run before the state was reduced (save_full_state=False), they replace the checks below
+            saved_rows = save_data.get('state_rows', None)
+            if saved_rows is not None:
+                gr_normalization_errors_list.append(saved_rows['gr_normalization_row'][:, -1])
+                gk_normalization_errors_list.append(saved_rows['gk_normalization_row'][:, -1])
+                fdt_errors_list.append(np.abs(saved_rows['fdt_row'][:, -1]))
+                rows_list.append(saved_rows)
+                continue
 
             # Compute FDT and normalization checks for last row [-1, :]
             try:
@@ -409,7 +430,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
 
                 if final_state is not None:
                     # Create evolution object to get thermal distributions
-                    evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+                    #~ evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters)
+                    #* self_energy_dictionary=None is not handled by the constructor; only the thermal kernels are needed here
+                    evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters, self_energy_dictionary={})
                     #~ evolution.get_thermal_occupation(system_parameters['temperature'])
                     #~ evolution.get_thermal_integral(system_parameters['temperature'])
                     #~ evolution.get_thermal_sum(system_parameters['temperature'])
@@ -480,6 +503,7 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
 
         # Convert to arrays
         averaged_gaps = np.array(averaged_gaps)
+        gap_stds = np.array(gap_stds)
         averaged_currents = np.array(averaged_currents)
         averaged_vector_potentials = np.array(averaged_vector_potentials)
         gr_normalization_errors = np.array(gr_normalization_errors_list)  # Shape (N_jobs, 4)
@@ -492,6 +516,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             'field_params': field_params_list,
             'grid_parameters': grid_parameters_list,
             'averaged_gaps': averaged_gaps,
+            'gap_std': gap_stds,
+            'gap_evolution': gap_evolution_list,
+            'times': times_list,
             'averaged_currents': averaged_currents,
             'averaged_vector_potentials': averaged_vector_potentials,
             'gr_normalization_errors': gr_normalization_errors,

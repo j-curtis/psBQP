@@ -129,12 +129,11 @@ class ThermalConvolutions:
         last_endpoint = g_row[:, k:k + 1] * f[k:k + 1, :]
         result_std = (g_row @ f) * dt - 0.5 * dt * first_endpoint - 0.5 * dt * last_endpoint
 
-        #* smooth factor at the singular point t''=t'; for t' > t_k the singularity lies beyond the edge, so factor at t''=t_k
-        #! need to understand this point better
+        #* smooth factor at the point of t'' <= t_k closest to the pole t''=t': the pole itself for t' <= t_k, the upper end t''=t_k for t' > t_k
+        #* g_row vanishes for t' > t_k (retarded), so with g_row[t'] the subtraction was inactive there and the trapezoid sum had an O(1) error one step beyond t_k
         g_for_reg_data = g_row.data.copy()
         g_for_reg_data[:, :, :, k + 1:] = g_row.data[:, :, :, k:k + 1]
         g_for_reg = NambuKeldyshTensor(g_for_reg_data)
-        #g_for_reg = g_row
 
         result_fact = g_for_reg * self.thermal_sum_right[k_sum:k_sum + 1, :]
         result_anal = g_for_reg * F[k:k + 1, :]
@@ -142,9 +141,12 @@ class ThermalConvolutions:
         dg_dt = g_row.gradient(dt, axis=1)
         gradient_correction = dg_dt[-1:, :] * dt * -1j / np.pi
 
-        #* singular point inside the range: weight 1, at the edge t'=t_k and beyond: 0 
+        #* singular point inside the range: weight 1, at the end point t'=t_k: 1/2 (trapezoid weight of an end point), beyond the edge: 0
+        #* with 0 at t'=t_k the lattice FDT misses the equilibrium g^K diagonal at O(dt), with 1/2 it agrees at O(dt^2)
         edge_scaling = np.ones((1, N_t))
-        edge_scaling[0, k:] = 0.0
+        #~ edge_scaling[0, k:] = 0.5
+        edge_scaling[0, k + 1:] = 0.0
+        edge_scaling[0, k] = 0.5
         scaling_tensor = NambuKeldyshTensor(edge_scaling, pauli_channel=0)
 
         return result_std + (-result_fact + result_anal) + scaling_tensor * gradient_correction
@@ -162,22 +164,26 @@ class ThermalConvolutions:
         last_endpoint = f_row[:, :] * g_diagonal
         result_std = (f_row @ g) * dt - 0.5 * dt * first_endpoint - 0.5 * dt * last_endpoint
 
-        #* smooth factor at the edge t''=t' for t' <= t_k, at the singular point t''=t_k for t' > t_k
-        #! Understand this better
+        #* smooth factor at the point of t'' <= t' closest to the pole t''=t_k: the upper end t''=t' for t' <= t_k, the pole itself (last ga element) for t' > t_k
+        #* g(t_k, t') vanishes for t' < t_k (advanced), so with it the subtraction was inactive and the trapezoid sum had an O(1/m^2) error m steps below t_k
+        #~ g_for_reg = g[k:k + 1, :]
         g_for_reg_data = g_diagonal.data.copy()
         g_for_reg_data[:, :, k + 1:] = g.data[:, :, k, k + 1:]
         g_for_reg = NambuKeldyshTensor(g_for_reg_data)
-        #g_for_reg = g_diagonal 
 
         result_fact = self.thermal_sum_left[k_sum:k_sum + 1, :] * g_for_reg
         result_anal = (-F_row) * g_for_reg
 
         dg_dt = g.gradient(dt, axis=0)
-        gradient_correction = dg_dt[k:k + 1, :] * dt * +1j / np.pi
+        gradient_correction = dg_dt[k:k + 1, :] * dt * 1j / np.pi
 
         #* singular point beyond the edge (t' < t_k) and at the edge: 0, inside the range (t' > t_k): 1
         filter_tensor = np.zeros((1, N_t))
+        #* pole t''=t_k inside the interval for t' > t_k: weight 1 (checked against exact integrals: -0.5 is the worst of {-0.5, 0, 0.5, 1})
+        #~ filter_tensor[0, k + 1:] = -0.5
         filter_tensor[0, k + 1:] = 1.0
+        #* end point t'=t_k: trapezoid weight 1/2 (same value as in convolve_thermal_dist_left)
+        filter_tensor[0, k] = 0.5 
         filter_tensor = NambuKeldyshTensor(filter_tensor, pauli_channel=0)
 
         return result_std + (-result_fact + result_anal) + filter_tensor * gradient_correction

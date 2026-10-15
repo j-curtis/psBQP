@@ -20,6 +20,7 @@ from state_object_class import StateObject
 from usadel_keldysh_evolution import UsadelKeldyshEvolution
 from numerical_support import ThermalConvolutions, interpolate_two_time_state
 from driving_field_utils import compute_driving_field
+from run_postprocessor import compute_state_rows
 
 
 def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, circuit_params=None, save_full_state=True, track_every_n=None):
@@ -201,7 +202,13 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     else:
         #* generating initial state using equilibrium code
         evolution = UsadelKeldyshEvolution(grid_parameters, system_parameters, self_energy_dictionary=self_energy_dictionary)
-        initial_state, _, _, equilibrium_current = evolution.generate_initial_state(Q=0.0)
+        #~ initial_state, _, _, equilibrium_current = evolution.generate_initial_state(Q=0.0)
+        #* equilibrium state at the vector potential the evolution starts with, A(t=0) = driving_field[0]
+        if field_type is not None and field_params is not None:
+            initial_vector_potential = float(compute_driving_field(field_type, field_params, np.zeros(1))[0])
+        else:
+            initial_vector_potential = 0.0
+        initial_state, _, _, equilibrium_current = evolution.generate_initial_state(Q=initial_vector_potential)
         dt = grid_parameters['time_duration'] / (grid_parameters['time_sampling'] - 1)
 
 
@@ -227,6 +234,14 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     currents = result['currents']
     vector_potentials = result['vector_potentials']
 
+    #* normalization and FDT rows need the full state, so they are computed before the state is reduced and saved with the result
+    state_rows = None
+    if not save_full_state:
+        try:
+            state_rows = compute_state_rows(final_state, evolution.thermal, grid_parameters['time_duration'])
+        except Exception as error:
+            print(f"WARNING: could not compute the state rows before reducing the state: {type(error).__name__}: {error}")
+
     # Reduce state to last timestep if requested (memory optimization)
     if not save_full_state:
 
@@ -243,7 +258,7 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     #! understand what this means
     #* circuit mode: gaps, currents and vector_potentials are all evaluated at t_(n+1), so the saved times are shifted by dt
     saved_times = times + dt if circuit_params is not None else times
-    result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': saved_times, 'input_pulse': prepared_driving_field}
+    result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': saved_times, 'input_pulse': prepared_driving_field, 'state_rows': state_rows}
 
     # Add energy-time data if tracking was enabled, filtered by track_every_n
     if track_occupations:

@@ -255,9 +255,10 @@ class StateObject:
         current = -1j * np.pi / 4 * current 
         
         if include_derivative:
-            #! given new definition of precise convolution, this should be checked
             #* second term is the anomalous term coming from combination of delta(t-t') and f(t-t') limit at zero
-            current += - np.gradient(A_history, self.dt)[t_idx]
+            #~ current += - np.gradient(A_history, self.dt)[t_idx]
+            #* edge_order=2: at the newest time the one-sided difference is second order, A'(t) = (3A_n - 4A_(n-1) + A_(n-2))/(2dt); the first-order backward difference is A'(t - dt/2), which gave Im sigma = -omega dt/2 in the normal state
+            current += - np.gradient(A_history, self.dt, edge_order=2)[t_idx]
         
         return current
 
@@ -548,9 +549,7 @@ class StateObject:
 
         return gk_fdt_row, gk_actual_row, error_row, max_error
 
-    # ========== Fourier Transform Methods ========== 
-
-    #** Skipped for now, will check later, apparently this has also been updated
+    # ========== Fourier Transform Methods ==========
     def energy_time_representation(self, green_function_type, eta=None):
         """
         Transform Green's function to energy representation.
@@ -571,6 +570,7 @@ class StateObject:
                 'g_energy': NambuKeldyshTensor with shape (2, 2, N_ε)
             }
         """
+        
         if self.dt is None:
             raise ValueError("Time step dt must be set in grid_params")
 
@@ -646,19 +646,20 @@ class StateObject:
         gr_row = self.gr[t_idx:t_idx+1, :]
         gk_row = self.gk[t_idx:t_idx+1, :]
 
-        #~ f_thermal_row = f_thermal[t_idx:t_idx+1, :]
-        #~ f_thermal_integral_row = f_thermal_integral[t_idx:t_idx+1, :]
-        #~ t_pos_precom = t_idx % thermal_sum_left.shape[2]
-        #~ thermal_sum_left_row = thermal_sum_left[t_pos_precom:t_pos_precom+1, :]
-        #~ rhs_vector = gk_row - gr_row.precise_convolution_left(f_thermal, f_thermal_integral, self.dt, other_index=time_index, precomputed_sum=thermal_sum_right) + ga.precise_convolution_right(f_thermal_row, f_thermal_integral_row, self.dt, self_index=time_index, precomputed_sum=thermal_sum_left_row)
-        #~ rhs_vector = gk_row - thermal.convolve_thermal_dist_left(gr_row, time_index) + thermal.convolve_thermal_dist_right(ga, time_index)
-        #* full(X*tau3) = 2*dist(X) + int(X*tau3): 1/2 of it keeps the dist part exactly and adds half the F (gap) part
+        ##* full(X*tau3) = 2*dist(X) + int(X*tau3): 1/2 of it keeps the dist part exactly and adds half the F (gap) part
         tau3 = NambuKeldyshTensor(1.0, pauli_channel=3)
         gap_history = self.get_gap_history()
         gap_tensor = NambuKeldyshTensor(np.real(gap_history), pauli_channel=2) + NambuKeldyshTensor(np.imag(gap_history), pauli_channel=1)
-        rhs_vector = (gk_row - 0.5 * thermal.convolve_thermal_full_left(gr_row * tau3, gap_tensor, time_index)
-                      + 0.5 * thermal.convolve_thermal_full_right(tau3 * ga, gap_tensor, time_index))
-        rhs_vector += - gr_row[:,:-1] @ self.occupation_function[:-1,:] * self.dt
+        
+        #* g'' = [g^R*f - f*g^A - T] + [g^R*n - n*g^A + {tau3, n}]: the first bracket (f and the thermal gap term T) is the FDT prediction of check_fdt,
+        #* T enters as a local term and not as a convolution
+        rhs_vector = (gk_row - thermal.convolve_thermal_dist_left(gr_row, time_index) + thermal.convolve_thermal_dist_right(ga, time_index)
+                      + thermal.thermal_gap_term(gap_tensor)[t_idx:t_idx+1, :])
+       
+        #* gr, gk are already on the new time grid but the stored occupation is still on the old one: shift it by one step in both times,
+        #* new[m, j] = old[m+1, j+1], the new last row and column (time t_N, still to be solved) are zero
+        occupation_new_grid = self.occupation_function.shift(-1, axis=0).shift(-1, axis=1)
+        rhs_vector += - gr_row[:,:-1] @ occupation_new_grid[:-1,:] * self.dt
         solution_tensor = self.gr[-1,-1:] * 0
         for time in range(N_t):
             source_term = rhs_vector[-1,time] 
@@ -673,7 +674,13 @@ class StateObject:
         #* assuming gk is purely imaginary and gr purely real this would be true
         solution_tensor.append_right([0.0,0.0,0.0,0.0])
 
-        self.occupation_function.update_entries(solution_tensor[1:-1], solution_tensor[1:-1].involution(), solution_tensor[-1])
+        #~ self.occupation_function.update_entries(solution_tensor[1:-1], solution_tensor[1:-1].involution(), solution_tensor[-1])
+        #* the occupation is on the new grid already (occupation_new_grid), write the solved row n(t_N, t_j), j < N-1, into its last row and the
+        #* involution into its last column; the diagonal n(t_N, t_N) stays zero from the shift (the solved diagonal value is not used)
+        occupation_new_row = solution_tensor[1:N_t]
+        occupation_new_grid.data[:, :, -1, :-1] = occupation_new_row.data
+        occupation_new_grid.data[:, :, :-1, -1] = occupation_new_row.involution().data
+        self.occupation_function = occupation_new_grid
 
     # ========== String Representation ==========
 

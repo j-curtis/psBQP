@@ -59,6 +59,7 @@ def compute_equilibrium_gap_vs_temperature(
     gaps = []
     gaps_solver = []
     gap_errors = []
+    currents = []
 
     # Grid parameters (time domain)
     grid_parameters = {
@@ -115,6 +116,7 @@ def compute_equilibrium_gap_vs_temperature(
             gaps.append(gap_eq)
             gaps_solver.append(gap_solver)
             gap_errors.append(gap_std)
+            currents.append(J_eq)
 
             print(f"  → Gap before FFT (solver): {abs(gap_solver):.6f}")
             print(f"  → Gap after FFT (from two-time gk): {gap_magnitude:.6f} (Re: {np.real(gap_eq):.6f}, Im: {np.imag(gap_eq):.6f}), ratio {gap_magnitude/abs(gap_solver):.5f}")
@@ -126,17 +128,20 @@ def compute_equilibrium_gap_vs_temperature(
             gaps.append(np.nan)
             gaps_solver.append(np.nan)
             gap_errors.append(np.nan)
+            currents.append(np.nan)
 
     # Convert to arrays
     gaps = np.array(gaps)
     gaps_solver = np.array(gaps_solver)
     gap_errors = np.array(gap_errors)
+    currents = np.array(currents)
 
     # Results dictionary
     results = {
         'temperatures': temperatures,
         'gaps': gaps,
         'gaps_solver': gaps_solver,
+        'currents': currents,
         'gap_errors': gap_errors,
         'parameters': {
             'T_min': T_min,
@@ -388,53 +393,52 @@ def compute_equilibrium_current_and_gap_vs_vector_potential(
 
 
 # ============================================================================
-# Main execution
+# Input parameters
 # ============================================================================
 
+CRITICAL_TEMPERATURE = 1.0
+ETA = 0.2
+TIME_SAMPLING = 501
+TIME_DURATION = 2 * np.pi * 5
+
+#* temperature sweep of the gap at A = 0
+TEMPERATURE_SWEEP = {'T_min': 0.1, 'T_max': 1.3, 'n_points': 20}
+
+#* vector potential sweep of gap and current at fixed temperature
+VECTOR_POTENTIAL_SWEEP = {'A_min': 0.0, 'A_max': 0.5, 'n_points': 21, 'temperature': 0.5}
+
+SAVE_DIR = 'equilibrium_results'
+
+
+def run_equilibrium_sweeps(save_dir=None, filename=None):
+    """
+    Run the temperature sweep (A = 0) and the vector potential sweep with the parameters defined above and save both in one pickle,
+    {'temperature_sweep': ..., 'vector_potential_sweep': ..., 'input_parameters': ...}, which the static plots read as data_file.
+
+    Returns:
+        (path of the pickle, results dict)
+    """
+    save_dir = SAVE_DIR if save_dir is None else save_dir
+    common = dict(critical_temperature=CRITICAL_TEMPERATURE, eta=ETA, time_sampling=TIME_SAMPLING, time_duration=TIME_DURATION, save_results=False)
+
+    temperature_results = compute_equilibrium_gap_vs_temperature(**TEMPERATURE_SWEEP, **common)
+    vector_potential_results = compute_equilibrium_current_and_gap_vs_vector_potential(**VECTOR_POTENTIAL_SWEEP, **common)
+
+    results = {'temperature_sweep': temperature_results,
+               'vector_potential_sweep': vector_potential_results,
+               'input_parameters': {'critical_temperature': CRITICAL_TEMPERATURE, 'eta': ETA, 'time_sampling': TIME_SAMPLING,
+                                    'time_duration': TIME_DURATION, 'temperature_sweep': TEMPERATURE_SWEEP,
+                                    'vector_potential_sweep': VECTOR_POTENTIAL_SWEEP}}
+
+    os.makedirs(save_dir, exist_ok=True)
+    if filename is None:
+        filename = f"equilibrium_sweep_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+    path = os.path.join(save_dir, filename)
+    with open(path, 'wb') as f:
+        pickle.dump(results, f)
+    print(f"Equilibrium sweeps saved to: {path}")
+    return path, results
+
+
 if __name__ == "__main__":
-
-    print("\n" + "="*70)
-    print("EQUILIBRIUM SWEEPS FOR SUPERCONDUCTING VORTICES")
-    print("="*70)
-    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*70 + "\n")
-
-    critical_temperature = 1.0
-    eta = 0.2
-    time_sampling = 501
-    time_duration = 2 * np.pi * 5
-    save_dir = 'equilibrium_results'
-
-    A_results = compute_equilibrium_current_and_gap_vs_vector_potential(
-        A_min=0.05,
-        A_max=0.5,
-        n_points=10,
-        temperature=0.5,
-        critical_temperature=critical_temperature,
-        eta=eta,
-        time_sampling=time_sampling,
-        time_duration=time_duration,
-        save_results=True,
-        save_dir=save_dir
-    )
-
-    print("\n" + "="*70)
-    print("SWEEP SUMMARY")
-    print("="*70)
-
-    print("\nVector Potential Sweep (Gap & Current):")
-    print(f"  Vector potential range: [{A_results['parameters']['A_min']:.2f}, {A_results['parameters']['A_max']:.2f}]")
-    print(f"  Temperature: {A_results['parameters']['temperature']:.2f}")
-    print(f"  Points computed: {len(A_results['vector_potentials'])}")
-    valid_data = ~np.isnan(A_results['gaps'])
-    print(f"  Successful: {np.sum(valid_data)}/{len(A_results['vector_potentials'])}")
-    if np.sum(valid_data) > 0:
-        print(f"  Max gap: {np.max(np.abs(A_results['gaps'][valid_data])):.6f}")
-        print(f"  Max current: {np.max(np.abs(A_results['currents'][valid_data])):.6f}")
-
-    print("\n" + "="*70)
-    print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*70 + "\n")
-
-    print("Results saved in directory:", save_dir)
-    print("Use data_analysis.py to plot the results.")
+    run_equilibrium_sweeps()

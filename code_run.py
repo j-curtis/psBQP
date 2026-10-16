@@ -23,7 +23,7 @@ from driving_field_utils import compute_driving_field
 from run_postprocessor import compute_state_rows
 
 
-def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, circuit_params=None, save_full_state=True, track_every_n=None):
+def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initial_state_timestamp=None, initial_state_index=0, grid_parameters=None, field_type=None, field_params=None, circuit_params=None, save_full_state=True, track_every_n=None, track_state=False, track_state_every_n=1):
     """
     Evolve Keldysh Green's functions in real time.
 
@@ -53,6 +53,9 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         track_every_n: If not None, compute and save energy-time representations (gr, gk, f) every
                        track_every_n timesteps to reduce memory usage. If None, energy-time
                        representations are not computed (default: None)
+        track_state: If True, the g^R and g^K normalization errors of the newest row (t = -1, t' = t) are computed during the
+                     evolution and saved (default: False)
+        track_state_every_n: Stride in timesteps of the normalization tracking (default 1)
     Returns:
         0 on success
     Saved data format:
@@ -63,6 +66,8 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
             - 'vector_potentials': Vector potential A(t) (length num_timesteps)
             - 'times': Time array (length num_timesteps)
             - 'input_pulse': Applied driving field (A(t) or I_in(t) for current-driven)
+            - 'gr_normalization', 'gk_normalization', 'normalization_times': (if track_state) (4, n) complex Pauli components of the
+              normalization errors at (t, t') = (t_n, t_n) and the times t_n
             - 'gr_energy_time', 'gk_energy_time', 'f_energy_time': (if track_every_n is set)
     """
     #* Detect which machine we're running on
@@ -228,7 +233,7 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     # Determine if we should track occupations
     track_occupations = (track_every_n is not None)
 
-    result = evolution.real_time_evolution(initial_state=initial_state, num_timesteps=num_timesteps, driving_field=prepared_driving_field, circuit_params=circuit_params, track_occupations=track_occupations)
+    result = evolution.real_time_evolution(initial_state=initial_state, num_timesteps=num_timesteps, driving_field=prepared_driving_field, circuit_params=circuit_params, track_occupations=track_occupations, track_state=track_state, track_state_every_n=track_state_every_n)
     final_state = result['final_state']
     gaps = result['gaps']
     currents = result['currents']
@@ -259,6 +264,11 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
     #* circuit mode: gaps, currents and vector_potentials are all evaluated at t_(n+1), so the saved times are shifted by dt
     saved_times = times + dt if circuit_params is not None else times
     result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': saved_times, 'input_pulse': prepared_driving_field, 'state_rows': state_rows}
+
+    if track_state:
+        result_data['gr_normalization'] = result['gr_normalization']
+        result_data['gk_normalization'] = result['gk_normalization']
+        result_data['normalization_times'] = saved_times[result['normalization_indices']]
 
     # Add energy-time data if tracking was enabled, filtered by track_every_n
     if track_occupations:

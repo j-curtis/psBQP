@@ -1570,7 +1570,7 @@ class UsadelKeldyshEvolution:
             j_prime_hist = j_prime_current
 
             dt = self.delta_t
-
+            
             lhs_coeff = 1.0  - np.real(  ((2.0 * z_t + r_contact) / (2.0 * r_n)) * (dt**2) * kernel_prefactor)/(1 + (2.0 * z_t + r_contact)/ (r_n))
 
             # Right-hand side
@@ -1586,7 +1586,7 @@ class UsadelKeldyshEvolution:
 
     # ========== Real-time evolution ==========
 
-    def real_time_evolution(self, initial_state, num_timesteps, driving_field=None, circuit_params=None, track_occupations=False):
+    def real_time_evolution(self, initial_state, num_timesteps, driving_field=None, circuit_params=None, track_occupations=False, track_state=False, track_state_every_n=1):
         """
         Main real-time evolution loop.
 
@@ -1618,6 +1618,9 @@ class UsadelKeldyshEvolution:
                            If provided, enables Crank-Nicolson vector potential update
             track_occupations: If True, compute and store energy-time representations of gr, gk, and f
                                at each timestep (default: False)
+            track_state: If True, the g^R and g^K normalization errors of the newest row (t = -1) at t' = t are stored every
+                         track_state_every_n timesteps, while the row still has the full history (default: False)
+            track_state_every_n: Stride of the normalization tracking (default 1)
 
         Returns:
             Dictionary with keys:
@@ -1629,6 +1632,8 @@ class UsadelKeldyshEvolution:
             - 'gr_energy_time': (only if track_occupations=True) List of energy-time representations of gr
             - 'gk_energy_time': (only if track_occupations=True) List of energy-time representations of gk
             - 'f_energy_time': (only if track_occupations=True) List of energy-time representations of occupation function
+            - 'gr_normalization', 'gk_normalization': (only if track_state=True) (4, n_tracked) complex Pauli components of the g^R and
+              g^K normalization errors at (t, t') = (t_n, t_n); 'normalization_indices': (n_tracked,) timestep indices n
 
         Calls:
             - update_vector_potential(A_external, driving_field, state, circuit_params, ...)
@@ -1644,6 +1649,12 @@ class UsadelKeldyshEvolution:
             gr_energy_time_list = []
             gk_energy_time_list = []
             f_energy_time_list = []
+
+        #* normalization of the newest row, evaluated while it still has the full history (the window slides afterwards)
+        if track_state:
+            gr_normalization_list = []
+            gk_normalization_list = []
+            normalization_indices = []
 
         # Initialize A_external as zeros (history window)
         # Size N_t from initial_state's time grid
@@ -1698,8 +1709,15 @@ class UsadelKeldyshEvolution:
             currents  += [current_new]
             vector_potentials += [vector_potential_new]
 
+            if track_state and time_index % track_state_every_n == 0:
+                _, gr_totals = state.check_gr_normalization(t1_idx=-1)
+                _, gk_totals, _ = state.check_keldysh_normalization(-1, self.thermal)
+                gr_normalization_list.append(gr_totals[:, -1])
+                gk_normalization_list.append(gk_totals[:, -1])
+                normalization_indices.append(time_index)
+
             if track_occupations:
-                gr_energy = state.energy_time_representation('gr', eta=self.eta)
+                gr_energy =state.energy_time_representation('gr', eta=self.eta)
                 gk_energy = state.energy_time_representation('gk', eta=self.eta)
                 f_energy = state.energy_time_representation('f', eta=self.eta)
                 gr_energy_time_list.append(gr_energy)
@@ -1709,6 +1727,11 @@ class UsadelKeldyshEvolution:
         critical_current_factor = circuit_params['J_DP_prime'] if circuit_params is not None else 1.0
 
         result = { 'final_state': state, 'gaps': np.array(gaps), 'currents': np.array(currents)/critical_current_factor, 'vector_potentials': np.array(vector_potentials)}
+
+        if track_state:
+            result['gr_normalization'] = np.array(gr_normalization_list).T
+            result['gk_normalization'] = np.array(gk_normalization_list).T
+            result['normalization_indices'] = np.array(normalization_indices)
 
         # Add energy-time data if tracking was enabled
         if track_occupations:

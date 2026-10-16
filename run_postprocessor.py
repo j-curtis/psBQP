@@ -82,6 +82,29 @@ def compute_state_rows(final_state, thermal, time_duration=None):
             'fdt_row': pauli_row(error_row)}
 
 
+def compute_spectra(gaps, currents, vector_potentials, times):
+    """
+    Fourier transforms of the gap deviation, the current and the vector potential, with the time origin at the pulse (maximum of |A|).
+
+    X(omega) = dt * sum_k x_k exp(-i omega (t_k - t_c)), t_c = times[argmax |A|] and t_k = times[k] (numpy's fft uses t_k = k dt, so the
+    result of np.fft.fft is multiplied by exp(-i omega (times[0] - t_c))); for a symmetric pulse A(omega) is then real.
+    The same factor multiplies all three transforms, so it drops out of ratios such as the conductivity J/(i omega A).
+
+    Returns:
+        dict with 'omega', 'gap_fft', 'current_fft', 'vpot_fft' (fftshifted, same length as times)
+    """
+    times = np.asarray(times)
+    dt = times[1] - times[0]
+    omega = 2 * np.pi * np.fft.fftfreq(len(times), d=dt)
+    phase_correction = np.exp(-1j * omega * (times[0] - times[np.argmax(np.abs(vector_potentials))]))
+
+    gap_abs = np.abs(gaps)
+    return {'omega': np.fft.fftshift(omega),
+            'gap_fft': np.fft.fftshift(np.fft.fft(gap_abs - gap_abs[0]) * dt * phase_correction),
+            'current_fft': np.fft.fftshift(np.fft.fft(np.real(currents)) * dt * phase_correction),
+            'vpot_fft': np.fft.fftshift(np.fft.fft(vector_potentials) * dt * phase_correction)}
+
+
 def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
     """
     Postprocess Keldysh simulation data and extract observables.
@@ -95,6 +118,10 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         compute_keywords: List of strings specifying what to compute
                           Supported keywords:
                           - 'transmitivity': Compute gap, current, and transmitivity analysis
+                          - 'state_evolution': gap, current, vector potential and times per job, their Fourier transforms (as in
+                            'spectral_analysis') and, if the run was made with track_state=True, the g^R / g^K normalization errors
+                            versus time ('normalization')
+                          - 'spectral_analysis': gap, current and vector potential with their Fourier transforms
 
     Returns:
         0 on success
@@ -227,6 +254,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         current_evolution_list = []
         vector_potential_evolution_list = []
         times_list = []
+        gap_fft_list, current_fft_list, vpot_fft_list, omega_list, T_c_list = [], [], [], [], []
+        #* normalization versus time saved by code_run (track_state=True), None for runs without it
+        normalization_list = []
 
         # Loop over all jobs
         for job_idx in job_indices:
@@ -251,6 +281,19 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             vector_potential_evolution_list.append(vector_potentials)
             times_list.append(times)
 
+            spectra = compute_spectra(gaps, currents, vector_potentials, times)
+            gap_fft_list.append(spectra['gap_fft'])
+            current_fft_list.append(spectra['current_fft'])
+            vpot_fft_list.append(spectra['vpot_fft'])
+            omega_list.append(spectra['omega'])
+            T_c_list.append(system_parameters['critical_temperature'])
+
+            if 'gr_normalization' in save_data:
+                normalization_list.append({'times': save_data['normalization_times'], 'gr_normalization': save_data['gr_normalization'],
+                                           'gk_normalization': save_data['gk_normalization']})
+            else:
+                normalization_list.append(None)
+
         # Package results
         result_data = {
             'system_parameters': system_parameters_list,
@@ -260,6 +303,10 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             'vector_potential_evolution': vector_potential_evolution_list,
             'times': times_list
         }
+        result_data.update({'gap_fft': gap_fft_list, 'current_fft': current_fft_list, 'vpot_fft': vpot_fft_list, 'omega': omega_list, 'T_c': T_c_list})
+        #* only present if at least one job was run with track_state=True
+        if any(entry is not None for entry in normalization_list):
+            result_data['normalization'] = normalization_list
 
         # Save results
         with open(save_filename, 'wb') as f:
@@ -305,40 +352,12 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             vector_potential_evolution_list.append(vector_potentials)
             times_list.append(times)
 
-            # Compute FFT (following plot_gap_evolution_multi_jobs conventions)
-            dt = times[1] - times[0]
-            N_t = len(times)
-
-            # Frequency grid construction
-            freq = np.fft.fftfreq(N_t, d=dt)
-            omega = 2 * np.pi * freq
-            omega_shifted = np.fft.fftshift(omega)
-            omega_list.append(omega_shifted)
-
-            # Phase correction (center pulse at t=0)
-            t_center_idx = np.argmax(np.abs(vector_potentials))
-            t_center = times[t_center_idx]
-            phase_correction = np.exp(-1j * omega * t_center)
-
-            # Gap FFT (operates on gap deviation - DC removal)
-            gap_abs = np.abs(gaps)
-            gap_deviation = gap_abs - gap_abs[0]
-            gap_fft_raw = np.fft.fft(gap_deviation) * dt
-            gap_fft_corrected = gap_fft_raw * phase_correction
-            gap_fft_shifted = np.fft.fftshift(gap_fft_corrected)
-            gap_fft_list.append(gap_fft_shifted)
-
-            # Current FFT (use full time series - no DC removal)
-            current_fft_raw = np.fft.fft(np.real(currents)) * dt
-            current_fft_corrected = current_fft_raw * phase_correction
-            current_fft_shifted = np.fft.fftshift(current_fft_corrected)
-            current_fft_list.append(current_fft_shifted)
-
-            # Vector potential FFT (use full time series)
-            A_fft_raw = np.fft.fft(vector_potentials) * dt
-            A_fft_corrected = A_fft_raw * phase_correction
-            A_fft_shifted = np.fft.fftshift(A_fft_corrected)
-            vpot_fft_list.append(A_fft_shifted)
+            #* Fourier transforms with the pulse at t = 0 (see compute_spectra)
+            spectra = compute_spectra(gaps, currents, vector_potentials, times)
+            omega_list.append(spectra['omega'])
+            gap_fft_list.append(spectra['gap_fft'])
+            current_fft_list.append(spectra['current_fft'])
+            vpot_fft_list.append(spectra['vpot_fft'])
 
         # Package results
         result_data = {

@@ -15,7 +15,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import postprocessed_analysis as pa
 import config
-from plot_static_analysis import save_figure, plot_row_components_2x2, add_shared_legend
+from plot_static_analysis import save_figure, plot_row_components_2x2, add_shared_legend, PAULI_NAMES
 
 GAP_LABELS = {'absolute': r'$|\Delta(t)|/T_c$',
               'deviation': r'$(|\Delta(t)|-|\Delta(0)|)/T_c$',
@@ -145,12 +145,84 @@ def plot_normalization_vs_time(timestamp, data, directory_job_index, job, yscale
     return figures
 
 
+def _slice_color(position, n_slices):
+    """Color of time slice number `position` (light to dark with time)."""
+    if n_slices == 1:
+        return config.COLOR_1
+    return plt.get_cmap(config.COLORMAP)(np.interp(position / max(n_slices - 1, 1), [0, 1], config.COLORMAP_RANGE))
+
+
+def plot_energy_representation(timestamp, data, directory_job_index, job, xlim, n_slices, save_plot, save_dir):
+    """
+    Energy-time representations of one inner job (from 'energy_representation' of the postprocessing, runs with track_every_n):
+    g^R(eps, t) and g^K(eps, t) as 2x2 figures over the Pauli components and the distribution functions f_L = tanh + n_0, f_T = n_3.
+    n_slices times (first ... last tracked step, labelled by the window-center time) are drawn, real part solid, imaginary part dashed.
+    The saved g^R and g^K are the full functions (tau_3 of the delta function, 2 tau_3 tanh(eps/2T) and the thermal gap term added back by the postprocessing);
+    the distributions are f_L = tanh(eps/2T) + n_0 and f_T = n_3 from the saved occupation n.
+    """
+    entry = data['energy_representation'][job]
+    if entry is None:
+        print(f"Job {job}: no energy representation stored (run without track_every_n)")
+        return None
+
+    t_c = data['system_parameters'][job].get('critical_temperature', 1.0)
+    energy = np.asarray(entry['energy_grid']) / t_c
+    n_steps = len(entry['step_indices'])
+    slices = np.unique(np.linspace(0, n_steps - 1, min(n_slices, n_steps)).round().astype(int))
+    parameters = job_parameters_text(data, job)
+    subtitle = (parameters + ', ' if parameters else '') + r'solid: $\mathrm{Re}$, dashed: $\mathrm{Im}$'
+
+    def draw(ax, values, position_slices=slices):
+        for position, s in enumerate(position_slices):
+            color = _slice_color(position, len(position_slices))
+            ax.plot(energy, np.real(values[s]), color=color, linewidth=config.LINE_WIDTH, label=r'$t=%.3g$' % entry['center_times'][s])
+            ax.plot(energy, np.imag(values[s]), color=color, linewidth=config.LINE_WIDTH, linestyle='--', label='_nolegend_')
+
+    def finish(fig, axes, title, name):
+        for ax in np.ravel(axes):
+            ax.set_xlabel(r'$\epsilon/T_c$', fontsize=config.LABEL_SIZE)
+            ax.grid(True, alpha=config.GRID_ALPHA)
+            if xlim is not None:
+                ax.set_xlim(xlim)
+        fig.suptitle(title + '\n' + r'\small{' + subtitle + '}', fontsize=config.SUPTITLE_SIZE)
+        add_shared_legend(fig, np.ravel(axes)[0], len(slices) > 1)
+        if save_plot:
+            save_figure(fig, f'energy_{name}_{timestamp}_file{directory_job_index}_job{job}', timestamp, save_dir)
+
+    config.apply_style()
+    figures = []
+    #~ for key_full, key_raw, title, name in (('gr', 'gr_raw', r'$g^R(\epsilon, t)$', 'gr'), ('gk', 'gk_raw', r'$g^K(\epsilon, t)$', 'gk')):
+    #~     values = entry[key_full if full else key_raw]
+    for key, title, name in (('gr', r'$g^R(\epsilon, t)$', 'gr'), ('gk', r'$g^K(\epsilon, t)$', 'gk')):
+        values = entry[key]
+        fig, axes = plt.subplots(2, 2, figsize=config.FIGSIZE_GRID_2X2, sharex=True)
+        for p, ax in enumerate(axes.flat):
+            draw(ax, values[:, p])
+            ax.set_title(r'$' + PAULI_NAMES[p] + r'$ component', fontsize=config.TITLE_SIZE)
+        finish(fig, axes, title, name)
+        figures.append(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=config.FIGSIZE_ROW_1X2)
+    #~ draw(axes[0], entry['distribution_L'])
+    draw(axes[0], entry['thermal'][None, :] + entry['occupation'][:, 0])
+    axes[0].plot(energy, entry['thermal'], color='black', linestyle=':', linewidth=config.LINE_WIDTH, label=r'$\tanh(\epsilon/2T)$')
+    axes[0].set_title(r'energy mode $f_L = \tanh(\epsilon/2T) + n_0$', fontsize=config.TITLE_SIZE)
+    #~ draw(axes[1], entry['distribution_T'])
+    draw(axes[1], entry['occupation'][:, 3])
+    axes[1].set_title(r'charge mode $f_T = n_3$', fontsize=config.TITLE_SIZE)
+    finish(fig, axes, r'Distribution functions $f(\epsilon, t)$', 'distribution')
+    figures.append(fig)
+    return figures
+
+
 def plot_state_evolution(timestamp=None, detailed_check=None, directory_job_index=None, job_indices=None, gap=None, xlim=None,
-                         include_fft=None, fft_xlim=None, fft_yscale=None, save_plot=None, save_dir=None):
+                         include_fft=None, fft_xlim=None, fft_yscale=None, energy_xlim=None, energy_n_slices=None,
+                         save_plot=None, save_dir=None):
     """
     Gap, current and vector potential versus time for the inner jobs of a 'state_evolution' postprocessed file (three panels in a row).
     If include_fft: a second figure with |FFT| of the gap deviation, current and vector potential versus frequency (same layout).
-    If detailed_check: also the g^R and g^K normalization errors versus time (2x2 panels, one set per job).
+    If detailed_check: also the g^R and g^K normalization errors versus time (2x2 panels, one set per job) and, if the postprocessed file has an
+    'energy_representation' (run with track_every_n), g^R(eps, t), g^K(eps, t) and the distribution functions at a few times (see plot_energy_representation).
 
     Args:
         timestamp: postprocessed timestamp (default config.STATE_EVOLUTION_TIMESTAMP)
@@ -160,11 +232,12 @@ def plot_state_evolution(timestamp=None, detailed_check=None, directory_job_inde
         gap: 'absolute', 'deviation' or 'relative' (default config.STATE_EVOLUTION_GAP)
         xlim: time axis limits (default config.STATE_EVOLUTION_XLIM)
         include_fft, fft_xlim, fft_yscale: default to config.STATE_EVOLUTION_INCLUDE_FFT, _FFT_XLIM, _FFT_YSCALE
+        energy_xlim, energy_n_slices: default to config.STATE_EVOLUTION_ENERGY_XLIM, _ENERGY_N_SLICES
         save_plot, save_dir: default to config.SAVE_PLOTS, config.SAVE_DIR
 
     Returns:
         dict with the plotted series ('times', 'gap', 'current', 'vector_potential', 'labels', 'job_indices', 'figure') and, if detailed,
-        'normalization_figures' (dict job -> list of figures)
+        'normalization_figures' and 'energy_figures' (dicts job -> list of figures)
     """
     timestamp = str(config.STATE_EVOLUTION_TIMESTAMP if timestamp is None else timestamp)
     detailed_check = config.STATE_EVOLUTION_DETAILED_CHECK if detailed_check is None else detailed_check
@@ -175,6 +248,8 @@ def plot_state_evolution(timestamp=None, detailed_check=None, directory_job_inde
     include_fft = config.STATE_EVOLUTION_INCLUDE_FFT if include_fft is None else include_fft
     fft_xlim = config.STATE_EVOLUTION_FFT_XLIM if fft_xlim is None else fft_xlim
     fft_yscale = config.STATE_EVOLUTION_FFT_YSCALE if fft_yscale is None else fft_yscale
+    energy_xlim = config.STATE_EVOLUTION_ENERGY_XLIM if energy_xlim is None else energy_xlim
+    energy_n_slices = config.STATE_EVOLUTION_ENERGY_N_SLICES if energy_n_slices is None else energy_n_slices
     save_plot = config.SAVE_PLOTS if save_plot is None else save_plot
     if gap not in GAP_LABELS:
         raise ValueError(f"gap must be one of {list(GAP_LABELS)}, got '{gap}'")
@@ -202,6 +277,12 @@ def plot_state_evolution(timestamp=None, detailed_check=None, directory_job_inde
             result['normalization_figures'] = {job: plot_normalization_vs_time(timestamp, data, directory_job_index, job,
                                                                                 config.STATE_EVOLUTION_ROWS_YSCALE, save_plot, save_dir)
                                                for job in jobs}
+
+        if 'energy_representation' not in data:
+            print(f"Timestamp {timestamp} has no energy representation; run the evolution with track_every_n and postprocess it with 'state_evolution'")
+        else:
+            result['energy_figures'] = {job: plot_energy_representation(timestamp, data, directory_job_index, job, energy_xlim, energy_n_slices,
+                                                                        save_plot, save_dir) for job in jobs}
 
     return result
 

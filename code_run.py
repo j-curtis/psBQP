@@ -261,8 +261,10 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
         final_state = reduced_state
 
     #! understand what this means
-    #* circuit mode: gaps, currents and vector_potentials are all evaluated at t_(n+1), so the saved times are shifted by dt
-    saved_times = times + dt if circuit_params is not None else times
+    #~ #* circuit mode: gaps, currents and vector_potentials are all evaluated at t_(n+1), so the saved times are shifted by dt
+    #~ saved_times = times + dt if circuit_params is not None else times
+    #* both modes: gaps, currents and vector potentials are evaluated at t_(n+1)
+    saved_times = times + dt
     result_data = { 'final_state': final_state, 'gaps': gaps, 'currents': currents, 'vector_potentials': vector_potentials,'times': saved_times, 'input_pulse': prepared_driving_field, 'state_rows': state_rows}
 
     if track_state:

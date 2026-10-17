@@ -35,7 +35,10 @@ def compute_conductivity(data, job, threshold, sign):
     j_omega = np.asarray(data['current_fft'][job]) / dt
     a_omega = np.asarray(data['vpot_fft'][job]) / dt
 
-    mask = (np.abs(a_omega) > threshold) & (np.abs(omega) > threshold)
+    #~ mask = (np.abs(a_omega) > threshold) & (np.abs(omega) > threshold)
+    #* valid where |A(omega)| exceeds `threshold` times its maximum (relative, so the same for every pulse amplitude) and omega != 0;
+    #* outside, J/(i omega A) divides numerical noise of J by a small A(omega)
+    mask = (np.abs(a_omega) > threshold * np.abs(a_omega).max()) & (np.abs(omega) > 0)
     sigma = np.zeros_like(j_omega, dtype=complex)
     sigma[mask] = sign * j_omega[mask] / (1j * omega[mask] * a_omega[mask])
 
@@ -55,7 +58,7 @@ def plot_conductivity_job(timestamp, data, directory_job_index, job, threshold, 
               f"max |A(omega)| = {np.abs(result['a_omega']).max():.3e}")
     else:
         x_limits = (0, 10 * result['gap_equilibrium'])
-        print(f"Job {job}: no valid frequency (max |A(omega)| = {np.abs(result['a_omega']).max():.3e}, threshold {threshold:.1e})")
+        print(f"Job {job}: no valid frequency (max |A(omega)| = {np.abs(result['a_omega']).max():.3e}, relative threshold {threshold:.1e})")
     if xlim is not None:
         x_limits = xlim
 
@@ -63,7 +66,8 @@ def plot_conductivity_job(timestamp, data, directory_job_index, job, threshold, 
     fig, axes = plt.subplots(2, 2, figsize=config.FIGSIZE_GRID_2X2)
     style = dict(linewidth=config.LINE_WIDTH, alpha=config.LINE_ALPHA)
 
-    plot_mask = (omega > threshold) & (np.abs(sigma) > SIGMA_THRESHOLD)
+    #~ plot_mask = (omega > threshold) & (np.abs(sigma) > SIGMA_THRESHOLD)
+    plot_mask = mask & (omega > 0) & (np.abs(sigma) > SIGMA_THRESHOLD)
     axes[0, 0].plot(omega[plot_mask], np.real(sigma)[plot_mask], color=config.COLOR_1, label='simulation', **style)
     axes[0, 1].plot(omega[plot_mask], np.imag(sigma)[plot_mask], color=config.COLOR_2, label='simulation', **style)
 
@@ -117,7 +121,8 @@ def plot_conductivity(timestamp=None, directory_job_index=None, job_indices=None
         timestamp: postprocessed timestamp with Fourier transforms (default config.CONDUCTIVITY_TIMESTAMP)
         directory_job_index: result file index (default config.CONDUCTIVITY_DIRECTORY_JOB_INDEX)
         job_indices: inner jobs, one 2x2 figure each (default config.CONDUCTIVITY_JOB_INDICES, None = all)
-        threshold: minimum |A(omega)| and |omega| for a valid point (default config.CONDUCTIVITY_THRESHOLD)
+        threshold: a point is valid where |A(omega)| > threshold * max|A(omega)| (relative; default config.CONDUCTIVITY_THRESHOLD), sigma is only
+                   computed and plotted there
         sign: +1 or -1 (default config.CONDUCTIVITY_SIGN)
         xlim, ylim_re, ylim_im: axis limits (default config.CONDUCTIVITY_XLIM / _YLIM_RE / _YLIM_IM)
         external: optional list of dicts {'omega', 'sigma_re', 'sigma_im', 'label'} drawn dashed on the sigma panels

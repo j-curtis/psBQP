@@ -620,6 +620,7 @@ class StateObject:
 
         return { 'energy_grid': energy_grid, 'g_energy': g_energy}
 
+    #TODO: Remains to be fully checked
     #** Skipped for now, will check later, apparently this has also been updated
     def update_state_occupation(self, thermal):
         """

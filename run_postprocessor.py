@@ -16,6 +16,7 @@ from demler_tools.file_manager import path_management, io
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from usadel_keldysh_evolution import UsadelKeldyshEvolution
+from numerical_support import ThermalConvolutions
 
 
 def load_job_data(timestamp, job_index, running_machine='laptop'):
@@ -82,6 +83,104 @@ def compute_state_rows(final_state, thermal, time_duration=None):
             'fdt_row': pauli_row(error_row)}
 
 
+def _pauli_components(matrix_data):
+    """(2, 2, ...) array of Nambu matrices -> (4, ...) Pauli components c_p of M = sum_p c_p tau_p."""
+    m00, m01, m10, m11 = matrix_data[0, 0], matrix_data[0, 1], matrix_data[1, 0], matrix_data[1, 1]
+    return np.array([(m00 + m11) / 2, (m01 + m10) / 2, 1j * (m01 - m10) / 2, (m00 - m11) / 2])
+
+
+def wigner_energy_transform(antidiagonal_values, dt):
+    """
+    Same transform as StateObject.energy_time_representation, for values along the anti-diagonal already in the flipped order:
+    antidiagonal_values[..., m] = g(t_m, t_(N-1-m)), i.e. the relative time s = t_m - t_(N-1-m) increases with m.
+    Returns g(eps) = integral ds exp(i eps s) g(t_c + s/2, t_c - s/2) on the fftshifted energy grid eps = omega/2 of the energy representation.
+    """
+    n = antidiagonal_values.shape[-1]
+    g_fft = np.fft.ifft(np.fft.ifftshift(antidiagonal_values, axes=-1), axis=-1) * n * dt
+    return np.fft.fftshift(g_fft, axes=-1) * 2
+
+
+def compute_energy_representation(save_data, system_parameters, times, gaps, energy_cutoff=10.0):
+    """
+    Energy-time representations tracked by code_run (track_every_n) turned into the physical functions.
+
+    code_run stores the transforms of the evolved objects: g'^R (without the tau_3 delta(t - t') of g^R), g'' (g^K without 2 tau_3 f and without the
+    thermal gap term T = -calF(t1 - t2) [Delta(t1) + Delta(t2)]) and the occupation n (without the thermal f). All are evaluated at the center time of the
+    window, t_c = t_newest - T_max/2 (anti-diagonal of the two-time window). Here the full functions are rebuilt:
+        g^R(eps)  = g'^R(eps) + tau_3
+        g^K(eps)  = g''(eps) + 2 tau_3 tanh(eps / 2T) + T(eps, t_c),   T(eps, t_c) = Wigner transform of the thermal gap term, built from the gap history of the
+                    window (before the start of the run the first gap value is used) and the thermal integral of ThermalConvolutions
+        distribution: energy mode f_L = tanh(eps / 2T) + n_0, charge mode f_T = n_3 (n = n_0 tau_0 + n_3 tau_3)
+    The s = 0 sample of the log-singular calF (odd N_t only) is replaced by its cell average -(i/pi)(ln(pi T dt/2) - 1).
+
+    energy_cutoff: only the energies |eps| <= energy_cutoff * T_c are kept (the energy grid of the transform reaches pi/(2 dt)); None keeps the whole grid.
+    The cut is applied to every array as soon as it is built, the thermal gap term is transformed on the full grid and cut afterwards.
+
+    Returns:
+        dict with 'energy_grid' (N_eps,), 'step_indices', 'step_times' (newest time of the window), 'center_times', 'temperature', 'thermal' (tanh),
+        'gr', 'gk', 'occupation' ((n, 4, N_eps) complex Pauli components tau_0..tau_3; gr and gk are the full functions, occupation is n without the thermal part).
+        The distribution functions follow as f_L = thermal + occupation[:, 0] and f_T = occupation[:, 3]
+    """
+    indices = np.asarray(save_data['energy_time_indices'])
+    #~ energy_grid = np.asarray(save_data['gk_energy_time'][0]['energy_grid'])
+    energy_grid_full = np.asarray(save_data['gk_energy_time'][0]['energy_grid'])
+    n_t = len(energy_grid_full)
+    #* energy window that is saved
+    if energy_cutoff is None:
+        keep = np.ones(n_t, dtype=bool)
+    else:
+        keep = np.abs(energy_grid_full) <= energy_cutoff * system_parameters.get('critical_temperature', 1.0)
+    energy_grid = energy_grid_full[keep]
+    times = np.asarray(times)
+    dt = times[1] - times[0]
+    window_duration = (n_t - 1) * dt
+    temperature = system_parameters['temperature']
+
+    def components(entries):
+        #~ return np.array([_pauli_components(np.asarray(entry['g_energy'].data)) for entry in entries])
+        return np.array([_pauli_components(np.asarray(entry['g_energy'].data))[..., keep] for entry in entries])
+
+    gr_raw = components(save_data['gr_energy_time'])
+    gk_raw = components(save_data['gk_energy_time'])
+    occupation = components(save_data['f_energy_time'])
+
+    #* thermal gap term along the anti-diagonal in the flipped order, T(t_m, t_(N-1-m)) = -calF(s_m) [Delta(t_m) + Delta(t_(N-1-m))]
+    thermal = ThermalConvolutions(temperature, {'time_sampling': n_t, 'time_duration': window_duration})
+    m = np.arange(n_t)
+    calF = thermal.thermal_integral.data[0, 0][m, n_t - 1 - m].copy()
+    if n_t % 2 == 1:
+        calF[(n_t - 1) // 2] = -(1j / np.pi) * (np.log(np.pi * temperature * dt / 2) - 1.0)
+
+    gap_series = np.asarray(gaps)
+    gap_term = np.zeros_like(gk_raw)
+    
+    for position, step in enumerate(indices):
+        gap_window = gap_series[np.clip(np.arange(step - n_t + 1, step + 1), 0, None)]
+        gap_pair = gap_window[m] + gap_window[n_t - 1 - m]
+        values = np.zeros((4, n_t), dtype=complex)
+        values[2] = -calF * np.real(gap_pair)
+        values[1] = -calF * np.imag(gap_pair)
+        #~ gap_term[position] = wigner_energy_transform(values, dt)
+        gap_term[position] = wigner_energy_transform(values, dt)[:, keep]
+
+    thermal_part = np.tanh(energy_grid / (2 * temperature))
+    #~ gr_full = gr_raw.copy()
+    #~ gr_full[:, 3] += 1.0
+    #~ gk_full = gk_raw + gap_term
+    #~ gk_full[:, 3] += 2 * thermal_part
+    #* the raw objects, the gap term and the distributions are not saved (they follow from the saved arrays and the gap history), the full functions are built in place
+    gr_raw[:, 3] += 1.0
+    gk_raw += gap_term
+    gk_raw[:, 3] += 2 * thermal_part
+
+    step_times = times[indices]
+    #~ return {'energy_grid': energy_grid, 'step_indices': indices, 'step_times': step_times, 'center_times': step_times - window_duration / 2,
+    #~         'temperature': temperature, 'thermal': thermal_part, 'gr_raw': gr_raw, 'gr': gr_full, 'gk_raw': gk_raw, 'gk': gk_full, 'gap_term': gap_term,
+    #~         'occupation': occupation, 'distribution_L': thermal_part[None, :] + occupation[:, 0], 'distribution_T': occupation[:, 3]}
+    return {'energy_grid': energy_grid, 'step_indices': indices, 'step_times': step_times, 'center_times': step_times - window_duration / 2,
+            'temperature': temperature, 'thermal': thermal_part, 'gr': gr_raw, 'gk': gk_raw, 'occupation': occupation}
+
+
 def compute_spectra(gaps, currents, vector_potentials, times):
     """
     Fourier transforms of the gap deviation, the current and the vector potential, with the time origin at the pulse (maximum of |A|).
@@ -105,7 +204,7 @@ def compute_spectra(gaps, currents, vector_potentials, times):
             'vpot_fft': np.fft.fftshift(np.fft.fft(vector_potentials) * dt * phase_correction)}
 
 
-def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
+def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_cutoff=10.0):
     """
     Postprocess Keldysh simulation data and extract observables.
 
@@ -119,9 +218,12 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
                           Supported keywords:
                           - 'transmitivity': Compute gap, current, and transmitivity analysis
                           - 'state_evolution': gap, current, vector potential and times per job, their Fourier transforms (as in
-                            'spectral_analysis') and, if the run was made with track_state=True, the g^R / g^K normalization errors
-                            versus time ('normalization')
+                            'spectral_analysis'), if the run was made with track_state=True the g^R / g^K normalization errors
+                            versus time ('normalization'), and if it was made with track_every_n the energy-time representations of g^R, g^K and the
+                            occupation with the thermal parts and the thermal gap term added back ('energy_representation', see compute_energy_representation)
                           - 'spectral_analysis': gap, current and vector potential with their Fourier transforms
+        energy_cutoff: energy window of the 'energy_representation' in units of T_c, only -energy_cutoff < eps/T_c < energy_cutoff is saved
+                       (default 10, None = the whole energy grid, which reaches pi/(2 dt))
 
     Returns:
         0 on success
@@ -257,6 +359,8 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         gap_fft_list, current_fft_list, vpot_fft_list, omega_list, T_c_list = [], [], [], [], []
         #* normalization versus time saved by code_run (track_state=True), None for runs without it
         normalization_list = []
+        #* energy-time representations (code_run track_every_n), None for runs without them
+        energy_list = []
 
         # Loop over all jobs
         for job_idx in job_indices:
@@ -294,6 +398,15 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
             else:
                 normalization_list.append(None)
 
+            if 'gk_energy_time' in save_data and times is not None:
+                try:
+                    energy_list.append(compute_energy_representation(save_data, system_parameters, times, gaps, energy_cutoff))
+                except Exception as e:
+                    print(f"Warning: Could not compute the energy representation for job {job_idx}: {type(e).__name__}: {e}")
+                    energy_list.append(None)
+            else:
+                energy_list.append(None)
+
         # Package results
         result_data = {
             'system_parameters': system_parameters_list,
@@ -307,6 +420,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords):
         #* only present if at least one job was run with track_state=True
         if any(entry is not None for entry in normalization_list):
             result_data['normalization'] = normalization_list
+        #* only present if at least one job was run with track_every_n
+        if any(entry is not None for entry in energy_list):
+            result_data['energy_representation'] = energy_list
 
         # Save results
         with open(save_filename, 'wb') as f:

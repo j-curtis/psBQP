@@ -28,10 +28,10 @@ STATIC_ANALYSIS_ROWS_YSCALE = 'linear'          # 'linear' or 'symlog'
 #* ---------------------------------------------------------------------------------------------
 #* plot_state_evolution.py
 #* ---------------------------------------------------------------------------------------------
-STATE_EVOLUTION_TIMESTAMP = '1792147121'
+STATE_EVOLUTION_TIMESTAMP = '1792241185'
 STATE_EVOLUTION_DIRECTORY_JOB_INDEX = 0        # result file (postprocessing job) of the timestamp
-STATE_EVOLUTION_JOB_INDICES = None            # inner jobs to plot (None = all)
-STATE_EVOLUTION_DETAILED_CHECK = False         # g^R / g^K normalization versus time (needs a run with track_state=True)
+STATE_EVOLUTION_JOB_INDICES = [4]            # inner jobs to plot (None = all)
+STATE_EVOLUTION_DETAILED_CHECK = True         # g^R / g^K normalization versus time (needs a run with track_state=True)
 STATE_EVOLUTION_GAP = 'absolute'               # 'absolute' |Delta|/T_c, 'deviation' (|Delta(t)|-|Delta(0)|)/T_c, 'relative' (|Delta(t)|-|Delta(0)|)/|Delta(0)|
 STATE_EVOLUTION_XLIM = None                    # time axis limits, e.g. (0, 30)
 STATE_EVOLUTION_ROWS_YSCALE = 'linear'         # 'linear' or 'symlog' for the normalization plots
@@ -39,15 +39,18 @@ STATE_EVOLUTION_INCLUDE_FFT = True             # second figure: |FFT| of gap, cu
 STATE_EVOLUTION_FFT_XLIM = (-10, 10)           # frequency axis limits in omega/T_c
 STATE_EVOLUTION_FFT_YSCALE = 'linear'          # 'linear' or 'log'
 STATE_EVOLUTION_FFT_MIN_GAP = 0.01             # |Delta(0)|/T_c below this: no Delta / 2 Delta lines in the FFT plot
+STATE_EVOLUTION_ENERGY_XLIM = (-10, 10)        # energy axis limits (eps/T_c) of the energy-time representation plots (detailed check, needs track_every_n)
+STATE_EVOLUTION_ENERGY_N_SLICES = 3            # number of times (first ... last tracked step) drawn in each energy plot
 
 #* ---------------------------------------------------------------------------------------------
 #* plot_conductivity.py (reads the Fourier transforms of a 'state_evolution' / 'spectral_analysis' postprocessed timestamp)
 #* ---------------------------------------------------------------------------------------------
-CONDUCTIVITY_TIMESTAMP = '1792179986'
+CONDUCTIVITY_TIMESTAMP = '1792228571'
 CONDUCTIVITY_DIRECTORY_JOB_INDEX = 0           # result file (postprocessing job) of the timestamp
-CONDUCTIVITY_JOB_INDICES = [1]                 # inner jobs, one 2x2 figure each (None = all)
+CONDUCTIVITY_JOB_INDICES = [0]                 # inner jobs, one 2x2 figure each (None = all)
 CONDUCTIVITY_SIGN = -1                         # sigma = SIGN * J(omega) / (i omega A(omega)); -1 as in data_analysis_sc.extract_conductivity
-CONDUCTIVITY_THRESHOLD = 1e-6                  # minimum |A(omega)| (raw FFT, without the dt factor) and |omega| for a valid point
+#~ CONDUCTIVITY_THRESHOLD = 1e-6                  # minimum |A(omega)| (raw FFT, without the dt factor) and |omega| for a valid point
+CONDUCTIVITY_THRESHOLD = 1e-3                  # sigma only where |A(omega)| > threshold * max|A(omega)| (relative to the peak of the pulse spectrum)
 CONDUCTIVITY_XLIM = None                       # frequency axis limits (None: valid range plus 10% margin)
 CONDUCTIVITY_YLIM_RE = None
 CONDUCTIVITY_YLIM_IM = None
@@ -101,6 +104,7 @@ FIGSIZE_SINGLE = (9, 6)
 FIGSIZE_STACKED = (9, 9)
 FIGSIZE_GRID_2X2 = (14, 10)
 FIGSIZE_ROW_1X3 = (21, 6)
+FIGSIZE_ROW_1X2 = (14, 6)
 
 
 def apply_style():

@@ -1102,7 +1102,6 @@ class UsadelKeldyshEvolution:
 
     # ========== Update rules for gr and gk ==========
 
-    #TODO: Remains to be fully checked 
     def _compute_new_gr_row(self, state, gap_history, A_history=None):
         """
         Evolve retarded Green's function gr by one timestep using Crank-Nicolson discretization.
@@ -1220,7 +1219,6 @@ class UsadelKeldyshEvolution:
         )
         return gr_new, gr_diagonal_new 
 
-    #TODO: Remains to be fully checked 
     def _compute_new_gk_complete(self, state, gap_history, A_history=None):
         """
         Evolve Keldysh Green's function g^K by one timestep using Crank-Nicolson discretization.
@@ -1354,8 +1352,7 @@ class UsadelKeldyshEvolution:
         trial_state.update_state_gk(new_gk_row, new_gk_diag)
         return trial_state
 
-    #~ def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=10):
-    def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=25, circuit_params=None, driving_field_current=None, driving_field_next=None, current_no_gradient=None, vector_potential_tolerance=1e-3):
+    def _evolve_state_by_one_timestep(self, state, A_external=None, gap_tolerance=1e-5, max_gap_iterations=25, circuit_params=None, driving_field_current=None, driving_field_next=None, current_no_gradient=None, vector_potential_tolerance=1e-4):
         
         """
         Evolve state by one timestep using Crank-Nicolson discretization, with a self-consistent gap Δ(t).
@@ -1381,17 +1378,20 @@ class UsadelKeldyshEvolution:
 
         Returns:
             gap_new: Gap value at new time t
-            current_new: Current at the evolved time (mode 1: J(t-dt) before the step, mode 2: J(t) after the step)
-            vector_potential_new: Vector potential (mode 1: A_external[-1]; mode 2: converged A(t))
+            current_new: Current at the evolved time t_(n+1) (both modes, J after the step; mode 1 used to return J(t_n) before the step)
+            vector_potential_new: Vector potential at t_(n+1) (mode 1: A_external[-1], the field appended by the caller; mode 2: converged A(t))
 
         Calls:
             - _evolve_trial_state(state, gap_history, A_external)
         """
+
         #* mode 2: gap and vector potential are solved together at the new time
         if circuit_params is not None:
             return self._evolve_state_gap_and_vector_potential(state, A_external, circuit_params, driving_field_current, driving_field_next, current_no_gradient, gap_tolerance, vector_potential_tolerance, max_gap_iterations)
 
-        current_new = state.get_current_at_time_t(A_external, self.thermal)
+        #~ current_new = state.get_current_at_time_t(A_external, self.thermal)
+        #* mode 1: A_external is the window on the NEW time grid, its last entry is the field at the new time t_(n+1) (appended by the caller before the step);
+        #* the current is evaluated after the step on the new state (below), so that gap, A and J all refer to t_(n+1)
 
         # Step 1: guess Δ(t) by linear extrapolation, old_gap is on the old grid (last entry is Δ(t-dt))
         old_gap = state.get_gap_history()
@@ -1429,6 +1429,8 @@ class UsadelKeldyshEvolution:
         # Step 3: Extract observables
         gap_history = state.get_gap_history()
         gap_new = gap_history[-1]
+        #* current of the new state at t_(n+1), with the window ending at A(t_(n+1)) (same call as at the end of the mode 2 step)
+        current_new = state.get_current_at_time_t(A_external, self.thermal)
 
         # Current is zero for now (Stage 2 of project)
         if A_external is None:
@@ -1438,7 +1440,6 @@ class UsadelKeldyshEvolution:
 
         return gap_new, current_new, vector_potential_new
 
-    #TODO: Remains to be fully checked 
     def _evolve_state_gap_and_vector_potential(self, state, A_external, circuit_params, driving_field_current, driving_field_next,
                                                current_no_gradient, gap_tolerance, vector_potential_tolerance, max_iterations):
         """
@@ -1455,7 +1456,9 @@ class UsadelKeldyshEvolution:
         """
         old_gap = state.get_gap_history()
         gap_guess = 2 * old_gap[-1] - old_gap[-2]
-        A_guess = 2 * np.real(A_external[-1]) - np.real(A_external[-2])
+        #~ A_guess = 2 * np.real(A_external[-1]) - np.real(A_external[-2])
+        #* quadratic extrapolation from the last three values, A_(n+1) = 3 A_n - 3 A_(n-1) + A_(n-2) (error O(dt^3) instead of O(dt^2))
+        A_guess = 3 * np.real(A_external[-1]) - 3 * np.real(A_external[-2]) + np.real(A_external[-3])
 
         unknowns = np.array([np.real(gap_guess), np.imag(gap_guess), A_guess])
         jacobian = -np.eye(3)
@@ -1470,7 +1473,8 @@ class UsadelKeldyshEvolution:
             trial_state = self._evolve_trial_state(state, gap_history, A_trial)
 
             gap_residual = trial_state.get_gap_history()[-1] - gap_guess
-            A_out = np.real(self.update_vector_potential(old_vector_potential=A_external, driving_field_current=driving_field_current, driving_field_next=driving_field_next, current=current_no_gradient, circuit_params=circuit_params, state=trial_state)[-1])
+            #~ A_out = np.real(self.update_vector_potential(old_vector_potential=A_external, driving_field_current=driving_field_current, driving_field_next=driving_field_next, current=current_no_gradient, circuit_params=circuit_params, state=trial_state)[-1])
+            A_out = np.real(self.update_vector_potential(old_vector_potential=A_external, driving_field_current=driving_field_current, driving_field_next=driving_field_next, current=current_no_gradient, circuit_params=circuit_params, state=trial_state, new_vector_potential_guess=A_guess)[-1])
             A_residual = A_out - A_guess
 
             if np.abs(gap_residual) < gap_tolerance and np.abs(A_residual) < vector_potential_tolerance:
@@ -1505,8 +1509,7 @@ class UsadelKeldyshEvolution:
 
         return gap_new, current_new, vector_potential_new
 
-    #TODO: Remains to be fully checked
-    def update_vector_potential(self, old_vector_potential, driving_field_current=None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None, state=None):
+    def update_vector_potential(self, old_vector_potential, driving_field_current=None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None, state=None, new_vector_potential_guess=None):
         """
         Update vector potential using sliding window or Crank-Nicolson scheme.
 
@@ -1529,6 +1532,9 @@ class UsadelKeldyshEvolution:
             kernel_prefactor: Kernel trace tr(K_(t,t)) (required if circuit_params provided)
             circuit_params: Dict with Z_T, R_n, J_DP_prime, I_DP (optional)
             state: StateObject (required if circuit_params provided, for kernel and current computation)
+            new_vector_potential_guess: Optional guess for A(t_(n+1)) (circuit mode). If given, J(t_(n+1)) is evaluated with this A and the kernel term is dropped,
+                                        the returned A is consistent with the guess when the caller's iteration has converged (A_out = A_guess).
+                                        If None: J(t_(n+1)) at A_(n+1) = 0 plus the kernel term (previous behaviour)
 
         Returns:
             new_vector_potential: Updated array (length N_t)
@@ -1551,9 +1557,15 @@ class UsadelKeldyshEvolution:
             j_dp_prime = circuit_params['J_DP_prime']
             r_contact = circuit_params['R_c'] if 'R_c' in circuit_params else 0.0
 
-            #~ kernel_prefactor = state.get_current_kernel_prefactor(self.thermal_dist)
-            kernel_prefactor = state.get_current_kernel_prefactor(self.thermal)
-            A_external_newest = np.append(old_vector_potential[1:], 0.0)
+            #* with a guess for A(t_(n+1)) the current J(t_(n+1)) is evaluated at that A and contains the full dependence on it, the kernel term (linearization
+            #* around A_(n+1) = 0) is then not needed (kernel_prefactor = 0 gives lhs_coeff = 1); the caller checks that the A returned here equals the guess
+            
+            if new_vector_potential_guess is None:
+                kernel_prefactor = state.get_current_kernel_prefactor(self.thermal)
+                A_external_newest = np.append(old_vector_potential[1:], 0.0)
+            else:
+                kernel_prefactor = 0.0
+                A_external_newest = np.append(old_vector_potential[1:], new_vector_potential_guess)
 
             #~ current_newest = state.get_current_at_time_t(A_external_newest, self.thermal_dist, self.thermal_integral,
                                                    #~ thermal_sum_left=self.thermal_sum_left,
@@ -1578,7 +1590,6 @@ class UsadelKeldyshEvolution:
             #* the last division term comes from gradient exclusion in current expression
             current_term = np.real(dt *j_dp_prime * ( ((2.0 * z_t + r_contact)/ r_n) *(j_prime_hist + current_newest)/2.0/j_dp_prime - (2.0 * z_t / r_n) *(i_in_current + i_in_next)/2.0 ))/(1 + (2.0 * z_t  + r_contact)/ (r_n))
             rhs = (a_n + current_term)/ lhs_coeff
-            #TODO: scale the output of the current by critical current! and check all the factors!!
             # Update vector potential history using sliding window
             new_vector_potential = np.append(old_vector_potential[1:], rhs)
 
@@ -1628,7 +1639,7 @@ class UsadelKeldyshEvolution:
             - 'gaps': Array of gap values at each timestep (length num_timesteps)
             - 'currents': Array of current values at each timestep (length num_timesteps)
             - 'vector_potentials': Array of vector potential values at each timestep (length num_timesteps)
-              (circuit mode: gaps, currents and vector_potentials are all evaluated at the new time t_(n+1))
+              (both modes: gaps, currents and vector_potentials are all evaluated at the new time t_(n+1))
             - 'gr_energy_time': (only if track_occupations=True) List of energy-time representations of gr
             - 'gk_energy_time': (only if track_occupations=True) List of energy-time representations of gk
             - 'f_energy_time': (only if track_occupations=True) List of energy-time representations of occupation function
@@ -1681,12 +1692,20 @@ class UsadelKeldyshEvolution:
             if circuit_params is None:
                 # Mode 1: Simple voltage-driven (original behavior)
 
-                # Evolve state using updated A_external
+                #~ # Evolve state using updated A_external
+                #~ gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
+                #~ A_external = self.update_vector_potential(old_vector_potential=A_external, driving_field_current=driving_field[time_index] if driving_field is not None else None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None)
+
+                #* the field at the new time t_(n+1) = driving_field[n+1] enters the window BEFORE the step (as in mode 2, the last value is repeated at the
+                #* end of the array); gap, current and vector potential are then all evaluated at t_(n+1)
+                if driving_field is None:
+                    field_new = A_external[-1]
+                else:
+                    field_new = driving_field[time_index + 1] if time_index < len(driving_field) - 1 else driving_field[time_index]
+                A_external = np.append(A_external[1:], field_new)
+
                 gap_new, current_new, vector_potential_new = self._evolve_state_by_one_timestep(state, A_external)
 
-                A_external = self.update_vector_potential(old_vector_potential=A_external, driving_field_current=driving_field[time_index] if driving_field is not None else None, driving_field_next=None, current=None, kernel_prefactor=None, circuit_params=None)
-
-            #? this part remains to be checked!
             else:
                 # Mode 2: Current-driven with Crank-Nicolson
                 # Evolve state FIRST to get current and kernel
@@ -1694,6 +1713,7 @@ class UsadelKeldyshEvolution:
 
                 current_no_gradient = state.get_current_at_time_t(A_external, self.thermal, include_derivative = False)
 
+                #* This repreents the incoming current pulse
                 driving_field_current = driving_field[time_index] 
                 driving_field_next = driving_field[time_index + 1] if time_index < num_timesteps - 1 else driving_field[time_index] 
 

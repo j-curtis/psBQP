@@ -126,7 +126,7 @@ def plot_fft_vs_frequency(timestamp, data, directory_job_index, job_indices, xli
 
 
 def plot_normalization_vs_time(timestamp, data, directory_job_index, job, yscale, save_plot, save_dir):
-    """g^R and g^K normalization errors on the diagonal t = t' versus time, one 2x2 figure each (Re / Im per Pauli component)."""
+    """g^R and g^K normalization errors versus time (per component the entry of largest modulus over t'), one 2x2 figure each (Re / Im per Pauli component)."""
     history = data['normalization'][job]
     if history is None:
         print(f"Job {job}: no normalization data stored (run without track_state=True)")

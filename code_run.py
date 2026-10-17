@@ -67,7 +67,7 @@ def evolve_keldysh_state(save_filename, num_timesteps, system_parameters, initia
             - 'times': Time array (length num_timesteps)
             - 'input_pulse': Applied driving field (A(t) or I_in(t) for current-driven)
             - 'gr_normalization', 'gk_normalization', 'normalization_times': (if track_state) (4, n) complex Pauli components of the
-              normalization errors at (t, t') = (t_n, t_n) and the times t_n
+              normalization errors of the row t = t_n (per component the entry of largest modulus over t') and the times t_n
             - 'gr_energy_time', 'gk_energy_time', 'f_energy_time': (if track_every_n is set)
     """
     #* Detect which machine we're running on

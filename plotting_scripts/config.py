@@ -43,6 +43,22 @@ STATE_EVOLUTION_ENERGY_XLIM = (-10, 10)        # energy axis limits (eps/T_c) of
 STATE_EVOLUTION_ENERGY_N_SLICES = 3            # number of times (first ... last tracked step) drawn in each energy plot
 
 #* ---------------------------------------------------------------------------------------------
+#* plot_transmission.py (reads a 'transmitivity' postprocessed timestamp of current pulse runs)
+#* ---------------------------------------------------------------------------------------------
+TRANSMISSION_TIMESTAMP = '1792241185'
+TRANSMISSION_DIRECTORY_JOB_INDEX = 0           # result file (postprocessing job) used for the time traces and the detailed checks
+TRANSMISSION_DIRECTORY_JOB_INDICES = None      # result files overlaid in the transmitivity plot (None = all)
+TRANSMISSION_JOB_INDICES = None                # inner jobs for the time traces and detailed checks (None = all)
+TRANSMISSION_DETAILED_CHECK = True             # g^R / g^K normalization versus time and energy-time distributions (need track_state / track_every_n)
+TRANSMISSION_GAP = 'absolute'                  # 'absolute', 'deviation' or 'relative' (see STATE_EVOLUTION_GAP)
+TRANSMISSION_XLIM = None                       # time axis limits of the traces
+TRANSMISSION_INPUT_TIME_SHIFT = -1             # I_in is plotted at times + SHIFT * dt (gap, J, A are saved at t_(n+1), input_pulse[n] belongs to t_n)
+TRANSMISSION_NORMAL_REFERENCE = True           # dashed line 2 Z_T / (2 Z_T + R_n + R_c) in the transmitivity plot (needs circuit_params)
+TRANSMISSION_ROWS_YSCALE = 'linear'            # 'linear' or 'symlog' for the normalization plots
+TRANSMISSION_ENERGY_XLIM = (-10, 10)           # energy axis limits (eps/T_c) of the energy-time plots
+TRANSMISSION_ENERGY_N_SLICES = 3               # number of times drawn in each energy plot
+
+#* ---------------------------------------------------------------------------------------------
 #* plot_conductivity.py (reads the Fourier transforms of a 'state_evolution' / 'spectral_analysis' postprocessed timestamp)
 #* ---------------------------------------------------------------------------------------------
 CONDUCTIVITY_TIMESTAMP = '1792228571'

@@ -1629,8 +1629,8 @@ class UsadelKeldyshEvolution:
                            If provided, enables Crank-Nicolson vector potential update
             track_occupations: If True, compute and store energy-time representations of gr, gk, and f
                                at each timestep (default: False)
-            track_state: If True, the g^R and g^K normalization errors of the newest row (t = -1) at t' = t are stored every
-                         track_state_every_n timesteps, while the row still has the full history (default: False)
+            track_state: If True, the g^R and g^K normalization errors of the newest row (t = -1) are stored every
+                         track_state_every_n timesteps (per Pauli component the entry of largest modulus over t'), while the row still has the full history (default: False)
             track_state_every_n: Stride of the normalization tracking (default 1)
 
         Returns:
@@ -1644,7 +1644,7 @@ class UsadelKeldyshEvolution:
             - 'gk_energy_time': (only if track_occupations=True) List of energy-time representations of gk
             - 'f_energy_time': (only if track_occupations=True) List of energy-time representations of occupation function
             - 'gr_normalization', 'gk_normalization': (only if track_state=True) (4, n_tracked) complex Pauli components of the g^R and
-              g^K normalization errors at (t, t') = (t_n, t_n); 'normalization_indices': (n_tracked,) timestep indices n
+              g^K normalization errors of the row t = t_n, per component the entry of largest modulus over t'; 'normalization_indices': (n_tracked,) timestep indices n
 
         Calls:
             - update_vector_potential(A_external, driving_field, state, circuit_params, ...)
@@ -1732,8 +1732,11 @@ class UsadelKeldyshEvolution:
             if track_state and time_index % track_state_every_n == 0:
                 _, gr_totals = state.check_gr_normalization(t1_idx=-1)
                 _, gk_totals, _ = state.check_keldysh_normalization(-1, self.thermal)
-                gr_normalization_list.append(gr_totals[:, -1])
-                gk_normalization_list.append(gk_totals[:, -1])
+                #~ gr_normalization_list.append(gr_totals[:, -1])
+                #~ gk_normalization_list.append(gk_totals[:, -1])
+                #* per Pauli component the entry of largest modulus over t' (signed complex value kept)
+                gr_normalization_list.append(np.take_along_axis(gr_totals, np.argmax(np.abs(gr_totals), axis=1)[:, None], axis=1)[:, 0])
+                gk_normalization_list.append(np.take_along_axis(gk_totals, np.argmax(np.abs(gk_totals), axis=1)[:, None], axis=1)[:, 0])
                 normalization_indices.append(time_index)
 
             if track_occupations:

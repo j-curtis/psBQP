@@ -204,6 +204,29 @@ def compute_spectra(gaps, currents, vector_potentials, times):
             'vpot_fft': np.fft.fftshift(np.fft.fft(vector_potentials) * dt * phase_correction)}
 
 
+def tracked_state_entries(save_data, system_parameters, times, gaps, energy_cutoff, job_idx):
+    """
+    Entries of one job that exist only for runs with track_state / track_every_n.
+
+    Returns:
+        (normalization, energy_representation): normalization is a dict with 'times', 'gr_normalization', 'gk_normalization' (None without track_state),
+        energy_representation is the output of compute_energy_representation (None without track_every_n or on failure)
+    """
+    normalization = None
+    if 'gr_normalization' in save_data:
+        normalization = {'times': save_data['normalization_times'], 'gr_normalization': save_data['gr_normalization'],
+                         'gk_normalization': save_data['gk_normalization']}
+
+    energy_representation = None
+    if 'gk_energy_time' in save_data and times is not None:
+        try:
+            energy_representation = compute_energy_representation(save_data, system_parameters, times, gaps, energy_cutoff)
+        except Exception as e:
+            print(f"Warning: Could not compute the energy representation for job {job_idx}: {type(e).__name__}: {e}")
+
+    return normalization, energy_representation
+
+
 def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_cutoff=10.0):
     """
     Postprocess Keldysh simulation data and extract observables.
@@ -216,7 +239,8 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_
         timestamp: Timestamp folder identifier (processes all jobs in folder)
         compute_keywords: List of strings specifying what to compute
                           Supported keywords:
-                          - 'transmitivity': Compute gap, current, and transmitivity analysis
+                          - 'transmitivity': Compute gap, current, and transmitivity analysis; also the g^R / g^K normalization history ('normalization', needs
+                            track_state=True), the energy-time representations ('energy_representation', needs track_every_n) and the circuit parameters
                           - 'state_evolution': gap, current, vector potential and times per job, their Fourier transforms (as in
                             'spectral_analysis'), if the run was made with track_state=True the g^R / g^K normalization errors
                             versus time ('normalization'), and if it was made with track_every_n the energy-time representations of g^R, g^K and the
@@ -239,6 +263,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_
             - 'incoming_current_amplitudes': Array of I_in_max values
             - 'transmitted_current_amplitudes': Array of J_max values
             - 'transmitivity': Array of transmitivity values (J_max/I_in_max)
+            - 'circuit_params': List of circuit parameter dicts (None for runs without a circuit)
+            - 'normalization', 'energy_representation': Lists with one entry per job (None where not tracked), present only if at least one job has them
+            Entries are None (arrays NaN) for jobs without a saved input pulse, so list positions equal the raw job indices.
 
     Saved data format for 'static': system/field/grid parameters per job, averaged gap/current/vector potential
     (mean of the last 50 timesteps), 'gap_std' (standard deviation of |gap| over the same 50 timesteps) and the full
@@ -286,6 +313,9 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_
         I_in_max_list = []
         J_max_list = []
         transmitivity_list = []
+        circuit_params_list = []
+        normalization_list = []
+        energy_list = []
 
         # Loop over all jobs
         for job_idx in job_indices:
@@ -305,21 +335,30 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_
             times = save_data.get('times', None)
             input_pulse_raw = save_data.get('input_pulse', None)
 
-            # Handle missing input pulse
-            if input_pulse_raw is None:
-                continue
+            #~ # Handle missing input pulse
+            #~ if input_pulse_raw is None:
+            #~     continue
 
             # Store time series
             gap_evolution_list.append(gaps)
             current_evolution_list.append(np.real(currents))
             vector_potential_evolution_list.append(vector_potentials)
             times_list.append(times)
-            incoming_current_pulses.append(np.real(input_pulse_raw))
+            #* jobs without a saved input pulse stay in the lists (NaN amplitudes) so that list positions equal the raw job indices
+            incoming_current_pulses.append(None if input_pulse_raw is None else np.real(input_pulse_raw))
+            circuit_params_list.append(input_kwargs.get('circuit_params', None))
+
+            normalization, energy_representation = tracked_state_entries(save_data, system_parameters, times, gaps, energy_cutoff, job_idx)
+            normalization_list.append(normalization)
+            energy_list.append(energy_representation)
 
             # Compute transmitivity quantities
-            I_in_max = np.max(np.abs(input_pulse_raw))
-            J_max = np.max(np.abs(currents))
-            transmitivity = J_max / I_in_max if I_in_max != 0 else 0
+            if input_pulse_raw is None:
+                I_in_max, J_max, transmitivity = np.nan, np.nan, np.nan
+            else:
+                I_in_max = np.max(np.abs(input_pulse_raw))
+                J_max = np.max(np.abs(currents))
+                transmitivity = J_max / I_in_max if I_in_max != 0 else 0
 
             I_in_max_list.append(I_in_max)
             J_max_list.append(J_max)
@@ -341,8 +380,14 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_
             'times': times_list,
             'incoming_current_amplitudes': incoming_current_amplitudes,
             'transmitted_current_amplitudes': transmitted_current_amplitudes,
-            'transmitivity': transmitivity
+            'transmitivity': transmitivity,
+            'circuit_params': circuit_params_list
         }
+        #* only present if at least one job was run with track_state / track_every_n
+        if any(entry is not None for entry in normalization_list):
+            result_data['normalization'] = normalization_list
+        if any(entry is not None for entry in energy_list):
+            result_data['energy_representation'] = energy_list
 
         # Save results
         with open(save_filename, 'wb') as f:
@@ -392,20 +437,23 @@ def postprocess_keldysh_data(save_filename, timestamp, compute_keywords, energy_
             omega_list.append(spectra['omega'])
             T_c_list.append(system_parameters['critical_temperature'])
 
-            if 'gr_normalization' in save_data:
-                normalization_list.append({'times': save_data['normalization_times'], 'gr_normalization': save_data['gr_normalization'],
-                                           'gk_normalization': save_data['gk_normalization']})
-            else:
-                normalization_list.append(None)
-
-            if 'gk_energy_time' in save_data and times is not None:
-                try:
-                    energy_list.append(compute_energy_representation(save_data, system_parameters, times, gaps, energy_cutoff))
-                except Exception as e:
-                    print(f"Warning: Could not compute the energy representation for job {job_idx}: {type(e).__name__}: {e}")
-                    energy_list.append(None)
-            else:
-                energy_list.append(None)
+            #~ if 'gr_normalization' in save_data:
+            #~     normalization_list.append({'times': save_data['normalization_times'], 'gr_normalization': save_data['gr_normalization'],
+            #~                                'gk_normalization': save_data['gk_normalization']})
+            #~ else:
+            #~     normalization_list.append(None)
+            #~
+            #~ if 'gk_energy_time' in save_data and times is not None:
+            #~     try:
+            #~         energy_list.append(compute_energy_representation(save_data, system_parameters, times, gaps, energy_cutoff))
+            #~     except Exception as e:
+            #~         print(f"Warning: Could not compute the energy representation for job {job_idx}: {type(e).__name__}: {e}")
+            #~         energy_list.append(None)
+            #~ else:
+            #~     energy_list.append(None)
+            normalization, energy_representation = tracked_state_entries(save_data, system_parameters, times, gaps, energy_cutoff, job_idx)
+            normalization_list.append(normalization)
+            energy_list.append(energy_representation)
 
         # Package results
         result_data = {
